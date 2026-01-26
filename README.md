@@ -15,6 +15,9 @@ React Hooks風の書き心地で、**最小限のJavaScript**でサーバード�
 
 ```bash
 composer require polidog/use-php
+
+# JSファイルをpublicディレクトリにコピー（部分更新を使う場合）
+./vendor/bin/usephp publish
 ```
 
 ## クイックスタート
@@ -236,6 +239,30 @@ button(onClick: fn() => $setCount($count + 1), children: '+')
 ```html
 <script src="/usephp.js"></script>
 ```
+
+### JSファイルの配置
+
+```bash
+# 手動でコピー
+./vendor/bin/usephp publish
+```
+
+または、composer.jsonに追加して自動化：
+
+```json
+{
+    "scripts": {
+        "post-install-cmd": [
+            "./vendor/bin/usephp publish"
+        ],
+        "post-update-cmd": [
+            "./vendor/bin/usephp publish"
+        ]
+    }
+}
+```
+
+### 動作
 
 このJSは約40行で、以下の動作をします：
 1. `data-usephp-form`フォームの送信をインターセプト

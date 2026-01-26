@@ -1,0 +1,89 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * usePHP CLI - Asset publishing tool
+ */
+
+$autoloadPaths = [
+    __DIR__ . '/../vendor/autoload.php',      // When running from package root
+    __DIR__ . '/../../../autoload.php',       // When installed as dependency
+];
+
+foreach ($autoloadPaths as $autoload) {
+    if (file_exists($autoload)) {
+        require $autoload;
+        break;
+    }
+}
+
+$command = $argv[1] ?? 'help';
+
+switch ($command) {
+    case 'publish':
+        publishAssets();
+        break;
+    case 'help':
+    default:
+        showHelp();
+        break;
+}
+
+function publishAssets(): void
+{
+    $source = dirname(__DIR__) . '/public/usephp.js';
+
+    // Find project root (where vendor directory is)
+    $vendorDir = dirname(__DIR__, 3);
+    if (basename($vendorDir) !== 'vendor') {
+        // Running from package root - nothing to do
+        echo "\033[33mNote:\033[0m Running from package root. usephp.js is already in public/\n";
+        return;
+    }
+
+    // Running as dependency
+    $targetDir = dirname($vendorDir) . '/public';
+    $target = $targetDir . '/usephp.js';
+
+    if (!file_exists($source)) {
+        echo "\033[31mError:\033[0m usephp.js source not found\n";
+        exit(1);
+    }
+
+    // Create public directory if it doesn't exist
+    if (!is_dir($targetDir)) {
+        if (!mkdir($targetDir, 0755, true)) {
+            echo "\033[31mError:\033[0m Could not create public directory\n";
+            exit(1);
+        }
+        echo "Created directory: {$targetDir}\n";
+    }
+
+    // Copy the file
+    if (copy($source, $target)) {
+        echo "\033[32mSuccess:\033[0m Published usephp.js to {$target}\n";
+    } else {
+        echo "\033[31mError:\033[0m Could not copy usephp.js\n";
+        exit(1);
+    }
+}
+
+function showHelp(): void
+{
+    echo <<<HELP
+usePHP CLI
+
+Usage:
+  usephp <command>
+
+Commands:
+  publish    Copy usephp.js to your project's public directory
+  help       Show this help message
+
+Example:
+  ./vendor/bin/usephp publish
+
+HELP;
+}
