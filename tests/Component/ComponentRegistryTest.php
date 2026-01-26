@@ -8,16 +8,15 @@ use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\Component;
 use Polidog\UsePhp\Component\ComponentRegistry;
+use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
-
-use function Polidog\UsePhp\Html\div;
 
 #[Component(name: 'test-component')]
 class TestComponent extends BaseComponent
 {
     public function render(): Element
     {
-        return div(children: 'Test');
+        return H::div(children: 'Test');
     }
 }
 
@@ -26,7 +25,7 @@ class AnotherComponent extends BaseComponent
 {
     public function render(): Element
     {
-        return div(children: 'Another');
+        return H::div(children: 'Another');
     }
 }
 

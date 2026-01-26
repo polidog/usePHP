@@ -6,15 +6,8 @@ namespace App\Components;
 
 use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\Component;
+use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
-
-use function Polidog\UsePhp\Html\button;
-use function Polidog\UsePhp\Html\div;
-use function Polidog\UsePhp\Html\h1;
-use function Polidog\UsePhp\Html\input;
-use function Polidog\UsePhp\Html\li;
-use function Polidog\UsePhp\Html\span;
-use function Polidog\UsePhp\Html\ul;
 
 #[Component(name: 'todo')]
 class TodoList extends BaseComponent
@@ -27,11 +20,11 @@ class TodoList extends BaseComponent
         ]);
 
         $items = array_map(
-            fn($todo) => li(
+            fn($todo) => H::li(
                 className: $todo['done'] ? 'todo-item done' : 'todo-item',
                 children: [
-                    span(children: $todo['text']),
-                    button(
+                    H::span(children: $todo['text']),
+                    H::button(
                         className: 'btn-toggle',
                         onClick: fn() => $setTodos(
                             array_map(
@@ -48,15 +41,15 @@ class TodoList extends BaseComponent
             $todos
         );
 
-        return div(
+        return H::div(
             className: 'todo-app',
             children: [
-                h1(children: 'usePHP Todo'),
-                ul(className: 'todo-list', children: $items),
-                div(
+                H::h1(children: 'usePHP Todo'),
+                H::ul(className: 'todo-list', children: $items),
+                H::div(
                     className: 'todo-stats',
                     children: [
-                        span(children: sprintf(
+                        H::span(children: sprintf(
                             '%d / %d completed',
                             count(array_filter($todos, fn($t) => $t['done'])),
                             count($todos)

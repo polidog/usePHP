@@ -32,8 +32,8 @@ namespace App\Components;
 
 use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\Component;
+use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
-use function Polidog\UsePhp\Html\{div, span, button};
 
 #[Component(name: 'counter')]
 class Counter extends BaseComponent
@@ -42,15 +42,15 @@ class Counter extends BaseComponent
     {
         [$count, $setCount] = $this->useState(0);
 
-        return div(
+        return H::div(
             className: 'counter',
             children: [
-                span(children: "Count: {$count}"),
-                button(
+                H::span(children: "Count: {$count}"),
+                H::button(
                     onClick: fn() => $setCount($count + 1),
                     children: '+'
                 ),
-                button(
+                H::button(
                     onClick: fn() => $setCount($count - 1),
                     children: '-'
                 ),
@@ -165,27 +165,25 @@ class MyComponent extends BaseComponent
 ### HTML Elements
 
 ```php
-use function Polidog\UsePhp\Html\{
-    div, span, button, h1, h2, h3, p, a,
-    input, textarea, form, label,
-    ul, ol, li, select, option,
-    table, thead, tbody, tr, th, td,
-    section, header, footer, nav, main,
-    img, Fragment
-};
+use Polidog\UsePhp\Html\H;
 
 // Basic usage
-div(
+H::div(
     className: 'container',
     id: 'main',
     children: [
-        h1(children: 'Title'),
-        button(
+        H::h1(children: 'Title'),
+        H::button(
             onClick: fn() => $setCount($count + 1),
             children: 'Click'
         ),
     ]
 );
+
+// All HTML elements are supported
+H::article(className: 'post', children: [...]);
+H::table(children: [H::tr(children: [H::td(children: 'Cell')])]);
+H::video(src: 'movie.mp4', controls: true);
 ```
 
 ### Multiple Components + Routing
@@ -248,7 +246,7 @@ UsePHP::useLayout('app');
 ## Generated HTML
 
 ```php
-button(onClick: fn() => $setCount($count + 1), children: '+')
+H::button(onClick: fn() => $setCount($count + 1), children: '+')
 ```
 
 Transforms to:

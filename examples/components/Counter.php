@@ -6,12 +6,8 @@ namespace App\Components;
 
 use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\Component;
+use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
-
-use function Polidog\UsePhp\Html\button;
-use function Polidog\UsePhp\Html\div;
-use function Polidog\UsePhp\Html\h1;
-use function Polidog\UsePhp\Html\span;
 
 #[Component(name: 'counter')]
 class Counter extends BaseComponent
@@ -20,30 +16,30 @@ class Counter extends BaseComponent
     {
         [$count, $setCount] = $this->useState(0);
 
-        return div(
+        return H::div(
             className: 'counter',
             children: [
-                h1(children: 'usePHP Counter'),
-                div(
+                H::h1(children: 'usePHP Counter'),
+                H::div(
                     className: 'counter-display',
                     children: [
-                        span(children: "Count: {$count}"),
+                        H::span(children: "Count: {$count}"),
                     ]
                 ),
-                div(
+                H::div(
                     className: 'counter-buttons',
                     children: [
-                        button(
+                        H::button(
                             className: 'btn btn-decrement',
                             onClick: fn() => $setCount($count - 1),
                             children: '-'
                         ),
-                        button(
+                        H::button(
                             className: 'btn btn-increment',
                             onClick: fn() => $setCount($count + 1),
                             children: '+'
                         ),
-                        button(
+                        H::button(
                             className: 'btn btn-reset',
                             onClick: fn() => $setCount(0),
                             children: 'Reset'
