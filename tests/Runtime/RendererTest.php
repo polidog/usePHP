@@ -8,10 +8,8 @@ use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\Renderer;
 
-use function Polidog\UsePhp\Html\button;
-use function Polidog\UsePhp\Html\div;
-use function Polidog\UsePhp\Html\input;
-use function Polidog\UsePhp\Html\span;
+use Polidog\UsePhp\Html\H;
+
 use function Polidog\UsePhp\Runtime\useState;
 
 class RendererTest extends TestCase
@@ -20,7 +18,7 @@ class RendererTest extends TestCase
     {
         $renderer = new Renderer('test');
 
-        $element = div(className: 'container', children: 'Hello');
+        $element = H::div(className: 'container', children: 'Hello');
 
         $html = $renderer->renderElement($element);
 
@@ -32,10 +30,10 @@ class RendererTest extends TestCase
     {
         $renderer = new Renderer('test');
 
-        $element = div(
+        $element = H::div(
             children: [
-                span(children: 'First'),
-                span(children: 'Second'),
+                H::span(children: 'First'),
+                H::span(children: 'Second'),
             ]
         );
 
@@ -52,7 +50,7 @@ class RendererTest extends TestCase
         // Simulate component rendering
         $component = function (): Element {
             [$count, $setCount] = useState(42);
-            return div(children: "Count: {$count}");
+            return H::div(children: "Count: {$count}");
         };
 
         $html = $renderer->render($component);
@@ -67,7 +65,7 @@ class RendererTest extends TestCase
         // Simulate component rendering
         $component = function (): Element {
             [$count, $setCount] = useState(0);
-            return button(
+            return H::button(
                 onClick: fn() => $setCount($count + 1),
                 children: 'Click'
             );
@@ -87,7 +85,7 @@ class RendererTest extends TestCase
     {
         $renderer = new Renderer('test');
 
-        $element = input(type: 'text', placeholder: 'Enter text');
+        $element = H::input(type: 'text', placeholder: 'Enter text');
 
         $html = $renderer->renderElement($element);
 
@@ -100,7 +98,7 @@ class RendererTest extends TestCase
     {
         $renderer = new Renderer('test');
 
-        $element = div(children: '<script>alert("XSS")</script>');
+        $element = H::div(children: '<script>alert("XSS")</script>');
 
         $html = $renderer->renderElement($element);
 
@@ -114,10 +112,10 @@ class RendererTest extends TestCase
 
         $component = function (): Element {
             [$count, $setCount] = useState(0);
-            return div(
+            return H::div(
                 children: [
-                    span(children: "Count: {$count}"),
-                    button(onClick: fn() => $setCount($count + 1), children: '+'),
+                    H::span(children: "Count: {$count}"),
+                    H::button(onClick: fn() => $setCount($count + 1), children: '+'),
                 ]
             );
         };
