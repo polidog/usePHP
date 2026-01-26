@@ -28,6 +28,8 @@ composer require polidog/use-php
 <?php
 // components/Counter.php
 
+namespace App\Components;
+
 use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\Component;
 use Polidog\UsePhp\Runtime\Element;
@@ -58,7 +60,7 @@ class Counter extends BaseComponent
 }
 ```
 
-### 2. アプリケーションを起動
+### 2. エントリーポイントを作成
 
 ```php
 <?php
@@ -67,26 +69,33 @@ class Counter extends BaseComponent
 require_once __DIR__ . '/../vendor/autoload.php';
 require_once __DIR__ . '/../components/Counter.php';
 
+use App\Components\Counter;
 use Polidog\UsePhp\UsePHP;
+
+// usephp.jsを配信（部分更新用）
+if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
+    header('Content-Type: application/javascript');
+    readfile(__DIR__ . '/usephp.js');
+    exit;
+}
 
 // コンポーネント登録
 UsePHP::register(Counter::class);
 
-// JSパス設定（部分更新を有効化）
+// JSパス設定
 UsePHP::setJsPath('/usephp.js');
 
-// 実行（コンポーネント名を指定）
+// 実行
 UsePHP::run('counter');
 ```
 
 ### 3. サーバーを起動
 
 ```bash
-# ルータースクリプトとして起動（静的ファイルもPHP経由で配信）
 php -S localhost:8000 public/index.php
 ```
 
-`http://localhost:8000/counter` にアクセス。
+`http://localhost:8000` にアクセス。
 
 ## アーキテクチャ
 
@@ -94,7 +103,7 @@ php -S localhost:8000 public/index.php
 ```
 [Browser]                         [PHP Server]
     |                                  |
-    |  GET /counter                    |
+    |  GET /                           |
     | -------------------------------->|
     |                                  | Counter::render() 実行
     |  <html>Count: 0</html>           | useState → セッション保存
@@ -118,16 +127,11 @@ php -S localhost:8000 public/index.php
     |  303 Redirect                    |
     | <--------------------------------|
     |                                  |
-    |  GET /counter                    |
+    |  GET /                           |
     | -------------------------------->|
     |  <html>Count: 1</html>           | 全ページ再レンダリング
     | <--------------------------------|
 ```
-
-**ポイント**:
-- **JSあり**: fetch APIで部分更新、コンポーネント部分のみ書き換え
-- **JSなし**: PRGパターン（Post-Redirect-Get）でページ更新
-- どちらでも動作するプログレッシブエンハンスメント設計
 
 ## API
 
@@ -147,15 +151,14 @@ class MyComponent extends BaseComponent
 }
 ```
 
-### Hooks
-
-#### useState
+### useState
 
 ```php
 [$state, $setState] = $this->useState($initialValue);
 
 // 使用例
 [$count, $setCount] = $this->useState(0);
+[$todos, $setTodos] = $this->useState([]);
 [$user, $setUser] = $this->useState(['name' => 'John']);
 ```
 
@@ -175,32 +178,62 @@ use function Polidog\UsePhp\Html\{
 div(
     className: 'container',
     id: 'main',
-    onClick: fn() => $setCount($count + 1),  // フォームに変換される
     children: [
         h1(children: 'タイトル'),
-        p(children: '本文'),
+        button(
+            onClick: fn() => $setCount($count + 1),
+            children: 'クリック'
+        ),
     ]
 );
 ```
 
-### アプリケーション設定
+### 複数コンポーネント + ルーティング
 
 ```php
+<?php
+// public/index.php
+
+use App\Components\{Counter, TodoList};
 use Polidog\UsePhp\UsePHP;
+
+// usephp.js配信
+if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
+    header('Content-Type: application/javascript');
+    readfile(__DIR__ . '/usephp.js');
+    exit;
+}
 
 // コンポーネント登録
 UsePHP::register(Counter::class);
 UsePHP::register(TodoList::class);
 
-// JSファイルのパス設定（部分更新を有効にする場合）
+// JSパス設定
 UsePHP::setJsPath('/usephp.js');
 
-// カスタムレイアウト（JSを含める）
-UsePHP::layout('custom', function ($content, $title, $jsPath) {
+// ルーティング
+$path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+$componentName = match ($path) {
+    '/', '/counter' => 'counter',
+    '/todo' => 'todo',
+    default => 'counter',
+};
+
+// 実行
+UsePHP::run($componentName);
+```
+
+### カスタムレイアウト
+
+```php
+UsePHP::layout('app', function ($content, $title, $jsPath) {
     return <<<HTML
     <!DOCTYPE html>
     <html>
-    <head><title>{$title}</title></head>
+    <head>
+        <title>{$title}</title>
+        <style>/* your styles */</style>
+    </head>
     <body>
         {$content}
         <script src="{$jsPath}"></script>
@@ -209,24 +242,7 @@ UsePHP::layout('custom', function ($content, $title, $jsPath) {
     HTML;
 });
 
-UsePHP::useLayout('custom');
-
-// 実行（コンポーネント名を指定）
-UsePHP::run('counter');
-```
-
-ルーティングはアプリケーション側で実装します：
-
-```php
-// 例: シンプルなルーティング
-$path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
-$componentName = match ($path) {
-    '/', '/counter' => 'counter',
-    '/todo' => 'todo',
-    default => 'counter',
-};
-
-UsePHP::run($componentName);
+UsePHP::useLayout('app');
 ```
 
 ## 生成されるHTML
@@ -235,69 +251,24 @@ UsePHP::run($componentName);
 button(onClick: fn() => $setCount($count + 1), children: '+')
 ```
 
-↓ 以下のHTMLに変換
+↓ 変換
 
 ```html
-<div data-usephp="counter">
-  <form method="post" data-usephp-form style="display:inline;">
-    <input type="hidden" name="_usephp_component" value="counter" />
-    <input type="hidden" name="_usephp_action" value='{"type":"setState","payload":{"index":0,"value":1}}' />
-    <button type="submit">+</button>
-  </form>
-</div>
+<form method="post" data-usephp-form style="display:inline;">
+  <input type="hidden" name="_usephp_component" value="counter" />
+  <input type="hidden" name="_usephp_action" value='{"type":"setState","payload":{"index":0,"value":1}}' />
+  <button type="submit">+</button>
+</form>
 ```
 
-- `data-usephp` - コンポーネントのラッパー（部分更新の対象）
 - `data-usephp-form` - JSがインターセプトするフォーム
-
-## JavaScript（オプション）
-
-部分更新を有効にするには、JSファイルを読み込みます：
-
-```html
-<script src="/usephp.js"></script>
-```
-
-### JSファイルの配置
-
-```bash
-# 手動でコピー
-./vendor/bin/usephp publish
-```
-
-または、composer.jsonに追加して自動化：
-
-```json
-{
-    "scripts": {
-        "post-install-cmd": [
-            "./vendor/bin/usephp publish"
-        ],
-        "post-update-cmd": [
-            "./vendor/bin/usephp publish"
-        ]
-    }
-}
-```
-
-### 動作
-
-このJSは約40行で、以下の動作をします：
-1. `data-usephp-form`フォームの送信をインターセプト
-2. `X-UsePHP-Partial`ヘッダー付きでfetch
-3. レスポンスで`data-usephp`要素の中身を更新
-4. エラー時は通常のフォーム送信にフォールバック
-
-JSを読み込まなくても、通常のフォーム送信として動作します。
+- JSなしでも通常のフォーム送信として動作
 
 ## CLI
 
 ```bash
-# usephp.jsをpublic/にコピー
-./vendor/bin/usephp publish
-
-# ヘルプ表示
-./vendor/bin/usephp help
+./vendor/bin/usephp publish  # usephp.jsをpublic/にコピー
+./vendor/bin/usephp help     # ヘルプ表示
 ```
 
 ## 要件
@@ -311,7 +282,7 @@ JSを読み込まなくても、通常のフォーム送信として動作しま
 # テスト実行
 ./vendor/bin/phpunit
 
-# サンプル起動（ルータースクリプトとして）
+# サンプル起動
 php -S localhost:8000 examples/index.php
 ```
 

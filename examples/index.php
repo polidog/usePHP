@@ -2,13 +2,24 @@
 
 declare(strict_types=1);
 
-// Serve usephp.js from public directory
+/**
+ * usePHP Example Application
+ *
+ * Run: php -S localhost:8000 examples/index.php
+ */
+
+// ============================================
+// Static file handling
+// ============================================
 if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
     header('Content-Type: application/javascript');
     readfile(__DIR__ . '/../public/usephp.js');
     exit;
 }
 
+// ============================================
+// Bootstrap
+// ============================================
 require_once __DIR__ . '/../vendor/autoload.php';
 require_once __DIR__ . '/components/Counter.php';
 require_once __DIR__ . '/components/TodoList.php';
@@ -17,14 +28,20 @@ use App\Components\Counter;
 use App\Components\TodoList;
 use Polidog\UsePhp\UsePHP;
 
-// Register components
+// ============================================
+// Component registration
+// ============================================
 UsePHP::register(Counter::class);
 UsePHP::register(TodoList::class);
 
-// Set JS path
+// ============================================
+// JS path for partial updates
+// ============================================
 UsePHP::setJsPath('/usephp.js');
 
+// ============================================
 // Simple routing
+// ============================================
 $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
 $componentName = match ($path) {
     '/', '/counter' => 'counter',
@@ -32,7 +49,9 @@ $componentName = match ($path) {
     default => 'counter',
 };
 
-// Custom layout with styles
+// ============================================
+// Custom layout
+// ============================================
 UsePHP::layout('app', function (string $content, string $title, string $jsPath): string {
     return <<<HTML
 <!DOCTYPE html>
@@ -88,8 +107,6 @@ UsePHP::layout('app', function (string $content, string $title, string $jsPath):
         .btn-increment { background: #4CAF50; color: white; }
         .btn-decrement { background: #f44336; color: white; }
         .btn-reset { background: #9E9E9E; color: white; }
-
-        /* Todo styles */
         .todo-list {
             list-style: none;
             padding: 0;
@@ -122,8 +139,6 @@ UsePHP::layout('app', function (string $content, string $title, string $jsPath):
             text-align: center;
             color: #666;
         }
-
-        /* Navigation */
         nav {
             margin-bottom: 20px;
             text-align: center;
@@ -140,15 +155,11 @@ UsePHP::layout('app', function (string $content, string $title, string $jsPath):
         nav a:hover {
             background: #1976D2;
         }
-
-        /* Loading state */
         [aria-busy="true"] {
             opacity: 0.6;
             pointer-events: none;
         }
-
-        /* Badge */
-        .js-badge {
+        .badge {
             text-align: center;
             margin-top: 20px;
             padding: 8px;
@@ -165,9 +176,7 @@ UsePHP::layout('app', function (string $content, string $title, string $jsPath):
         <a href="/todo">Todo</a>
     </nav>
     {$content}
-    <div class="js-badge">
-        ⚡ Partial updates with ~40 lines of JS
-    </div>
+    <div class="badge">Partial updates with ~40 lines of JS</div>
     <script src="{$jsPath}"></script>
 </body>
 </html>
@@ -176,5 +185,7 @@ HTML;
 
 UsePHP::useLayout('app');
 
-// Run the application
+// ============================================
+// Run
+// ============================================
 UsePHP::run($componentName);
