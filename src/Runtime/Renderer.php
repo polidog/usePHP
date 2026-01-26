@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace Polidog\UsePhp\Runtime;
 
 /**
- * Renders Element tree to HTML string (No JavaScript required).
+ * Renders Element tree to HTML string.
+ * Supports partial updates with minimal JavaScript.
  */
 class Renderer
 {
@@ -22,11 +23,32 @@ class Renderer
     }
 
     /**
-     * Render a component function.
+     * Render a component function with wrapper.
      *
      * @param callable(): Element $component
      */
     public function render(callable $component): string
+    {
+        $state = ComponentState::getInstance($this->componentId);
+        ComponentState::reset();
+
+        $element = $component();
+        $inner = $this->renderElement($element);
+
+        // Wrap with component container for partial updates
+        return sprintf(
+            '<div data-usephp="%s">%s</div>',
+            htmlspecialchars($this->componentId, ENT_QUOTES, 'UTF-8'),
+            $inner
+        );
+    }
+
+    /**
+     * Render a component without wrapper (for partial updates).
+     *
+     * @param callable(): Element $component
+     */
+    public function renderPartial(callable $component): string
     {
         $state = ComponentState::getInstance($this->componentId);
         ComponentState::reset();
@@ -99,8 +121,9 @@ class Renderer
             ? "<{$tag}{$attributes} />"
             : "<{$tag}{$attributes}>{$children}</{$tag}>";
 
+        // data-usephp-form enables JS enhancement, falls back to normal form if no JS
         return <<<HTML
-<form method="post" style="display:inline;">
+<form method="post" data-usephp-form style="display:inline;">
 <input type="hidden" name="_usephp_component" value="{$componentId}" />
 <input type="hidden" name="_usephp_action" value="{$actionJson}" />
 {$innerElement}

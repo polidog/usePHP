@@ -14,8 +14,11 @@ use Polidog\UsePhp\UsePHP;
 UsePHP::register(Counter::class);
 UsePHP::register(TodoList::class);
 
-// Custom layout with styles (No JavaScript!)
-UsePHP::layout('app', function (string $content, string $title): string {
+// Set JS path
+UsePHP::setJsPath('/usephp.js');
+
+// Custom layout with styles
+UsePHP::layout('app', function (string $content, string $title, string $jsPath): string {
     return <<<HTML
 <!DOCTYPE html>
 <html lang="ja">
@@ -123,14 +126,20 @@ UsePHP::layout('app', function (string $content, string $title): string {
             background: #1976D2;
         }
 
-        /* No JS badge */
-        .no-js-badge {
+        /* Loading state */
+        [aria-busy="true"] {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+
+        /* Badge */
+        .js-badge {
             text-align: center;
             margin-top: 20px;
             padding: 8px;
-            background: #e8f5e9;
+            background: #e3f2fd;
             border-radius: 4px;
-            color: #2e7d32;
+            color: #1565c0;
             font-size: 14px;
         }
     </style>
@@ -141,9 +150,10 @@ UsePHP::layout('app', function (string $content, string $title): string {
         <a href="/todo">Todo</a>
     </nav>
     {$content}
-    <div class="no-js-badge">
-        ✨ No JavaScript - Pure PHP
+    <div class="js-badge">
+        ⚡ Partial updates with ~40 lines of JS
     </div>
+    <script src="{$jsPath}"></script>
 </body>
 </html>
 HTML;

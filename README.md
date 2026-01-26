@@ -1,14 +1,15 @@
 # usePHP
 
-React Hooks風の書き心地で、**JavaScript不要**のサーバードリブンUIフレームワーク。
+React Hooks風の書き心地で、**最小限のJavaScript**でサーバードリブンUIを実現するフレームワーク。
 
 ## 特徴
 
 - **React Hooks風API** - `useState`でシンプルに状態管理
-- **JavaScript完全不要** - フォーム送信でインタラクション実現
+- **最小限のJS (~40行)** - 部分更新でスムーズなUX、JSなしでもフォールバック動作
 - **PHPがそのまま動く** - トランスパイル不要、PHPコードがサーバーで実行
 - **セッションベース状態管理** - サーバー側で状態を保持
 - **コンポーネント指向** - 再利用可能なコンポーネントクラス
+- **プログレッシブエンハンスメント** - JavaScriptが無効でも動作
 
 ## インストール
 
@@ -79,6 +80,7 @@ php -S localhost:8000
 
 ## アーキテクチャ
 
+### JSありの場合（部分更新）
 ```
 [Browser]                         [PHP Server]
     |                                  |
@@ -88,6 +90,18 @@ php -S localhost:8000
     |  <html>Count: 0</html>           | useState → セッション保存
     | <--------------------------------|
     |                                  |
+    |  POST + X-UsePHP-Partial header  |
+    | -------------------------------->|
+    |                                  | 状態更新
+    |  <部分HTML>Count: 1</部分HTML>    | コンポーネントのみ再レンダリング
+    | <--------------------------------|
+    |  (innerHTMLで部分更新)            |
+```
+
+### JSなしの場合（フォールバック）
+```
+[Browser]                         [PHP Server]
+    |                                  |
     |  <form> POST (button click)      |
     | -------------------------------->|
     |                                  | 状態更新
@@ -96,11 +110,14 @@ php -S localhost:8000
     |                                  |
     |  GET /counter                    |
     | -------------------------------->|
-    |  <html>Count: 1</html>           | 再レンダリング
+    |  <html>Count: 1</html>           | 全ページ再レンダリング
     | <--------------------------------|
 ```
 
-**ポイント**: ボタンクリックは `<form>` 送信に変換され、PRGパターン（Post-Redirect-Get）でページ更新。JavaScriptは一切不要。
+**ポイント**:
+- **JSあり**: fetch APIで部分更新、コンポーネント部分のみ書き換え
+- **JSなし**: PRGパターン（Post-Redirect-Get）でページ更新
+- どちらでも動作するプログレッシブエンハンスメント設計
 
 ## API
 
@@ -168,13 +185,19 @@ use Polidog\UsePhp\UsePHP;
 UsePHP::register(Counter::class);
 UsePHP::register(TodoList::class);
 
-// カスタムレイアウト
-UsePHP::layout('custom', function ($content, $title) {
+// JSファイルのパス設定（部分更新を有効にする場合）
+UsePHP::setJsPath('/usephp.js');
+
+// カスタムレイアウト（JSを含める）
+UsePHP::layout('custom', function ($content, $title, $jsPath) {
     return <<<HTML
     <!DOCTYPE html>
     <html>
     <head><title>{$title}</title></head>
-    <body>{$content}</body>
+    <body>
+        {$content}
+        <script src="{$jsPath}"></script>
+    </body>
     </html>
     HTML;
 });
@@ -194,12 +217,33 @@ button(onClick: fn() => $setCount($count + 1), children: '+')
 ↓ 以下のHTMLに変換
 
 ```html
-<form method="post" style="display:inline;">
-  <input type="hidden" name="_usephp_component" value="counter" />
-  <input type="hidden" name="_usephp_action" value='{"type":"setState","payload":{"index":0,"value":1}}' />
-  <button type="submit">+</button>
-</form>
+<div data-usephp="counter">
+  <form method="post" data-usephp-form style="display:inline;">
+    <input type="hidden" name="_usephp_component" value="counter" />
+    <input type="hidden" name="_usephp_action" value='{"type":"setState","payload":{"index":0,"value":1}}' />
+    <button type="submit">+</button>
+  </form>
+</div>
 ```
+
+- `data-usephp` - コンポーネントのラッパー（部分更新の対象）
+- `data-usephp-form` - JSがインターセプトするフォーム
+
+## JavaScript（オプション）
+
+部分更新を有効にするには、JSファイルを読み込みます：
+
+```html
+<script src="/usephp.js"></script>
+```
+
+このJSは約40行で、以下の動作をします：
+1. `data-usephp-form`フォームの送信をインターセプト
+2. `X-UsePHP-Partial`ヘッダー付きでfetch
+3. レスポンスで`data-usephp`要素の中身を更新
+4. エラー時は通常のフォーム送信にフォールバック
+
+JSを読み込まなくても、通常のフォーム送信として動作します。
 
 ## 要件
 

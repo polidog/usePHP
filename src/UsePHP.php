@@ -13,7 +13,7 @@ use Polidog\UsePhp\Runtime\Renderer;
 
 /**
  * Main application class for usePHP.
- * No JavaScript required - uses form submissions for interactivity.
+ * Minimal JS for partial updates, falls back to full page reload.
  */
 class UsePHP
 {
@@ -22,6 +22,7 @@ class UsePHP
     private ComponentRegistry $registry;
     private ?string $currentComponent = null;
     private string $layout = 'default';
+    private string $jsPath = '/usephp.js';
 
     /** @var array<string, callable> */
     private array $layouts = [];
@@ -66,9 +67,19 @@ class UsePHP
     }
 
     /**
+     * Set the path to usephp.js
+     */
+    public static function setJsPath(string $path): self
+    {
+        $instance = self::getInstance();
+        $instance->jsPath = $path;
+        return $instance;
+    }
+
+    /**
      * Register a layout.
      *
-     * @param callable(string $content, string $title): string $callback
+     * @param callable(string $content, string $title, string $jsPath): string $callback
      */
     public static function layout(string $name, callable $callback): self
     {
@@ -110,7 +121,7 @@ class UsePHP
      */
     private function handleRequest(?string $componentName): void
     {
-        // Handle POST action first (form submission)
+        // Handle POST action (form submission)
         if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_usephp_action'])) {
             $this->handleFormAction();
             return;
@@ -144,6 +155,7 @@ class UsePHP
     {
         $componentName = $_POST['_usephp_component'] ?? null;
         $actionJson = $_POST['_usephp_action'] ?? null;
+        $isPartial = isset($_SERVER['HTTP_X_USEPHP_PARTIAL']);
 
         if ($componentName === null || $actionJson === null) {
             http_response_code(400);
@@ -175,8 +187,14 @@ class UsePHP
             return;
         }
 
-        // PRG Pattern: Redirect to prevent form resubmission
-        $redirectUrl = $_SERVER['REQUEST_URI'] ?? '/';
+        // Partial update (AJAX) - return only component HTML
+        if ($isPartial) {
+            echo $this->doRenderComponentPartial($componentName);
+            return;
+        }
+
+        // Full page - PRG pattern
+        $redirectUrl = strtok($_SERVER['REQUEST_URI'] ?? '/', '?');
         header('Location: ' . $redirectUrl, true, 303);
         exit;
     }
@@ -215,11 +233,11 @@ class UsePHP
         $layoutCallback = $this->layouts[$this->layout] ?? $this->layouts['default'];
         $title = ucfirst($componentName);
 
-        echo $layoutCallback($content, $title);
+        echo $layoutCallback($content, $title, $this->jsPath);
     }
 
     /**
-     * Render a component.
+     * Render a component with wrapper.
      */
     private function doRenderComponent(string $componentName): string
     {
@@ -236,11 +254,32 @@ class UsePHP
             $component->setComponentState($state);
         }
 
-        $element = $component->render();
+        $renderer = new Renderer($componentName);
+
+        return $renderer->render(fn() => $component->render());
+    }
+
+    /**
+     * Render a component without wrapper (for partial updates).
+     */
+    private function doRenderComponentPartial(string $componentName): string
+    {
+        $component = $this->registry->create($componentName);
+
+        if ($component === null) {
+            return '';
+        }
+
+        $state = ComponentState::getInstance($componentName);
+        ComponentState::reset();
+
+        if ($component instanceof BaseComponent) {
+            $component->setComponentState($state);
+        }
 
         $renderer = new Renderer($componentName);
 
-        return $renderer->renderElement($element);
+        return $renderer->renderPartial(fn() => $component->render());
     }
 
     /**
@@ -248,7 +287,7 @@ class UsePHP
      */
     private function registerDefaultLayout(): void
     {
-        $this->layouts['default'] = function (string $content, string $title): string {
+        $this->layouts['default'] = function (string $content, string $title, string $jsPath): string {
             return <<<HTML
 <!DOCTYPE html>
 <html lang="en">
@@ -264,10 +303,15 @@ class UsePHP
             padding: 20px;
             background: #f5f5f5;
         }
+        [aria-busy="true"] {
+            opacity: 0.6;
+            pointer-events: none;
+        }
     </style>
 </head>
 <body>
     {$content}
+    <script src="{$jsPath}"></script>
 </body>
 </html>
 HTML;
