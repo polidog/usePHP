@@ -20,13 +20,10 @@ class RendererTest extends TestCase
     {
         $renderer = new Renderer('test');
 
-        $component = function (): Element {
-            return div(className: 'container', children: 'Hello');
-        };
+        $element = div(className: 'container', children: 'Hello');
 
-        $html = $renderer->render($component);
+        $html = $renderer->renderElement($element);
 
-        $this->assertStringContainsString('data-usephp-component="test"', $html);
         $this->assertStringContainsString('className="container"', $html);
         $this->assertStringContainsString('Hello', $html);
     }
@@ -35,16 +32,14 @@ class RendererTest extends TestCase
     {
         $renderer = new Renderer('test');
 
-        $component = function (): Element {
-            return div(
-                children: [
-                    span(children: 'First'),
-                    span(children: 'Second'),
-                ]
-            );
-        };
+        $element = div(
+            children: [
+                span(children: 'First'),
+                span(children: 'Second'),
+            ]
+        );
 
-        $html = $renderer->render($component);
+        $html = $renderer->renderElement($element);
 
         $this->assertStringContainsString('<span>First</span>', $html);
         $this->assertStringContainsString('<span>Second</span>', $html);
@@ -54,9 +49,9 @@ class RendererTest extends TestCase
     {
         $renderer = new Renderer('counter');
 
+        // Simulate component rendering
         $component = function (): Element {
             [$count, $setCount] = useState(42);
-
             return div(children: "Count: {$count}");
         };
 
@@ -65,13 +60,13 @@ class RendererTest extends TestCase
         $this->assertStringContainsString('Count: 42', $html);
     }
 
-    public function testRenderButtonWithOnClick(): void
+    public function testRenderButtonWithOnClickGeneratesForm(): void
     {
         $renderer = new Renderer('test');
 
+        // Simulate component rendering
         $component = function (): Element {
             [$count, $setCount] = useState(0);
-
             return button(
                 onClick: fn() => $setCount($count + 1),
                 children: 'Click'
@@ -80,22 +75,21 @@ class RendererTest extends TestCase
 
         $html = $renderer->render($component);
 
-        $this->assertStringContainsString('data-usephp-action=', $html);
-        $this->assertStringContainsString('data-usephp-event="click"', $html);
-        // JSON is HTML-encoded in attributes
-        $this->assertStringContainsString('&quot;type&quot;:&quot;setState&quot;', $html);
-        $this->assertStringContainsString('&quot;value&quot;:1', $html);
+        // Should generate a form with hidden inputs
+        $this->assertStringContainsString('<form method="post"', $html);
+        $this->assertStringContainsString('name="_usephp_component"', $html);
+        $this->assertStringContainsString('name="_usephp_action"', $html);
+        $this->assertStringContainsString('type="submit"', $html);
+        $this->assertStringContainsString('>Click</button>', $html);
     }
 
     public function testRenderSelfClosingTag(): void
     {
         $renderer = new Renderer('test');
 
-        $component = function (): Element {
-            return input(type: 'text', placeholder: 'Enter text');
-        };
+        $element = input(type: 'text', placeholder: 'Enter text');
 
-        $html = $renderer->render($component);
+        $html = $renderer->renderElement($element);
 
         $this->assertStringContainsString('<input', $html);
         $this->assertStringContainsString('type="text"', $html);
@@ -106,13 +100,33 @@ class RendererTest extends TestCase
     {
         $renderer = new Renderer('test');
 
+        $element = div(children: '<script>alert("XSS")</script>');
+
+        $html = $renderer->renderElement($element);
+
+        $this->assertStringNotContainsString('<script>', $html);
+        $this->assertStringContainsString('&lt;script&gt;', $html);
+    }
+
+    public function testNoJavaScriptInOutput(): void
+    {
+        $renderer = new Renderer('test');
+
         $component = function (): Element {
-            return div(children: '<script>alert("XSS")</script>');
+            [$count, $setCount] = useState(0);
+            return div(
+                children: [
+                    span(children: "Count: {$count}"),
+                    button(onClick: fn() => $setCount($count + 1), children: '+'),
+                ]
+            );
         };
 
         $html = $renderer->render($component);
 
-        $this->assertStringNotContainsString('<script>', $html);
-        $this->assertStringContainsString('&lt;script&gt;', $html);
+        // No JavaScript attributes
+        $this->assertStringNotContainsString('onclick=', strtolower($html));
+        $this->assertStringNotContainsString('<script', $html);
+        $this->assertStringNotContainsString('javascript:', $html);
     }
 }

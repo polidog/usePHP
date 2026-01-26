@@ -14,11 +14,8 @@ use Polidog\UsePhp\UsePHP;
 UsePHP::register(Counter::class);
 UsePHP::register(TodoList::class);
 
-// Set JS path
-UsePHP::setJsPath('/usephp.js');
-
-// Custom layout with styles
-UsePHP::layout('app', function (string $content, string $title, string $jsPath): string {
+// Custom layout with styles (No JavaScript!)
+UsePHP::layout('app', function (string $content, string $title): string {
     return <<<HTML
 <!DOCTYPE html>
 <html lang="ja">
@@ -108,12 +105,6 @@ UsePHP::layout('app', function (string $content, string $title, string $jsPath):
             color: #666;
         }
 
-        /* Loading state */
-        [data-usephp-loading="true"] {
-            opacity: 0.7;
-            pointer-events: none;
-        }
-
         /* Navigation */
         nav {
             margin-bottom: 20px;
@@ -131,6 +122,17 @@ UsePHP::layout('app', function (string $content, string $title, string $jsPath):
         nav a:hover {
             background: #1976D2;
         }
+
+        /* No JS badge */
+        .no-js-badge {
+            text-align: center;
+            margin-top: 20px;
+            padding: 8px;
+            background: #e8f5e9;
+            border-radius: 4px;
+            color: #2e7d32;
+            font-size: 14px;
+        }
     </style>
 </head>
 <body>
@@ -139,7 +141,9 @@ UsePHP::layout('app', function (string $content, string $title, string $jsPath):
         <a href="/todo">Todo</a>
     </nav>
     {$content}
-    <script src="{$jsPath}"></script>
+    <div class="no-js-badge">
+        ✨ No JavaScript - Pure PHP
+    </div>
 </body>
 </html>
 HTML;

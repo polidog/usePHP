@@ -1,12 +1,12 @@
 # usePHP
 
-React Hooks風の書き心地で、PHPがそのまま動くサーバードリブンUIフレームワーク。
+React Hooks風の書き心地で、**JavaScript不要**のサーバードリブンUIフレームワーク。
 
 ## 特徴
 
 - **React Hooks風API** - `useState`でシンプルに状態管理
-- **PHPがそのまま動く** - トランスパイル不要、PHPコードがサーバーで実行される
-- **最小限のJS** - クライアントJSは200行以下、フレームワーク依存なし
+- **JavaScript完全不要** - フォーム送信でインタラクション実現
+- **PHPがそのまま動く** - トランスパイル不要、PHPコードがサーバーで実行
 - **セッションベース状態管理** - サーバー側で状態を保持
 - **コンポーネント指向** - 再利用可能なコンポーネントクラス
 
@@ -66,7 +66,6 @@ require_once 'components/Counter.php';
 use Polidog\UsePhp\UsePHP;
 
 UsePHP::register(Counter::class);
-UsePHP::setJsPath('/usephp.js');
 UsePHP::run();
 ```
 
@@ -89,14 +88,19 @@ php -S localhost:8000
     |  <html>Count: 0</html>           | useState → セッション保存
     | <--------------------------------|
     |                                  |
-    |  button click                    |
-    | ---- POST (AJAX) --------------->|
-    |      {action: setState}          | 状態更新
-    |                                  | 再レンダリング
-    |  <span>Count: 1</span>           |
+    |  <form> POST (button click)      |
+    | -------------------------------->|
+    |                                  | 状態更新
+    |  303 Redirect                    |
     | <--------------------------------|
-    |  DOM更新                          |
+    |                                  |
+    |  GET /counter                    |
+    | -------------------------------->|
+    |  <html>Count: 1</html>           | 再レンダリング
+    | <--------------------------------|
 ```
+
+**ポイント**: ボタンクリックは `<form>` 送信に変換され、PRGパターン（Post-Redirect-Get）でページ更新。JavaScriptは一切不要。
 
 ## API
 
@@ -147,25 +151,12 @@ use function Polidog\UsePhp\Html\{
 div(
     className: 'container',
     id: 'main',
-    onClick: fn() => $setCount($count + 1),
+    onClick: fn() => $setCount($count + 1),  // フォームに変換される
     children: [
         h1(children: 'タイトル'),
         p(children: '本文'),
     ]
 );
-
-// input
-input(
-    type: 'text',
-    placeholder: 'Enter text',
-    value: $value,
-);
-
-// Fragment (ラッパー要素なしで複数要素をグループ化)
-Fragment([
-    div(children: 'First'),
-    div(children: 'Second'),
-]);
 ```
 
 ### アプリケーション設定
@@ -177,19 +168,13 @@ use Polidog\UsePhp\UsePHP;
 UsePHP::register(Counter::class);
 UsePHP::register(TodoList::class);
 
-// JSファイルのパス設定
-UsePHP::setJsPath('/assets/usephp.js');
-
 // カスタムレイアウト
-UsePHP::layout('custom', function ($content, $title, $jsPath) {
+UsePHP::layout('custom', function ($content, $title) {
     return <<<HTML
     <!DOCTYPE html>
     <html>
     <head><title>{$title}</title></head>
-    <body>
-        {$content}
-        <script src="{$jsPath}"></script>
-    </body>
+    <body>{$content}</body>
     </html>
     HTML;
 });
@@ -200,13 +185,21 @@ UsePHP::useLayout('custom');
 UsePHP::run();
 ```
 
-## 仕組み
+## 生成されるHTML
 
-1. **初回レンダリング**: PHPでコンポーネントを実行し、HTMLを生成
-2. **状態保存**: `useState`の値はPHPセッションに保存
-3. **イベント処理**: `onClick`等はAJAXリクエストに変換
-4. **再レンダリング**: サーバーで状態更新後、HTMLを再生成して返却
-5. **DOM更新**: クライアントJSが差分をDOMに適用
+```php
+button(onClick: fn() => $setCount($count + 1), children: '+')
+```
+
+↓ 以下のHTMLに変換
+
+```html
+<form method="post" style="display:inline;">
+  <input type="hidden" name="_usephp_component" value="counter" />
+  <input type="hidden" name="_usephp_action" value='{"type":"setState","payload":{"index":0,"value":1}}' />
+  <button type="submit">+</button>
+</form>
+```
 
 ## 要件
 

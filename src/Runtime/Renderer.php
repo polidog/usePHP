@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Polidog\UsePhp\Runtime;
 
 /**
- * Renders Element tree to HTML string.
+ * Renders Element tree to HTML string (No JavaScript required).
  */
 class Renderer
 {
@@ -28,31 +28,7 @@ class Renderer
      */
     public function render(callable $component): string
     {
-        // Initialize component state
         $state = ComponentState::getInstance($this->componentId);
-        ComponentState::reset();
-
-        // Execute the component to get the Element tree
-        $element = $component();
-
-        // Render the element tree to HTML
-        $html = $this->renderElement($element);
-
-        // Wrap with component container
-        return sprintf(
-            '<div data-usephp-component="%s">%s</div>',
-            htmlspecialchars($this->componentId, ENT_QUOTES, 'UTF-8'),
-            $html
-        );
-    }
-
-    /**
-     * Re-render a component after an action.
-     *
-     * @param callable(): Element $component
-     */
-    public function rerender(callable $component): string
-    {
         ComponentState::reset();
 
         $element = $component();
@@ -75,7 +51,15 @@ class Renderer
         }
 
         $tag = $element->type;
-        $attributes = $this->renderAttributes($element->props);
+        $props = $element->props;
+        $hasAction = isset($props['wire:click']);
+
+        // If element has an action, wrap it in a form
+        if ($hasAction) {
+            return $this->renderWithForm($element);
+        }
+
+        $attributes = $this->renderAttributes($props);
 
         // Self-closing tags
         if (in_array($tag, self::SELF_CLOSING_TAGS, true)) {
@@ -88,6 +72,43 @@ class Renderer
     }
 
     /**
+     * Render an element wrapped in a form for action handling.
+     */
+    private function renderWithForm(Element $element): string
+    {
+        $action = $element->props['wire:click'];
+        $tag = $element->type;
+
+        // Remove wire:click from props
+        $props = $element->props;
+        unset($props['wire:click']);
+
+        // For button, make it a submit button
+        if ($tag === 'button') {
+            $props['type'] = 'submit';
+        }
+
+        $attributes = $this->renderAttributes($props);
+        $children = $this->renderChildren($element->children);
+
+        // Build the form with hidden action data
+        $actionJson = htmlspecialchars($action->toJson(), ENT_QUOTES, 'UTF-8');
+        $componentId = htmlspecialchars($this->componentId, ENT_QUOTES, 'UTF-8');
+
+        $innerElement = in_array($tag, self::SELF_CLOSING_TAGS, true)
+            ? "<{$tag}{$attributes} />"
+            : "<{$tag}{$attributes}>{$children}</{$tag}>";
+
+        return <<<HTML
+<form method="post" style="display:inline;">
+<input type="hidden" name="_usephp_component" value="{$componentId}" />
+<input type="hidden" name="_usephp_action" value="{$actionJson}" />
+{$innerElement}
+</form>
+HTML;
+    }
+
+    /**
      * Render element attributes.
      *
      * @param array<string, mixed> $props
@@ -97,12 +118,8 @@ class Renderer
         $attributes = [];
 
         foreach ($props as $key => $value) {
-            // Handle wire:* attributes (Actions)
-            if (str_starts_with($key, 'wire:') && $value instanceof Action) {
-                $eventType = substr($key, 5); // Remove 'wire:' prefix
-                $actionJson = htmlspecialchars($value->toJson(), ENT_QUOTES, 'UTF-8');
-                $attributes[] = sprintf('data-usephp-action="%s"', $actionJson);
-                $attributes[] = sprintf('data-usephp-event="%s"', $eventType);
+            // Skip wire:* attributes (handled separately)
+            if (str_starts_with($key, 'wire:')) {
                 continue;
             }
 
@@ -111,6 +128,11 @@ class Renderer
                 if ($value) {
                     $attributes[] = $key;
                 }
+                continue;
+            }
+
+            // Skip non-scalar values
+            if (!is_scalar($value)) {
                 continue;
             }
 

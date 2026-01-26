@@ -13,6 +13,7 @@ use Polidog\UsePhp\Runtime\Renderer;
 
 /**
  * Main application class for usePHP.
+ * No JavaScript required - uses form submissions for interactivity.
  */
 class UsePHP
 {
@@ -20,7 +21,6 @@ class UsePHP
 
     private ComponentRegistry $registry;
     private ?string $currentComponent = null;
-    private string $jsPath = '/usephp.js';
     private string $layout = 'default';
 
     /** @var array<string, callable> */
@@ -62,16 +62,6 @@ class UsePHP
     {
         $instance = self::getInstance();
         $instance->registry->autoload($directory, $namespace);
-        return $instance;
-    }
-
-    /**
-     * Set the path to usephp.js
-     */
-    public static function setJsPath(string $path): self
-    {
-        $instance = self::getInstance();
-        $instance->jsPath = $path;
         return $instance;
     }
 
@@ -120,6 +110,12 @@ class UsePHP
      */
     private function handleRequest(?string $componentName): void
     {
+        // Handle POST action first (form submission)
+        if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_usephp_action'])) {
+            $this->handleFormAction();
+            return;
+        }
+
         // Determine which component to render
         $componentName = $componentName ?? $this->resolveComponentFromRequest();
 
@@ -137,14 +133,52 @@ class UsePHP
 
         $this->currentComponent = $componentName;
 
-        // Handle AJAX action request
-        if ($this->isActionRequest()) {
-            $this->handleAction($componentName);
+        // Render the full page
+        $this->renderPage($componentName);
+    }
+
+    /**
+     * Handle form action submission.
+     */
+    private function handleFormAction(): void
+    {
+        $componentName = $_POST['_usephp_component'] ?? null;
+        $actionJson = $_POST['_usephp_action'] ?? null;
+
+        if ($componentName === null || $actionJson === null) {
+            http_response_code(400);
+            echo 'Invalid action request';
             return;
         }
 
-        // Render the full page
-        $this->renderPage($componentName);
+        if (!$this->registry->has($componentName)) {
+            http_response_code(404);
+            echo "Component not found: {$componentName}";
+            return;
+        }
+
+        // Parse and execute the action
+        try {
+            $actionData = json_decode($actionJson, true, 512, JSON_THROW_ON_ERROR);
+            $action = Action::fromArray($actionData);
+
+            $state = ComponentState::getInstance($componentName);
+
+            if ($action->type === 'setState') {
+                $index = $action->payload['index'] ?? 0;
+                $value = $action->payload['value'] ?? null;
+                $state->setState($index, $value);
+            }
+        } catch (\JsonException $e) {
+            http_response_code(400);
+            echo 'Invalid action data';
+            return;
+        }
+
+        // PRG Pattern: Redirect to prevent form resubmission
+        $redirectUrl = $_SERVER['REQUEST_URI'] ?? '/';
+        header('Location: ' . $redirectUrl, true, 303);
+        exit;
     }
 
     /**
@@ -172,45 +206,6 @@ class UsePHP
     }
 
     /**
-     * Check if this is an AJAX action request.
-     */
-    private function isActionRequest(): bool
-    {
-        return $_SERVER['REQUEST_METHOD'] === 'POST'
-            && isset($_SERVER['HTTP_X_USEPHP_ACTION']);
-    }
-
-    /**
-     * Handle an AJAX action request.
-     */
-    private function handleAction(string $componentName): void
-    {
-        header('Content-Type: application/json');
-
-        $input = $this->getJsonInput();
-
-        if (!isset($input['action'])) {
-            echo json_encode(['error' => 'Missing action']);
-            return;
-        }
-
-        $action = Action::fromArray($input['action']);
-        $state = ComponentState::getInstance($componentName);
-
-        // Apply the action
-        if ($action->type === 'setState') {
-            $index = $action->payload['index'] ?? 0;
-            $value = $action->payload['value'] ?? null;
-            $state->setState($index, $value);
-        }
-
-        // Re-render the component
-        $html = $this->doRenderComponent($componentName, false);
-
-        echo json_encode(['html' => $html]);
-    }
-
-    /**
      * Render the full page with layout.
      */
     private function renderPage(string $componentName): void
@@ -220,13 +215,13 @@ class UsePHP
         $layoutCallback = $this->layouts[$this->layout] ?? $this->layouts['default'];
         $title = ucfirst($componentName);
 
-        echo $layoutCallback($content, $title, $this->jsPath);
+        echo $layoutCallback($content, $title);
     }
 
     /**
      * Render a component.
      */
-    private function doRenderComponent(string $componentName, bool $withWrapper = true): string
+    private function doRenderComponent(string $componentName): string
     {
         $component = $this->registry->create($componentName);
 
@@ -245,35 +240,7 @@ class UsePHP
 
         $renderer = new Renderer($componentName);
 
-        if ($withWrapper) {
-            return sprintf(
-                '<div data-usephp-component="%s">%s</div>',
-                htmlspecialchars($componentName, ENT_QUOTES, 'UTF-8'),
-                $renderer->renderElement($element)
-            );
-        }
-
         return $renderer->renderElement($element);
-    }
-
-    /**
-     * Get JSON input from the request.
-     *
-     * @return array<string, mixed>
-     */
-    private function getJsonInput(): array
-    {
-        $raw = file_get_contents('php://input');
-
-        if ($raw === false || $raw === '') {
-            return [];
-        }
-
-        try {
-            return json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
-        } catch (\JsonException) {
-            return [];
-        }
     }
 
     /**
@@ -281,7 +248,7 @@ class UsePHP
      */
     private function registerDefaultLayout(): void
     {
-        $this->layouts['default'] = function (string $content, string $title, string $jsPath): string {
+        $this->layouts['default'] = function (string $content, string $title): string {
             return <<<HTML
 <!DOCTYPE html>
 <html lang="en">
@@ -297,15 +264,10 @@ class UsePHP
             padding: 20px;
             background: #f5f5f5;
         }
-        [data-usephp-loading="true"] {
-            opacity: 0.7;
-            pointer-events: none;
-        }
     </style>
 </head>
 <body>
     {$content}
-    <script src="{$jsPath}"></script>
 </body>
 </html>
 HTML;
