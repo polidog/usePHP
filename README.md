@@ -82,7 +82,8 @@ UsePHP::run();
 ### 3. サーバーを起動
 
 ```bash
-php -S localhost:8000 -t public
+# ルータースクリプトとして起動（静的ファイルもPHP経由で配信）
+php -S localhost:8000 public/index.php
 ```
 
 `http://localhost:8000/counter` にアクセス。
@@ -299,9 +300,8 @@ JSを読み込まなくても、通常のフォーム送信として動作しま
 # テスト実行
 ./vendor/bin/phpunit
 
-# サンプル起動
-cd examples
-php -S localhost:8000
+# サンプル起動（ルータースクリプトとして）
+php -S localhost:8000 examples/index.php
 ```
 
 ## ライセンス
