@@ -1,28 +1,28 @@
 # usePHP
 
-A framework that delivers server-driven UI with **minimal JavaScript**, using a React Hooks-like API.
+React Hooks風の書き心地で、**最小限のJavaScript**でサーバードリブンUIを実現するフレームワーク。
 
-## Features
+## 特徴
 
-- **React Hooks-like API** - Simple state management with `useState`
-- **Minimal JS (~40 lines)** - Smooth UX with partial updates, graceful fallback without JS
-- **Pure PHP** - No transpilation needed, PHP code runs directly on the server
-- **Session-based State** - State is maintained on the server side
-- **Component-oriented** - Reusable component classes
-- **Progressive Enhancement** - Works even with JavaScript disabled
+- **React Hooks風API** - `useState`でシンプルに状態管理
+- **最小限のJS (~40行)** - 部分更新でスムーズなUX、JSなしでもフォールバック動作
+- **PHPがそのまま動く** - トランスパイル不要、PHPコードがサーバーで実行
+- **セッションベース状態管理** - サーバー側で状態を保持
+- **コンポーネント指向** - 再利用可能なコンポーネントクラス
+- **プログレッシブエンハンスメント** - JavaScriptが無効でも動作
 
-## Installation
+## インストール
 
 ```bash
 composer require polidog/use-php
 
-# Copy JS file to public directory (required for partial updates)
+# JSファイルをpublicディレクトリにコピー（部分更新を使う場合）
 ./vendor/bin/usephp publish
 ```
 
-## Quick Start
+## クイックスタート
 
-### 1. Create a Component
+### 1. コンポーネントを作成
 
 ```php
 <?php
@@ -60,7 +60,7 @@ class Counter extends BaseComponent
 }
 ```
 
-### 2. Create an Entry Point
+### 2. エントリーポイントを作成
 
 ```php
 <?php
@@ -72,70 +72,70 @@ require_once __DIR__ . '/../components/Counter.php';
 use App\Components\Counter;
 use Polidog\UsePhp\UsePHP;
 
-// Serve usephp.js (for partial updates)
+// usephp.jsを配信（部分更新用）
 if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
     header('Content-Type: application/javascript');
     readfile(__DIR__ . '/usephp.js');
     exit;
 }
 
-// Register component
+// コンポーネント登録
 UsePHP::register(Counter::class);
 
-// Set JS path
+// JSパス設定
 UsePHP::setJsPath('/usephp.js');
 
-// Run
+// 実行
 UsePHP::run('counter');
 ```
 
-### 3. Start the Server
+### 3. サーバーを起動
 
 ```bash
 php -S localhost:8000 public/index.php
 ```
 
-Open `http://localhost:8000` in your browser.
+`http://localhost:8000` にアクセス。
 
-## Architecture
+## アーキテクチャ
 
-### With JavaScript (Partial Updates)
+### JSありの場合（部分更新）
 ```
 [Browser]                         [PHP Server]
     |                                  |
     |  GET /                           |
     | -------------------------------->|
-    |                                  | Counter::render() executes
-    |  <html>Count: 0</html>           | useState → saves to session
+    |                                  | Counter::render() 実行
+    |  <html>Count: 0</html>           | useState → セッション保存
     | <--------------------------------|
     |                                  |
     |  POST + X-UsePHP-Partial header  |
     | -------------------------------->|
-    |                                  | State update
-    |  <partial>Count: 1</partial>     | Re-render component only
+    |                                  | 状態更新
+    |  <部分HTML>Count: 1</部分HTML>    | コンポーネントのみ再レンダリング
     | <--------------------------------|
-    |  (innerHTML partial update)      |
+    |  (innerHTMLで部分更新)            |
 ```
 
-### Without JavaScript (Fallback)
+### JSなしの場合（フォールバック）
 ```
 [Browser]                         [PHP Server]
     |                                  |
     |  <form> POST (button click)      |
     | -------------------------------->|
-    |                                  | State update
+    |                                  | 状態更新
     |  303 Redirect                    |
     | <--------------------------------|
     |                                  |
     |  GET /                           |
     | -------------------------------->|
-    |  <html>Count: 1</html>           | Full page re-render
+    |  <html>Count: 1</html>           | 全ページ再レンダリング
     | <--------------------------------|
 ```
 
 ## API
 
-### Component Definition
+### コンポーネント定義
 
 ```php
 use Polidog\UsePhp\Component\BaseComponent;
@@ -156,13 +156,13 @@ class MyComponent extends BaseComponent
 ```php
 [$state, $setState] = $this->useState($initialValue);
 
-// Examples
+// 使用例
 [$count, $setCount] = $this->useState(0);
 [$todos, $setTodos] = $this->useState([]);
 [$user, $setUser] = $this->useState(['name' => 'John']);
 ```
 
-### HTML Elements
+### HTML要素
 
 ```php
 use function Polidog\UsePhp\Html\{
@@ -174,21 +174,21 @@ use function Polidog\UsePhp\Html\{
     img, Fragment
 };
 
-// Basic usage
+// 基本的な使い方
 div(
     className: 'container',
     id: 'main',
     children: [
-        h1(children: 'Title'),
+        h1(children: 'タイトル'),
         button(
             onClick: fn() => $setCount($count + 1),
-            children: 'Click'
+            children: 'クリック'
         ),
     ]
 );
 ```
 
-### Multiple Components + Routing
+### 複数コンポーネント + ルーティング
 
 ```php
 <?php
@@ -197,21 +197,21 @@ div(
 use App\Components\{Counter, TodoList};
 use Polidog\UsePhp\UsePHP;
 
-// Serve usephp.js
+// usephp.js配信
 if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
     header('Content-Type: application/javascript');
     readfile(__DIR__ . '/usephp.js');
     exit;
 }
 
-// Register components
+// コンポーネント登録
 UsePHP::register(Counter::class);
 UsePHP::register(TodoList::class);
 
-// Set JS path
+// JSパス設定
 UsePHP::setJsPath('/usephp.js');
 
-// Routing
+// ルーティング
 $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 $componentName = match ($path) {
     '/', '/counter' => 'counter',
@@ -219,11 +219,11 @@ $componentName = match ($path) {
     default => 'counter',
 };
 
-// Run
+// 実行
 UsePHP::run($componentName);
 ```
 
-### Custom Layout
+### カスタムレイアウト
 
 ```php
 UsePHP::layout('app', function ($content, $title, $jsPath) {
@@ -245,13 +245,13 @@ UsePHP::layout('app', function ($content, $title, $jsPath) {
 UsePHP::useLayout('app');
 ```
 
-## Generated HTML
+## 生成されるHTML
 
 ```php
 button(onClick: fn() => $setCount($count + 1), children: '+')
 ```
 
-Transforms to:
+↓ 変換
 
 ```html
 <form method="post" data-usephp-form style="display:inline;">
@@ -261,31 +261,31 @@ Transforms to:
 </form>
 ```
 
-- `data-usephp-form` - Form intercepted by JS
-- Works as a regular form submission without JS
+- `data-usephp-form` - JSがインターセプトするフォーム
+- JSなしでも通常のフォーム送信として動作
 
 ## CLI
 
 ```bash
-./vendor/bin/usephp publish  # Copy usephp.js to public/
-./vendor/bin/usephp help     # Show help
+./vendor/bin/usephp publish  # usephp.jsをpublic/にコピー
+./vendor/bin/usephp help     # ヘルプ表示
 ```
 
-## Requirements
+## 要件
 
 - PHP 8.2+
-- Sessions enabled
+- セッション有効
 
-## Development
+## 開発
 
 ```bash
-# Run tests
+# テスト実行
 ./vendor/bin/phpunit
 
-# Start example server
+# サンプル起動
 php -S localhost:8000 examples/index.php
 ```
 
-## License
+## ライセンス
 
 MIT
