@@ -16,7 +16,7 @@ use function Polidog\UsePhp\Html\li;
 use function Polidog\UsePhp\Html\span;
 use function Polidog\UsePhp\Html\ul;
 
-#[Component(name: 'todo', route: '/todo')]
+#[Component(name: 'todo')]
 class TodoList extends BaseComponent
 {
     public function render(): Element

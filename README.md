@@ -33,7 +33,7 @@ use Polidog\UsePhp\Component\Component;
 use Polidog\UsePhp\Runtime\Element;
 use function Polidog\UsePhp\Html\{div, span, button};
 
-#[Component(name: 'counter', route: '/counter')]
+#[Component(name: 'counter')]
 class Counter extends BaseComponent
 {
     public function render(): Element
@@ -75,8 +75,8 @@ UsePHP::register(Counter::class);
 // JSパス設定（部分更新を有効化）
 UsePHP::setJsPath('/usephp.js');
 
-// 実行
-UsePHP::run();
+// 実行（コンポーネント名を指定）
+UsePHP::run('counter');
 ```
 
 ### 3. サーバーを起動
@@ -137,10 +137,7 @@ php -S localhost:8000 public/index.php
 use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\Component;
 
-#[Component(
-    name: 'my-component',  // コンポーネント名
-    route: '/my-page'      // オプション: URLルート
-)]
+#[Component(name: 'my-component')]
 class MyComponent extends BaseComponent
 {
     public function render(): Element
@@ -214,8 +211,22 @@ UsePHP::layout('custom', function ($content, $title, $jsPath) {
 
 UsePHP::useLayout('custom');
 
-// 実行
-UsePHP::run();
+// 実行（コンポーネント名を指定）
+UsePHP::run('counter');
+```
+
+ルーティングはアプリケーション側で実装します：
+
+```php
+// 例: シンプルなルーティング
+$path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+$componentName = match ($path) {
+    '/', '/counter' => 'counter',
+    '/todo' => 'todo',
+    default => 'counter',
+};
+
+UsePHP::run($componentName);
 ```
 
 ## 生成されるHTML

@@ -24,6 +24,14 @@ UsePHP::register(TodoList::class);
 // Set JS path
 UsePHP::setJsPath('/usephp.js');
 
+// Simple routing
+$path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+$componentName = match ($path) {
+    '/', '/counter' => 'counter',
+    '/todo' => 'todo',
+    default => 'counter',
+};
+
 // Custom layout with styles
 UsePHP::layout('app', function (string $content, string $title, string $jsPath): string {
     return <<<HTML
@@ -169,4 +177,4 @@ HTML;
 UsePHP::useLayout('app');
 
 // Run the application
-UsePHP::run();
+UsePHP::run($componentName);

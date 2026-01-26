@@ -12,9 +12,6 @@ class ComponentRegistry
     /** @var array<string, class-string<ComponentInterface>> */
     private array $components = [];
 
-    /** @var array<string, string> Route to component name mapping */
-    private array $routes = [];
-
     /**
      * Register a component class.
      *
@@ -30,12 +27,6 @@ class ComponentRegistry
 
         $name = $className::getComponentName();
         $this->components[$name] = $className;
-
-        // Register route if specified
-        $route = $className::getComponentRoute();
-        if ($route !== null) {
-            $this->routes[$route] = $name;
-        }
 
         return $this;
     }
@@ -98,24 +89,6 @@ class ComponentRegistry
         }
 
         return new $className();
-    }
-
-    /**
-     * Get component name by route.
-     */
-    public function getByRoute(string $route): ?string
-    {
-        return $this->routes[$route] ?? null;
-    }
-
-    /**
-     * Get all registered routes.
-     *
-     * @return array<string, string>
-     */
-    public function getRoutes(): array
-    {
-        return $this->routes;
     }
 
     /**

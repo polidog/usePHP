@@ -71,20 +71,4 @@ abstract class BaseComponent implements ComponentInterface
         $component = $attributes[0]->newInstance();
         return $component->name;
     }
-
-    /**
-     * Get the component route from the attribute.
-     */
-    public static function getComponentRoute(): ?string
-    {
-        $reflection = new \ReflectionClass(static::class);
-        $attributes = $reflection->getAttributes(Component::class);
-
-        if (empty($attributes)) {
-            return null;
-        }
-
-        $component = $attributes[0]->newInstance();
-        return $component->route;
-    }
 }

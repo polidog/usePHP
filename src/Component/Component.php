@@ -14,7 +14,6 @@ class Component
 {
     public function __construct(
         public string $name,
-        public ?string $route = null,
     ) {
     }
 }

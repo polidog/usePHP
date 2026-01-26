@@ -13,7 +13,7 @@ use function Polidog\UsePhp\Html\div;
 use function Polidog\UsePhp\Html\h1;
 use function Polidog\UsePhp\Html\span;
 
-#[Component(name: 'counter', route: '/counter')]
+#[Component(name: 'counter')]
 class Counter extends BaseComponent
 {
     public function render(): Element

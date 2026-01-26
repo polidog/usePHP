@@ -14,7 +14,9 @@
     },
     "autoload-dev": {
         "psr-4": {
-            "Polidog\\UsePhp\\Tests\\": "tests/"
+            "Polidog\\UsePhp\\Tests\\": "tests/",
+            "Polidog\\UsePhp\\AppRouter\\": "packages/usephp-app-router/src/",
+            "Polidog\\UsePhp\\AppRouter\\Tests\\": "packages/usephp-app-router/tests/"
         }
     },
     "authors": [

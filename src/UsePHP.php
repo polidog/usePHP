@@ -101,7 +101,7 @@ class UsePHP
     /**
      * Run the application.
      */
-    public static function run(?string $componentName = null): void
+    public static function run(string $componentName): void
     {
         $instance = self::getInstance();
         $instance->handleRequest($componentName);
@@ -119,20 +119,11 @@ class UsePHP
     /**
      * Handle the incoming request.
      */
-    private function handleRequest(?string $componentName): void
+    private function handleRequest(string $componentName): void
     {
         // Handle POST action (form submission)
         if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_usephp_action'])) {
             $this->handleFormAction();
-            return;
-        }
-
-        // Determine which component to render
-        $componentName = $componentName ?? $this->resolveComponentFromRequest();
-
-        if ($componentName === null) {
-            http_response_code(404);
-            echo 'Component not found';
             return;
         }
 
@@ -197,30 +188,6 @@ class UsePHP
         $redirectUrl = strtok($_SERVER['REQUEST_URI'] ?? '/', '?');
         header('Location: ' . $redirectUrl, true, 303);
         exit;
-    }
-
-    /**
-     * Resolve component name from the request.
-     */
-    private function resolveComponentFromRequest(): ?string
-    {
-        $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
-        $path = rtrim($path, '/') ?: '/';
-
-        // Check routes
-        $componentName = $this->registry->getByRoute($path);
-        if ($componentName !== null) {
-            return $componentName;
-        }
-
-        // Check query parameter
-        if (isset($_GET['component'])) {
-            return $_GET['component'];
-        }
-
-        // Default to first registered component
-        $all = $this->registry->all();
-        return $all ? array_key_first($all) : null;
     }
 
     /**

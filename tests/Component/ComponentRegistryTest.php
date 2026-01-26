@@ -12,7 +12,7 @@ use Polidog\UsePhp\Runtime\Element;
 
 use function Polidog\UsePhp\Html\div;
 
-#[Component(name: 'test-component', route: '/test')]
+#[Component(name: 'test-component')]
 class TestComponent extends BaseComponent
 {
     public function render(): Element
@@ -51,23 +51,6 @@ class ComponentRegistryTest extends TestCase
         $this->assertInstanceOf(TestComponent::class, $component);
     }
 
-    public function testRouteRegistration(): void
-    {
-        $registry = new ComponentRegistry();
-        $registry->register(TestComponent::class);
-
-        $this->assertSame('test-component', $registry->getByRoute('/test'));
-    }
-
-    public function testComponentWithoutRoute(): void
-    {
-        $registry = new ComponentRegistry();
-        $registry->register(AnotherComponent::class);
-
-        $this->assertTrue($registry->has('another'));
-        $this->assertNull($registry->getByRoute('/another'));
-    }
-
     public function testGetAllComponents(): void
     {
         $registry = new ComponentRegistry();
@@ -79,18 +62,6 @@ class ComponentRegistryTest extends TestCase
         $this->assertCount(2, $all);
         $this->assertArrayHasKey('test-component', $all);
         $this->assertArrayHasKey('another', $all);
-    }
-
-    public function testGetAllRoutes(): void
-    {
-        $registry = new ComponentRegistry();
-        $registry->register(TestComponent::class);
-        $registry->register(AnotherComponent::class);
-
-        $routes = $registry->getRoutes();
-
-        $this->assertCount(1, $routes);
-        $this->assertSame('test-component', $routes['/test']);
     }
 
     public function testCreateNonExistentComponent(): void
