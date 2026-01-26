@@ -2,6 +2,13 @@
 
 declare(strict_types=1);
 
+// Serve usephp.js from public directory
+if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
+    header('Content-Type: application/javascript');
+    readfile(__DIR__ . '/../public/usephp.js');
+    exit;
+}
+
 require_once __DIR__ . '/../vendor/autoload.php';
 require_once __DIR__ . '/components/Counter.php';
 require_once __DIR__ . '/components/TodoList.php';
