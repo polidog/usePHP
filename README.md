@@ -62,21 +62,27 @@ class Counter extends BaseComponent
 
 ```php
 <?php
-// index.php
+// public/index.php
 
-require_once 'vendor/autoload.php';
-require_once 'components/Counter.php';
+require_once __DIR__ . '/../vendor/autoload.php';
+require_once __DIR__ . '/../components/Counter.php';
 
 use Polidog\UsePhp\UsePHP;
 
+// コンポーネント登録
 UsePHP::register(Counter::class);
+
+// JSパス設定（部分更新を有効化）
+UsePHP::setJsPath('/usephp.js');
+
+// 実行
 UsePHP::run();
 ```
 
 ### 3. サーバーを起動
 
 ```bash
-php -S localhost:8000
+php -S localhost:8000 -t public
 ```
 
 `http://localhost:8000/counter` にアクセス。
@@ -271,6 +277,16 @@ button(onClick: fn() => $setCount($count + 1), children: '+')
 4. エラー時は通常のフォーム送信にフォールバック
 
 JSを読み込まなくても、通常のフォーム送信として動作します。
+
+## CLI
+
+```bash
+# usephp.jsをpublic/にコピー
+./vendor/bin/usephp publish
+
+# ヘルプ表示
+./vendor/bin/usephp help
+```
 
 ## 要件
 
