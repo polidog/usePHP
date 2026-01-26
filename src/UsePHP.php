@@ -9,6 +9,7 @@ use Polidog\UsePhp\Component\ComponentInterface;
 use Polidog\UsePhp\Component\ComponentRegistry;
 use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\ComponentState;
+use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\Runtime\Renderer;
 
 /**
@@ -144,15 +145,18 @@ class UsePHP
      */
     private function handleFormAction(): void
     {
-        $componentName = $_POST['_usephp_component'] ?? null;
+        $instanceId = $_POST['_usephp_component'] ?? null;
         $actionJson = $_POST['_usephp_action'] ?? null;
         $isPartial = isset($_SERVER['HTTP_X_USEPHP_PARTIAL']);
 
-        if ($componentName === null || $actionJson === null) {
+        if ($instanceId === null || $actionJson === null) {
             http_response_code(400);
             echo 'Invalid action request';
             return;
         }
+
+        // Extract component name from instanceId (e.g., "Counter#0" => "Counter")
+        $componentName = explode('#', $instanceId)[0];
 
         if (!$this->registry->has($componentName)) {
             http_response_code(404);
@@ -165,7 +169,8 @@ class UsePHP
             $actionData = json_decode($actionJson, true, 512, JSON_THROW_ON_ERROR);
             $action = Action::fromArray($actionData);
 
-            $state = ComponentState::getInstance($componentName);
+            // Use instanceId for state to match the correct component instance
+            $state = ComponentState::getInstance($instanceId);
 
             if ($action->type === 'setState') {
                 $index = $action->payload['index'] ?? 0;
@@ -180,7 +185,7 @@ class UsePHP
 
         // Partial update (AJAX) - return only component HTML
         if ($isPartial) {
-            echo $this->doRenderComponentPartial($componentName);
+            echo $this->doRenderComponentPartialWithInstanceId($instanceId, $componentName);
             return;
         }
 
@@ -214,14 +219,18 @@ class UsePHP
             return '';
         }
 
-        $state = ComponentState::getInstance($componentName);
+        // Start a new render pass
+        RenderContext::beginRender();
+
+        $instanceId = RenderContext::nextInstanceId($componentName);
+        $state = ComponentState::getInstance($instanceId);
         ComponentState::reset();
 
         if ($component instanceof BaseComponent) {
             $component->setComponentState($state);
         }
 
-        $renderer = new Renderer($componentName);
+        $renderer = new Renderer($instanceId);
 
         return $renderer->render(fn() => $component->render());
     }
@@ -237,14 +246,41 @@ class UsePHP
             return '';
         }
 
-        $state = ComponentState::getInstance($componentName);
+        // Start a new render pass
+        RenderContext::beginRender();
+
+        $instanceId = RenderContext::nextInstanceId($componentName);
+        $state = ComponentState::getInstance($instanceId);
         ComponentState::reset();
 
         if ($component instanceof BaseComponent) {
             $component->setComponentState($state);
         }
 
-        $renderer = new Renderer($componentName);
+        $renderer = new Renderer($instanceId);
+
+        return $renderer->renderPartial(fn() => $component->render());
+    }
+
+    /**
+     * Render a component partial with a specific instance ID (for form action handling).
+     */
+    private function doRenderComponentPartialWithInstanceId(string $instanceId, string $componentName): string
+    {
+        $component = $this->registry->create($componentName);
+
+        if ($component === null) {
+            return '';
+        }
+
+        $state = ComponentState::getInstance($instanceId);
+        ComponentState::reset();
+
+        if ($component instanceof BaseComponent) {
+            $component->setComponentState($state);
+        }
+
+        $renderer = new Renderer($instanceId);
 
         return $renderer->renderPartial(fn() => $component->render());
     }
