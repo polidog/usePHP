@@ -38,6 +38,7 @@ abstract class BaseComponent implements ComponentInterface
      * @param T $initial
      * @return array{0: T, 1: callable(T): Action}
      */
+    #[\NoDiscard('useState returns [state, setState] tuple that must be used')]
     protected function useState(mixed $initial): array
     {
         if ($this->state === null) {
@@ -62,14 +63,6 @@ abstract class BaseComponent implements ComponentInterface
         $reflection = new \ReflectionClass(static::class);
         $attributes = $reflection->getAttributes(Component::class);
 
-        if (!empty($attributes)) {
-            $component = $attributes[0]->newInstance();
-            if ($component->name !== null) {
-                return $component->name;
-            }
-        }
-
-        // Use FQCN as component name
-        return static::class;
+        return array_first($attributes)?->newInstance()->name ?? static::class;
     }
 }

@@ -15,6 +15,7 @@ class StorageFactory
     /**
      * Get or create a storage instance for the given type.
      */
+    #[\NoDiscard('Storage instance must be used')]
     public static function create(StorageType $type): StateStorageInterface
     {
         $key = $type->value;

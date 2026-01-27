@@ -56,12 +56,7 @@ class ComponentRegistry
         $reflection = new ReflectionClass($className);
         $attributes = $reflection->getAttributes(Component::class);
 
-        if (count($attributes) > 0) {
-            $component = $attributes[0]->newInstance();
-            return $component->storageType;
-        }
-
-        return StorageType::Session;
+        return array_first($attributes)?->newInstance()->storageType ?? StorageType::Session;
     }
 
     /**

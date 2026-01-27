@@ -11,6 +11,7 @@ namespace Polidog\UsePhp\Runtime;
  * @param T $initial The initial state value
  * @return array{0: T, 1: callable(T): Action} A tuple of [state, setState]
  */
+#[\NoDiscard('useState returns [state, setState] tuple that must be used')]
 function useState(mixed $initial): array
 {
     $componentState = ComponentState::current();

@@ -7,12 +7,22 @@ namespace Polidog\UsePhp\Runtime;
 /**
  * Represents an action to be executed (e.g., state update).
  */
-class Action
+readonly class Action
 {
     public function __construct(
         public string $type,
         public array $payload = []
     ) {}
+
+    /**
+     * Create a new Action with updated payload (PHP 8.5 Clone With).
+     *
+     * @param array<string, mixed> $payload
+     */
+    public function withPayload(array $payload): self
+    {
+        return clone($this, ['payload' => $payload]);
+    }
 
     public function toArray(): array
     {
