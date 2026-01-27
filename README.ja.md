@@ -166,7 +166,7 @@ class MyComponent extends BaseComponent
 }
 ```
 
-コンポーネント名はクラス名から自動的に導出されます（`MyComponent` → `myComponent`）。明示的に指定することも可能です：
+コンポーネント名はデフォルトでFQCN（例: `App\Components\MyComponent`）になります。明示的に指定することも可能です：
 
 ```php
 #[Component(name: 'custom-name')]

@@ -166,7 +166,7 @@ class MyComponent extends BaseComponent
 }
 ```
 
-The component name is automatically derived from the class name (`MyComponent` → `myComponent`). You can override it explicitly:
+The component name defaults to the FQCN (e.g., `App\Components\MyComponent`). You can override it explicitly:
 
 ```php
 #[Component(name: 'custom-name')]

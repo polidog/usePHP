@@ -56,7 +56,7 @@ abstract class BaseComponent implements ComponentInterface
     }
 
     /**
-     * Get the component name from the attribute or derive from class name.
+     * Get the component name from the attribute or use FQCN.
      */
     public static function getComponentName(): string
     {
@@ -70,7 +70,7 @@ abstract class BaseComponent implements ComponentInterface
             }
         }
 
-        // Derive from class name: Counter -> counter, TodoList -> todoList
-        return lcfirst($reflection->getShortName());
+        // Use FQCN as component name
+        return static::class;
     }
 }
