@@ -17,7 +17,7 @@ return (new Config())
     ->setRiskyAllowed(true)
     ->setRules([
         '@PER-CS' => true,
-        '@PHP82Migration' => true,
+        '@PHP8x5Migration' => true,
         'strict_param' => true,
         'array_syntax' => ['syntax' => 'short'],
         'ordered_imports' => ['sort_algorithm' => 'alpha'],
