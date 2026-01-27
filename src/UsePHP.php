@@ -21,17 +21,10 @@ class UsePHP
     private static ?self $instance = null;
 
     private ComponentRegistry $registry;
-    private ?string $currentComponent = null;
-    private string $layout = 'default';
-    private string $jsPath = '/usephp.js';
-
-    /** @var array<string, callable> */
-    private array $layouts = [];
 
     private function __construct()
     {
         $this->registry = new ComponentRegistry();
-        $this->registerDefaultLayout();
     }
 
     /**
@@ -68,82 +61,32 @@ class UsePHP
     }
 
     /**
-     * Set the path to usephp.js
+     * Render a component and return HTML.
      */
-    public static function setJsPath(string $path): self
-    {
-        $instance = self::getInstance();
-        $instance->jsPath = $path;
-        return $instance;
-    }
-
-    /**
-     * Register a layout.
-     *
-     * @param callable(string $content, string $title, string $jsPath): string $callback
-     */
-    public static function layout(string $name, callable $callback): self
-    {
-        $instance = self::getInstance();
-        $instance->layouts[$name] = $callback;
-        return $instance;
-    }
-
-    /**
-     * Set the default layout to use.
-     */
-    public static function useLayout(string $name): self
-    {
-        $instance = self::getInstance();
-        $instance->layout = $name;
-        return $instance;
-    }
-
-    /**
-     * Run the application.
-     */
-    public static function run(string $componentName): void
-    {
-        $instance = self::getInstance();
-        $instance->handleRequest($componentName);
-    }
-
-    /**
-     * Render a component and return HTML (without layout).
-     */
-    public static function renderComponent(string $componentName): string
+    public static function render(string $componentName): string
     {
         $instance = self::getInstance();
         return $instance->doRenderComponent($componentName);
     }
 
     /**
-     * Handle the incoming request.
+     * Handle a POST action and return the partial HTML.
+     * Returns null if not a valid action request.
      */
-    private function handleRequest(string $componentName): void
+    public static function handleAction(): ?string
     {
-        // Handle POST action (form submission)
-        if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['_usephp_action'])) {
-            $this->handleFormAction();
-            return;
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !isset($_POST['_usephp_action'])) {
+            return null;
         }
 
-        if (!$this->registry->has($componentName)) {
-            http_response_code(404);
-            echo "Component not found: {$componentName}";
-            return;
-        }
-
-        $this->currentComponent = $componentName;
-
-        // Render the full page
-        $this->renderPage($componentName);
+        $instance = self::getInstance();
+        return $instance->doHandleAction();
     }
 
     /**
      * Handle form action submission.
      */
-    private function handleFormAction(): void
+    private function doHandleAction(): ?string
     {
         $instanceId = $_POST['_usephp_component'] ?? null;
         $actionJson = $_POST['_usephp_action'] ?? null;
@@ -151,8 +94,7 @@ class UsePHP
 
         if ($instanceId === null || $actionJson === null) {
             http_response_code(400);
-            echo 'Invalid action request';
-            return;
+            return 'Invalid action request';
         }
 
         // Extract component name from instanceId (e.g., "Counter#0" => "Counter")
@@ -160,8 +102,7 @@ class UsePHP
 
         if (!$this->registry->has($componentName)) {
             http_response_code(404);
-            echo "Component not found: {$componentName}";
-            return;
+            return "Component not found: {$componentName}";
         }
 
         // Parse and execute the action
@@ -179,33 +120,18 @@ class UsePHP
             }
         } catch (\JsonException $e) {
             http_response_code(400);
-            echo 'Invalid action data';
-            return;
+            return 'Invalid action data';
         }
 
         // Partial update (AJAX) - return only component HTML
         if ($isPartial) {
-            echo $this->doRenderComponentPartialWithInstanceId($instanceId, $componentName);
-            return;
+            return $this->doRenderComponentPartialWithInstanceId($instanceId, $componentName);
         }
 
         // Full page - PRG pattern
         $redirectUrl = strtok($_SERVER['REQUEST_URI'] ?? '/', '?');
         header('Location: ' . $redirectUrl, true, 303);
         exit;
-    }
-
-    /**
-     * Render the full page with layout.
-     */
-    private function renderPage(string $componentName): void
-    {
-        $content = $this->doRenderComponent($componentName);
-
-        $layoutCallback = $this->layouts[$this->layout] ?? $this->layouts['default'];
-        $title = ucfirst($componentName);
-
-        echo $layoutCallback($content, $title, $this->jsPath);
     }
 
     /**
@@ -283,42 +209,6 @@ class UsePHP
         $renderer = new Renderer($instanceId);
 
         return $renderer->renderPartial(fn() => $component->render());
-    }
-
-    /**
-     * Register the default layout.
-     */
-    private function registerDefaultLayout(): void
-    {
-        $this->layouts['default'] = function (string $content, string $title, string $jsPath): string {
-            return <<<HTML
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{$title} - usePHP</title>
-    <style>
-        * { box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background: #f5f5f5;
-        }
-        [aria-busy="true"] {
-            opacity: 0.6;
-            pointer-events: none;
-        }
-    </style>
-</head>
-<body>
-    {$content}
-    <script src="{$jsPath}"></script>
-</body>
-</html>
-HTML;
-        };
     }
 
     /**

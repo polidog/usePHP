@@ -82,11 +82,26 @@ if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
 // Register component
 UsePHP::register(Counter::class);
 
-// Set JS path
-UsePHP::setJsPath('/usephp.js');
+// Handle POST actions (for partial updates)
+$actionResult = UsePHP::handleAction();
+if ($actionResult !== null) {
+    echo $actionResult;
+    exit;
+}
 
-// Run
-UsePHP::run('counter');
+// Render component
+$content = UsePHP::render('counter');
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Counter - usePHP</title>
+</head>
+<body>
+    <?= $content ?>
+    <script src="/usephp.js"></script>
+</body>
+</html>
 ```
 
 ### 3. Start the Server
@@ -180,6 +195,12 @@ H::div(
     ]
 );
 
+// Conditional rendering
+H::div(children: [
+    $isLoggedIn ? H::span(children: 'Welcome') : null,
+    $count > 0 ? H::ul(children: $items) : H::p(children: 'No items'),
+]);
+
 // All HTML elements are supported
 H::article(className: 'post', children: [...]);
 H::table(children: [H::tr(children: [H::td(children: 'Cell')])]);
@@ -206,8 +227,12 @@ if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
 UsePHP::register(Counter::class);
 UsePHP::register(TodoList::class);
 
-// Set JS path
-UsePHP::setJsPath('/usephp.js');
+// Handle POST actions
+$actionResult = UsePHP::handleAction();
+if ($actionResult !== null) {
+    echo $actionResult;
+    exit;
+}
 
 // Routing
 $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
@@ -217,30 +242,19 @@ $componentName = match ($path) {
     default => 'counter',
 };
 
-// Run
-UsePHP::run($componentName);
-```
-
-### Custom Layout
-
-```php
-UsePHP::layout('app', function ($content, $title, $jsPath) {
-    return <<<HTML
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>{$title}</title>
-        <style>/* your styles */</style>
-    </head>
-    <body>
-        {$content}
-        <script src="{$jsPath}"></script>
-    </body>
-    </html>
-    HTML;
-});
-
-UsePHP::useLayout('app');
+// Render
+$content = UsePHP::render($componentName);
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title><?= ucfirst($componentName) ?> - usePHP</title>
+</head>
+<body>
+    <?= $content ?>
+    <script src="/usephp.js"></script>
+</body>
+</html>
 ```
 
 ## Generated HTML
@@ -253,7 +267,7 @@ Transforms to:
 
 ```html
 <form method="post" data-usephp-form style="display:inline;">
-  <input type="hidden" name="_usephp_component" value="counter" />
+  <input type="hidden" name="_usephp_component" value="counter#0" />
   <input type="hidden" name="_usephp_action" value='{"type":"setState","payload":{"index":0,"value":1}}' />
   <button type="submit">+</button>
 </form>

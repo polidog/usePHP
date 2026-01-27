@@ -82,11 +82,26 @@ if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
 // コンポーネント登録
 UsePHP::register(Counter::class);
 
-// JSパス設定
-UsePHP::setJsPath('/usephp.js');
+// POSTアクション処理（部分更新用）
+$actionResult = UsePHP::handleAction();
+if ($actionResult !== null) {
+    echo $actionResult;
+    exit;
+}
 
-// 実行
-UsePHP::run('counter');
+// コンポーネントをレンダリング
+$content = UsePHP::render('counter');
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Counter - usePHP</title>
+</head>
+<body>
+    <?= $content ?>
+    <script src="/usephp.js"></script>
+</body>
+</html>
 ```
 
 ### 3. サーバーを起動
@@ -180,6 +195,12 @@ H::div(
     ]
 );
 
+// 条件付きレンダリング
+H::div(children: [
+    $isLoggedIn ? H::span(children: 'ようこそ') : null,
+    $count > 0 ? H::ul(children: $items) : H::p(children: 'アイテムなし'),
+]);
+
 // 全HTML要素に対応
 H::article(className: 'post', children: [...]);
 H::table(children: [H::tr(children: [H::td(children: 'セル')])]);
@@ -206,8 +227,12 @@ if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
 UsePHP::register(Counter::class);
 UsePHP::register(TodoList::class);
 
-// JSパス設定
-UsePHP::setJsPath('/usephp.js');
+// POSTアクション処理
+$actionResult = UsePHP::handleAction();
+if ($actionResult !== null) {
+    echo $actionResult;
+    exit;
+}
 
 // ルーティング
 $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
@@ -217,30 +242,19 @@ $componentName = match ($path) {
     default => 'counter',
 };
 
-// 実行
-UsePHP::run($componentName);
-```
-
-### カスタムレイアウト
-
-```php
-UsePHP::layout('app', function ($content, $title, $jsPath) {
-    return <<<HTML
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>{$title}</title>
-        <style>/* your styles */</style>
-    </head>
-    <body>
-        {$content}
-        <script src="{$jsPath}"></script>
-    </body>
-    </html>
-    HTML;
-});
-
-UsePHP::useLayout('app');
+// レンダリング
+$content = UsePHP::render($componentName);
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title><?= ucfirst($componentName) ?> - usePHP</title>
+</head>
+<body>
+    <?= $content ?>
+    <script src="/usephp.js"></script>
+</body>
+</html>
 ```
 
 ## 生成されるHTML
@@ -253,7 +267,7 @@ H::button(onClick: fn() => $setCount($count + 1), children: '+')
 
 ```html
 <form method="post" data-usephp-form style="display:inline;">
-  <input type="hidden" name="_usephp_component" value="counter" />
+  <input type="hidden" name="_usephp_component" value="counter#0" />
   <input type="hidden" name="_usephp_action" value='{"type":"setState","payload":{"index":0,"value":1}}' />
   <button type="submit">+</button>
 </form>

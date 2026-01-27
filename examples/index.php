@@ -35,9 +35,13 @@ UsePHP::register(Counter::class);
 UsePHP::register(TodoList::class);
 
 // ============================================
-// JS path for partial updates
+// Handle POST action (for partial updates)
 // ============================================
-UsePHP::setJsPath('/usephp.js');
+$actionResult = UsePHP::handleAction();
+if ($actionResult !== null) {
+    echo $actionResult;
+    exit;
+}
 
 // ============================================
 // Simple routing
@@ -50,16 +54,17 @@ $componentName = match ($path) {
 };
 
 // ============================================
-// Custom layout
+// Render
 // ============================================
-UsePHP::layout('app', function (string $content, string $title, string $jsPath): string {
-    return <<<HTML
+$content = UsePHP::render($componentName);
+$title = ucfirst($componentName);
+?>
 <!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{$title} - usePHP</title>
+    <title><?= $title ?> - usePHP</title>
     <style>
         * { box-sizing: border-box; }
         body {
@@ -175,17 +180,8 @@ UsePHP::layout('app', function (string $content, string $title, string $jsPath):
         <a href="/counter">Counter</a>
         <a href="/todo">Todo</a>
     </nav>
-    {$content}
+    <?= $content ?>
     <div class="badge">Partial updates with ~40 lines of JS</div>
-    <script src="{$jsPath}"></script>
+    <script src="/usephp.js"></script>
 </body>
 </html>
-HTML;
-});
-
-UsePHP::useLayout('app');
-
-// ============================================
-// Run
-// ============================================
-UsePHP::run($componentName);
