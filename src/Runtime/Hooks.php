@@ -42,7 +42,7 @@ function useState(mixed $initial): array
  * If $deps is null, the effect runs on every render.
  * If $deps is an empty array [], the effect runs only on mount.
  *
- * @param callable(): (callable(): void)|void $callback The effect callback, optionally returns a cleanup function
+ * @param callable(): (callable(): void)|null $callback The effect callback, optionally returns a cleanup function
  * @param array<mixed>|null $deps Dependency array (null = run every time, [] = only on mount)
  * @return void
  */

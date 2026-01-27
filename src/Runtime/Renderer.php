@@ -170,7 +170,7 @@ final class Renderer
     /**
      * Render children elements.
      *
-     * @param array<Element|string> $children
+     * @param array<Element|string|int|float> $children
      */
     private function renderChildren(array $children): string
     {
