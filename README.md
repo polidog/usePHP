@@ -7,7 +7,7 @@ A framework that delivers server-driven UI with **minimal JavaScript**, using a 
 - **React Hooks-like API** - Simple state management with `useState`
 - **Minimal JS (~40 lines)** - Smooth UX with partial updates, graceful fallback without JS
 - **Pure PHP** - No transpilation needed, PHP code runs directly on the server
-- **Session-based State** - State is maintained on the server side
+- **Configurable State Storage** - Choose between session (persistent) or memory (per-request) storage per component
 - **Component-oriented** - Reusable component classes
 - **Progressive Enhancement** - Works even with JavaScript disabled
 
@@ -176,6 +176,51 @@ class MyComponent extends BaseComponent
 [$todos, $setTodos] = $this->useState([]);
 [$user, $setUser] = $this->useState(['name' => 'John']);
 ```
+
+### State Storage
+
+By default, component state is stored in PHP sessions and persists across page navigations. You can configure this behavior per component using the `storage` parameter:
+
+```php
+use Polidog\UsePhp\Component\BaseComponent;
+use Polidog\UsePhp\Component\Component;
+use Polidog\UsePhp\Storage\StorageType;
+
+// Session storage (default) - state persists across page navigations
+#[Component(name: 'counter')]
+class Counter extends BaseComponent
+{
+    public function render(): Element
+    {
+        [$count, $setCount] = $this->useState(0);
+        // $count persists when user navigates away and comes back
+        // ...
+    }
+}
+
+// Memory storage - state resets on each page load
+#[Component(name: 'search-form', storage: StorageType::Memory)]
+class SearchForm extends BaseComponent
+{
+    public function render(): Element
+    {
+        [$query, $setQuery] = $this->useState('');
+        // $query resets to '' on page reload/navigation
+        // ...
+    }
+}
+
+// You can also use string values
+#[Component(name: 'wizard', storage: 'memory')]
+class Wizard extends BaseComponent { /* ... */ }
+```
+
+**Storage Types:**
+
+| Type | Behavior | Use Case |
+|------|----------|----------|
+| `session` (default) | State persists across page navigations | Counters, shopping carts, user preferences |
+| `memory` | State resets on each page load | Search forms, temporary UI state, wizards that should reset |
 
 ### HTML Elements
 

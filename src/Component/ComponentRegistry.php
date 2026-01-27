@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Component;
 
+use Polidog\UsePhp\Storage\StorageType;
+use ReflectionClass;
+
 /**
  * Registry for managing usePHP components.
  */
@@ -11,6 +14,9 @@ class ComponentRegistry
 {
     /** @var array<string, class-string<ComponentInterface>> */
     private array $components = [];
+
+    /** @var array<string, StorageType> */
+    private array $storageTypes = [];
 
     /**
      * Register a component class.
@@ -27,8 +33,35 @@ class ComponentRegistry
 
         $name = $className::getComponentName();
         $this->components[$name] = $className;
+        $this->storageTypes[$name] = $this->resolveStorageType($className);
 
         return $this;
+    }
+
+    /**
+     * Get the storage type for a component.
+     */
+    public function getStorageType(string $name): StorageType
+    {
+        return $this->storageTypes[$name] ?? StorageType::Session;
+    }
+
+    /**
+     * Resolve storage type from component class attributes.
+     *
+     * @param class-string<ComponentInterface> $className
+     */
+    private function resolveStorageType(string $className): StorageType
+    {
+        $reflection = new ReflectionClass($className);
+        $attributes = $reflection->getAttributes(Component::class);
+
+        if (count($attributes) > 0) {
+            $component = $attributes[0]->newInstance();
+            return $component->storageType;
+        }
+
+        return StorageType::Session;
     }
 
     /**

@@ -4,25 +4,32 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Runtime;
 
+use Polidog\UsePhp\Storage\SessionStorage;
+use Polidog\UsePhp\Storage\StateStorageInterface;
+use Polidog\UsePhp\Storage\StorageFactory;
+use Polidog\UsePhp\Storage\StorageType;
+
 /**
- * Manages component state using PHP sessions.
+ * Manages component state using configurable storage backends.
  */
 class ComponentState
 {
     private static ?self $instance = null;
     private string $componentId;
     private int $hookIndex = 0;
+    private StateStorageInterface $storage;
 
-    private function __construct(string $componentId)
+    private function __construct(string $componentId, StateStorageInterface $storage)
     {
         $this->componentId = $componentId;
-        $this->ensureSessionStarted();
+        $this->storage = $storage;
     }
 
-    public static function getInstance(string $componentId): self
+    public static function getInstance(string $componentId, ?StorageType $storageType = null): self
     {
         if (self::$instance === null || self::$instance->componentId !== $componentId) {
-            self::$instance = new self($componentId);
+            $storage = StorageFactory::create($storageType ?? StorageType::Session);
+            self::$instance = new self($componentId, $storage);
         }
         return self::$instance;
     }
@@ -53,38 +60,34 @@ class ComponentState
     {
         $key = $this->getStateKey($index);
 
-        if (!isset($_SESSION[$key])) {
-            $_SESSION[$key] = $initial;
+        if (!$this->storage->has($key)) {
+            $this->storage->set($key, $initial);
         }
 
-        return $_SESSION[$key];
+        return $this->storage->get($key);
     }
 
     public function setState(int $index, mixed $value): void
     {
         $key = $this->getStateKey($index);
-        $_SESSION[$key] = $value;
+        $this->storage->set($key, $value);
     }
 
     public function registerAction(string $actionId, \Closure $callback): void
     {
         $key = $this->getActionKey($actionId);
-        $_SESSION[$key] = $callback;
+        $this->storage->set($key, $callback);
     }
 
     public function getAction(string $actionId): ?\Closure
     {
         $key = $this->getActionKey($actionId);
-        return $_SESSION[$key] ?? null;
+        return $this->storage->get($key);
     }
 
     public function clearState(): void
     {
-        foreach ($_SESSION as $key => $value) {
-            if (str_starts_with($key, "usephp:{$this->componentId}:")) {
-                unset($_SESSION[$key]);
-            }
-        }
+        $this->storage->clearByPrefix("usephp:{$this->componentId}:");
     }
 
 
@@ -105,11 +108,11 @@ class ComponentState
         $key = $this->getEffectDepsKey($index);
 
         // First run - no previous deps stored
-        if (!isset($_SESSION[$key])) {
+        if (!$this->storage->has($key)) {
             return true;
         }
 
-        $prevDeps = $_SESSION[$key];
+        $prevDeps = $this->storage->get($key);
 
         // Empty deps array = only run on mount (already ran)
         if ($deps === [] && $prevDeps === []) {
@@ -136,7 +139,7 @@ class ComponentState
     public function setEffectDeps(int $index, ?array $deps): void
     {
         $key = $this->getEffectDepsKey($index);
-        $_SESSION[$key] = $deps;
+        $this->storage->set($key, $deps);
     }
 
     /**
@@ -145,7 +148,7 @@ class ComponentState
     public function getEffectDeps(int $index): ?array
     {
         $key = $this->getEffectDepsKey($index);
-        return $_SESSION[$key] ?? null;
+        return $this->storage->get($key);
     }
 
     /**
@@ -154,7 +157,7 @@ class ComponentState
     public function setEffectCleanup(int $index, callable $cleanup): void
     {
         $key = $this->getEffectCleanupKey($index);
-        $_SESSION[$key] = $cleanup;
+        $this->storage->set($key, $cleanup);
     }
 
     /**
@@ -163,10 +166,10 @@ class ComponentState
     public function runEffectCleanup(int $index): void
     {
         $key = $this->getEffectCleanupKey($index);
-        if (isset($_SESSION[$key]) && is_callable($_SESSION[$key])) {
-            $cleanup = $_SESSION[$key];
+        $cleanup = $this->storage->get($key);
+        if ($cleanup !== null && is_callable($cleanup)) {
             $cleanup();
-            unset($_SESSION[$key]);
+            $this->storage->delete($key);
         }
     }
 
@@ -188,12 +191,5 @@ class ComponentState
     private function getActionKey(string $actionId): string
     {
         return "usephp:{$this->componentId}:action:{$actionId}";
-    }
-
-    private function ensureSessionStarted(): void
-    {
-        if (session_status() === PHP_SESSION_NONE) {
-            session_start();
-        }
     }
 }

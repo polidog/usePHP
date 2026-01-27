@@ -111,7 +111,8 @@ class UsePHP
             $action = Action::fromArray($actionData);
 
             // Use instanceId for state to match the correct component instance
-            $state = ComponentState::getInstance($instanceId);
+            $storageType = $this->registry->getStorageType($componentName);
+            $state = ComponentState::getInstance($instanceId, $storageType);
 
             if ($action->type === 'setState') {
                 $index = $action->payload['index'] ?? 0;
@@ -149,7 +150,8 @@ class UsePHP
         RenderContext::beginRender();
 
         $instanceId = RenderContext::nextInstanceId($componentName);
-        $state = ComponentState::getInstance($instanceId);
+        $storageType = $this->registry->getStorageType($componentName);
+        $state = ComponentState::getInstance($instanceId, $storageType);
         ComponentState::reset();
 
         if ($component instanceof BaseComponent) {
@@ -176,7 +178,8 @@ class UsePHP
         RenderContext::beginRender();
 
         $instanceId = RenderContext::nextInstanceId($componentName);
-        $state = ComponentState::getInstance($instanceId);
+        $storageType = $this->registry->getStorageType($componentName);
+        $state = ComponentState::getInstance($instanceId, $storageType);
         ComponentState::reset();
 
         if ($component instanceof BaseComponent) {
@@ -199,7 +202,8 @@ class UsePHP
             return '';
         }
 
-        $state = ComponentState::getInstance($instanceId);
+        $storageType = $this->registry->getStorageType($componentName);
+        $state = ComponentState::getInstance($instanceId, $storageType);
         ComponentState::reset();
 
         if ($component instanceof BaseComponent) {
