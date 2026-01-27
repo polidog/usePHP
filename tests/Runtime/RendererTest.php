@@ -127,4 +127,92 @@ class RendererTest extends TestCase
         $this->assertStringNotContainsString('<script', $html);
         $this->assertStringNotContainsString('javascript:', $html);
     }
+
+    public function testConditionalRenderingWithTernary(): void
+    {
+        $renderer = new Renderer('test');
+
+        $isLoggedIn = true;
+        $element = H::div(children: [
+            $isLoggedIn ? H::span(children: 'Welcome') : H::span(children: 'Please login'),
+        ]);
+
+        $html = $renderer->renderElement($element);
+
+        $this->assertStringContainsString('Welcome', $html);
+        $this->assertStringNotContainsString('Please login', $html);
+    }
+
+    public function testConditionalRenderingWithNull(): void
+    {
+        $renderer = new Renderer('test');
+
+        $showModal = false;
+        $element = H::div(children: [
+            H::span(children: 'Always visible'),
+            $showModal ? H::div(children: 'Modal content') : null,
+        ]);
+
+        $html = $renderer->renderElement($element);
+
+        $this->assertStringContainsString('Always visible', $html);
+        $this->assertStringNotContainsString('Modal content', $html);
+    }
+
+    public function testConditionalRenderingShowsElementWhenTrue(): void
+    {
+        $renderer = new Renderer('test');
+
+        $showModal = true;
+        $element = H::div(children: [
+            H::span(children: 'Always visible'),
+            $showModal ? H::div(children: 'Modal content') : null,
+        ]);
+
+        $html = $renderer->renderElement($element);
+
+        $this->assertStringContainsString('Always visible', $html);
+        $this->assertStringContainsString('Modal content', $html);
+    }
+
+    public function testMultipleConditionalChildren(): void
+    {
+        $renderer = new Renderer('test');
+
+        $hasItems = true;
+        $isAdmin = false;
+        $showFooter = true;
+
+        $element = H::div(children: [
+            $hasItems ? H::ul(children: H::li(children: 'Item 1')) : null,
+            $isAdmin ? H::div(children: 'Admin panel') : null,
+            $showFooter ? H::footer(children: 'Footer') : null,
+        ]);
+
+        $html = $renderer->renderElement($element);
+
+        $this->assertStringContainsString('<ul>', $html);
+        $this->assertStringContainsString('Item 1', $html);
+        $this->assertStringNotContainsString('Admin panel', $html);
+        $this->assertStringContainsString('<footer>', $html);
+    }
+
+    public function testNullAndFalseAreIgnoredInChildren(): void
+    {
+        $renderer = new Renderer('test');
+
+        $element = H::div(children: [
+            null,
+            H::span(children: 'Visible'),
+            false,
+            null,
+        ]);
+
+        $html = $renderer->renderElement($element);
+
+        $this->assertStringContainsString('<span>Visible</span>', $html);
+        // Should not contain "null" or "false" as text
+        $this->assertStringNotContainsString('null', $html);
+        $this->assertStringNotContainsString('false', $html);
+    }
 }
