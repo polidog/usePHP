@@ -1,0 +1,36 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: mbstring
+          coverage: none
+
+      - name: Validate composer.json
+        run: composer validate --strict
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-progress
+
+      - name: Run PHPStan
+        run: composer phpstan
+
+      - name: Run PHP-CS-Fixer
+        run: composer cs-check
+
+      - name: Run PHPUnit
+        run: ./vendor/bin/phpunit
