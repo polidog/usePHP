@@ -9,7 +9,7 @@ use Polidog\UsePhp\Component\Component;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
 
-#[Component(name: 'todo')]
+#[Component]
 class TodoList extends BaseComponent
 {
     public function render(): Element

@@ -49,7 +49,7 @@ if ($actionResult !== null) {
 $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
 $componentName = match ($path) {
     '/', '/counter' => 'counter',
-    '/todo' => 'todo',
+    '/todo' => 'todoList',
     default => 'counter',
 };
 

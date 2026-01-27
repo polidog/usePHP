@@ -9,7 +9,7 @@ use Polidog\UsePhp\Component\Component;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
 
-#[Component(name: 'counter')]
+#[Component(storage: 'memory')]
 class Counter extends BaseComponent
 {
     public function render(): Element
