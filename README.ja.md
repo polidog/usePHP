@@ -35,7 +35,7 @@ use Polidog\UsePhp\Component\Component;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
 
-#[Component(name: 'counter')]
+#[Component]
 class Counter extends BaseComponent
 {
     public function render(): Element
@@ -156,7 +156,7 @@ php -S localhost:8000 public/index.php
 use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\Component;
 
-#[Component(name: 'my-component')]
+#[Component]
 class MyComponent extends BaseComponent
 {
     public function render(): Element
@@ -164,6 +164,13 @@ class MyComponent extends BaseComponent
         // ...
     }
 }
+```
+
+コンポーネント名はクラス名から自動的に導出されます（`MyComponent` → `myComponent`）。明示的に指定することも可能です：
+
+```php
+#[Component(name: 'custom-name')]
+class MyComponent extends BaseComponent { /* ... */ }
 ```
 
 ### useState
@@ -187,7 +194,7 @@ use Polidog\UsePhp\Component\Component;
 use Polidog\UsePhp\Storage\StorageType;
 
 // セッションストレージ（デフォルト） - ページ遷移後も状態を維持
-#[Component(name: 'counter')]
+#[Component]
 class Counter extends BaseComponent
 {
     public function render(): Element
@@ -199,7 +206,7 @@ class Counter extends BaseComponent
 }
 
 // メモリストレージ - ページ読み込みごとに状態をリセット
-#[Component(name: 'search-form', storage: StorageType::Memory)]
+#[Component(storage: StorageType::Memory)]
 class SearchForm extends BaseComponent
 {
     public function render(): Element
@@ -211,7 +218,7 @@ class SearchForm extends BaseComponent
 }
 
 // 文字列でも指定可能
-#[Component(name: 'wizard', storage: 'memory')]
+#[Component(storage: 'memory')]
 class Wizard extends BaseComponent { /* ... */ }
 ```
 

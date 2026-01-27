@@ -35,7 +35,7 @@ use Polidog\UsePhp\Component\Component;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
 
-#[Component(name: 'counter')]
+#[Component]
 class Counter extends BaseComponent
 {
     public function render(): Element
@@ -156,7 +156,7 @@ Open `http://localhost:8000` in your browser.
 use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\Component;
 
-#[Component(name: 'my-component')]
+#[Component]
 class MyComponent extends BaseComponent
 {
     public function render(): Element
@@ -164,6 +164,13 @@ class MyComponent extends BaseComponent
         // ...
     }
 }
+```
+
+The component name is automatically derived from the class name (`MyComponent` → `myComponent`). You can override it explicitly:
+
+```php
+#[Component(name: 'custom-name')]
+class MyComponent extends BaseComponent { /* ... */ }
 ```
 
 ### useState
@@ -187,7 +194,7 @@ use Polidog\UsePhp\Component\Component;
 use Polidog\UsePhp\Storage\StorageType;
 
 // Session storage (default) - state persists across page navigations
-#[Component(name: 'counter')]
+#[Component]
 class Counter extends BaseComponent
 {
     public function render(): Element
@@ -199,7 +206,7 @@ class Counter extends BaseComponent
 }
 
 // Memory storage - state resets on each page load
-#[Component(name: 'search-form', storage: StorageType::Memory)]
+#[Component(storage: StorageType::Memory)]
 class SearchForm extends BaseComponent
 {
     public function render(): Element
@@ -211,7 +218,7 @@ class SearchForm extends BaseComponent
 }
 
 // You can also use string values
-#[Component(name: 'wizard', storage: 'memory')]
+#[Component(storage: 'memory')]
 class Wizard extends BaseComponent { /* ... */ }
 ```
 

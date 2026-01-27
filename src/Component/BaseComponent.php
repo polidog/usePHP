@@ -56,19 +56,21 @@ abstract class BaseComponent implements ComponentInterface
     }
 
     /**
-     * Get the component name from the attribute.
+     * Get the component name from the attribute or derive from class name.
      */
     public static function getComponentName(): string
     {
         $reflection = new \ReflectionClass(static::class);
         $attributes = $reflection->getAttributes(Component::class);
 
-        if (empty($attributes)) {
-            // Default to class name without namespace
-            return lcfirst($reflection->getShortName());
+        if (!empty($attributes)) {
+            $component = $attributes[0]->newInstance();
+            if ($component->name !== null) {
+                return $component->name;
+            }
         }
 
-        $component = $attributes[0]->newInstance();
-        return $component->name;
+        // Derive from class name: Counter -> counter, TodoList -> todoList
+        return lcfirst($reflection->getShortName());
     }
 }

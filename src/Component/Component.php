@@ -16,7 +16,7 @@ class Component
     public StorageType $storageType;
 
     public function __construct(
-        public string $name,
+        public ?string $name = null,
         StorageType|string $storage = StorageType::Session,
     ) {
         $this->storageType = $storage instanceof StorageType
