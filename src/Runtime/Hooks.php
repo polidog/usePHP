@@ -42,9 +42,8 @@ function useState(mixed $initial): array
  * If $deps is null, the effect runs on every render.
  * If $deps is an empty array [], the effect runs only on mount.
  *
- * @param callable(): (callable(): void)|null $callback The effect callback, optionally returns a cleanup function
+ * @param callable $callback The effect callback, optionally returns a cleanup function
  * @param array<mixed>|null $deps Dependency array (null = run every time, [] = only on mount)
- * @return void
  */
 function useEffect(callable $callback, ?array $deps = null): void
 {
@@ -64,9 +63,10 @@ function useEffect(callable $callback, ?array $deps = null): void
         $componentState->runEffectCleanup($index);
 
         // Run the effect and capture cleanup function if returned
+        /** @var (callable(): void)|null $cleanup */
         $cleanup = $callback();
 
-        if (is_callable($cleanup)) {
+        if ($cleanup !== null) {
             $componentState->setEffectCleanup($index, $cleanup);
         }
 
