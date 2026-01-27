@@ -12,6 +12,11 @@ use Polidog\UsePhp\Runtime\Element;
 interface ComponentInterface
 {
     /**
+     * Get the component name used for registration.
+     */
+    public static function getComponentName(): string;
+
+    /**
      * Render the component and return an Element tree.
      */
     public function render(): Element;

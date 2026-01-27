@@ -134,6 +134,8 @@ final class ComponentState
 
     /**
      * Store effect dependencies.
+     *
+     * @param array<mixed>|null $deps
      */
     public function setEffectDeps(int $index, ?array $deps): void
     {
@@ -143,6 +145,8 @@ final class ComponentState
 
     /**
      * Get stored effect dependencies.
+     *
+     * @return array<mixed>|null
      */
     public function getEffectDeps(int $index): ?array
     {

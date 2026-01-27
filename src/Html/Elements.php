@@ -1007,7 +1007,6 @@ final class H
         return createElement('iframe', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
     public static function embed(
         ?string $src = null,
         ?string $type = null,
@@ -1163,7 +1162,7 @@ final class H
     // =========================================================================
 
     /**
-     * @param array<string, mixed> $arguments
+     * @param array<int|string, mixed> $arguments
      */
     public static function __callStatic(string $name, array $arguments): Element
     {
@@ -1212,10 +1211,12 @@ function createElement(string $type, array $params): Element
             }
         } elseif (isset($eventHandlers[$key])) {
             // Handle event handlers
-            $action = $value;
+            $action = null;
 
-            // If it's a callable, execute it to get the Action
-            if (is_callable($value) && !($value instanceof Action)) {
+            if ($value instanceof Action) {
+                $action = $value;
+            } elseif (is_callable($value)) {
+                // Execute callable to get the Action
                 $action = $value();
             }
 

@@ -86,7 +86,7 @@ final class UsePHP
     /**
      * Handle form action submission.
      */
-    private function doHandleAction(): ?string
+    private function doHandleAction(): string
     {
         $instanceId = $_POST['_usephp_component'] ?? null;
         $actionJson = $_POST['_usephp_action'] ?? null;
@@ -161,34 +161,6 @@ final class UsePHP
         $renderer = new Renderer($instanceId);
 
         return $renderer->render(fn() => $component->render());
-    }
-
-    /**
-     * Render a component without wrapper (for partial updates).
-     */
-    private function doRenderComponentPartial(string $componentName): string
-    {
-        $component = $this->registry->create($componentName);
-
-        if ($component === null) {
-            return '';
-        }
-
-        // Start a new render pass
-        RenderContext::beginRender();
-
-        $instanceId = RenderContext::nextInstanceId($componentName);
-        $storageType = $this->registry->getStorageType($componentName);
-        $state = ComponentState::getInstance($instanceId, $storageType);
-        ComponentState::reset();
-
-        if ($component instanceof BaseComponent) {
-            $component->setComponentState($state);
-        }
-
-        $renderer = new Renderer($instanceId);
-
-        return $renderer->renderPartial(fn() => $component->render());
     }
 
     /**

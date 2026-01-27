@@ -9,6 +9,9 @@ namespace Polidog\UsePhp\Runtime;
  */
 final readonly class Action
 {
+    /**
+     * @param array<string, mixed> $payload
+     */
     public function __construct(
         public string $type,
         public array $payload = []
@@ -24,6 +27,9 @@ final readonly class Action
         return clone($this, ['payload' => $payload]);
     }
 
+    /**
+     * @return array{type: string, payload: array<string, mixed>}
+     */
     public function toArray(): array
     {
         return [
@@ -45,6 +51,9 @@ final readonly class Action
         ]);
     }
 
+    /**
+     * @param array{type: string, payload?: array<string, mixed>} $data
+     */
     public static function fromArray(array $data): self
     {
         return new self($data['type'], $data['payload'] ?? []);

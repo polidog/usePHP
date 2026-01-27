@@ -25,12 +25,7 @@ final class ComponentRegistry
      */
     public function register(string $className): self
     {
-        if (!is_subclass_of($className, ComponentInterface::class)) {
-            throw new \InvalidArgumentException(
-                "Class {$className} must implement " . ComponentInterface::class
-            );
-        }
-
+        /** @var class-string<ComponentInterface> $className */
         $name = $className::getComponentName();
         $this->components[$name] = $className;
         $this->storageTypes[$name] = $this->resolveStorageType($className);
@@ -75,10 +70,12 @@ final class ComponentRegistry
         foreach ($iterator as $file) {
             if ($file->isFile() && $file->getExtension() === 'php') {
                 $relativePath = str_replace($directory . '/', '', $file->getPathname());
+                /** @var string $relativeClass */
                 $relativeClass = str_replace(['/', '.php'], ['\\', ''], $relativePath);
                 $className = $namespace . '\\' . $relativeClass;
 
                 if (class_exists($className) && is_subclass_of($className, ComponentInterface::class)) {
+                    /** @var class-string<ComponentInterface> $className */
                     $this->register($className);
                 }
             }

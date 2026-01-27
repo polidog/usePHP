@@ -4,3 +4,4 @@ parameters:
         - src
     excludePaths:
         - vendor
+        - src/Installer/AssetInstaller.php
