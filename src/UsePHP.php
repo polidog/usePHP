@@ -16,7 +16,7 @@ use Polidog\UsePhp\Runtime\Renderer;
  * Main application class for usePHP.
  * Minimal JS for partial updates, falls back to full page reload.
  */
-class UsePHP
+final class UsePHP
 {
     private static ?self $instance = null;
 

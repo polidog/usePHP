@@ -15,7 +15,7 @@ use Polidog\UsePhp\Runtime\Element;
  *   H::video(src: 'movie.mp4', controls: true)
  *   H::table(children: [...])
  */
-class H
+final class H
 {
     // =========================================================================
     // Text Content

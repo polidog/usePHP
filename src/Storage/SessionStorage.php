@@ -7,7 +7,7 @@ namespace Polidog\UsePhp\Storage;
 /**
  * Session-based storage - state persists across page navigations.
  */
-class SessionStorage implements StateStorageInterface
+final class SessionStorage implements StateStorageInterface
 {
     public function __construct()
     {

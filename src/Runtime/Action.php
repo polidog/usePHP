@@ -7,7 +7,7 @@ namespace Polidog\UsePhp\Runtime;
 /**
  * Represents an action to be executed (e.g., state update).
  */
-readonly class Action
+final readonly class Action
 {
     public function __construct(
         public string $type,

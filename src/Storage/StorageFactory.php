@@ -7,7 +7,7 @@ namespace Polidog\UsePhp\Storage;
 /**
  * Factory for creating storage instances.
  */
-class StorageFactory
+final class StorageFactory
 {
     /** @var array<string, StateStorageInterface> */
     private static array $instances = [];

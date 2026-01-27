@@ -7,7 +7,7 @@ namespace Polidog\UsePhp\Runtime;
 /**
  * VirtualDOM element class representing a React-like element.
  */
-readonly class Element
+final readonly class Element
 {
     /**
      * @param string $type Element type (e.g., 'div', 'span', 'button')

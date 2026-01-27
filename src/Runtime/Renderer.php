@@ -8,7 +8,7 @@ namespace Polidog\UsePhp\Runtime;
  * Renders Element tree to HTML string.
  * Supports partial updates with minimal JavaScript.
  */
-class Renderer
+final class Renderer
 {
     private const SELF_CLOSING_TAGS = [
         'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',

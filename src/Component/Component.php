@@ -11,7 +11,7 @@ use Polidog\UsePhp\Storage\StorageType;
  * Attribute to mark a class as a usePHP component.
  */
 #[Attribute(Attribute::TARGET_CLASS)]
-class Component
+final class Component
 {
     public StorageType $storageType;
 

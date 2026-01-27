@@ -10,7 +10,7 @@ use ReflectionClass;
 /**
  * Registry for managing usePHP components.
  */
-class ComponentRegistry
+final class ComponentRegistry
 {
     /** @var array<string, class-string<ComponentInterface>> */
     private array $components = [];

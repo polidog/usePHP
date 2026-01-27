@@ -11,7 +11,7 @@ use Polidog\UsePhp\Storage\StorageType;
 /**
  * Manages component state using configurable storage backends.
  */
-class ComponentState
+final class ComponentState
 {
     private static ?self $instance = null;
     private string $componentId;

@@ -7,7 +7,7 @@ namespace Polidog\UsePhp\Storage;
 /**
  * Memory-based storage - state is reset on each page load.
  */
-class MemoryStorage implements StateStorageInterface
+final class MemoryStorage implements StateStorageInterface
 {
     /** @var array<string, mixed> */
     private array $data = [];

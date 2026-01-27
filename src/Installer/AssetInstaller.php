@@ -9,7 +9,7 @@ use Composer\Script\Event;
 /**
  * Composer script to publish usephp.js to the project's public directory.
  */
-class AssetInstaller
+final class AssetInstaller
 {
     /**
      * Publish assets after composer install/update.

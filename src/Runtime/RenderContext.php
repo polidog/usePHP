@@ -8,7 +8,7 @@ namespace Polidog\UsePhp\Runtime;
  * Tracks component instances during a render pass.
  * Allows multiple instances of the same component to have separate state.
  */
-class RenderContext
+final class RenderContext
 {
     private static ?self $instance = null;
 
