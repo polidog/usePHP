@@ -6,6 +6,7 @@ namespace Polidog\UsePhp\Html;
 
 use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\Element;
+use Polidog\UsePhp\Runtime\Renderable;
 
 /**
  * H class - Hyperscript-style static methods for all HTML elements.
@@ -1205,9 +1206,9 @@ function createElement(string $type, array $params): Element
 
         if ($key === 'children') {
             if (is_array($value)) {
-                $children = $value;
+                $children = resolveRenderables($value);
             } else {
-                $children = [$value];
+                $children = resolveRenderables([$value]);
             }
         } elseif (isset($eventHandlers[$key])) {
             // Handle event handlers
@@ -1230,4 +1231,26 @@ function createElement(string $type, array $params): Element
     }
 
     return new Element($type, $props, $children);
+}
+
+/**
+ * Resolve Renderable objects in children array.
+ *
+ * This allows components implementing Renderable to be used directly
+ * in children arrays without explicitly calling ->render().
+ *
+ * @param array<Element|Renderable|string> $children
+ * @return array<Element|string>
+ */
+function resolveRenderables(array $children): array
+{
+    $resolved = [];
+    foreach ($children as $child) {
+        if ($child instanceof Renderable) {
+            $resolved[] = $child->render();
+        } else {
+            $resolved[] = $child;
+        }
+    }
+    return $resolved;
 }
