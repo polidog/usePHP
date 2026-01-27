@@ -5,10 +5,9 @@ declare(strict_types=1);
 namespace Polidog\UsePhp\Tests\Runtime;
 
 use PHPUnit\Framework\TestCase;
+use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\Renderer;
-
-use Polidog\UsePhp\Html\H;
 
 use function Polidog\UsePhp\Runtime\useState;
 

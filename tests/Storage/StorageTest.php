@@ -7,7 +7,6 @@ namespace Polidog\UsePhp\Tests\Storage;
 use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Storage\MemoryStorage;
 use Polidog\UsePhp\Storage\SessionStorage;
-use Polidog\UsePhp\Storage\StateStorageInterface;
 use Polidog\UsePhp\Storage\StorageFactory;
 use Polidog\UsePhp\Storage\StorageType;
 

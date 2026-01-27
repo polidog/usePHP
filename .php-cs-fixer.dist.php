@@ -6,25 +6,24 @@ use PhpCsFixer\Config;
 use PhpCsFixer\Finder;
 use PhpCsFixer\Runner\Parallel\ParallelConfigFactory;
 
+$finder = (new Finder())
+    ->in(__DIR__.'/src')
+    ->in(__DIR__.'/packages')
+    ->in(__DIR__.'/tests')
+;
+
 return (new Config())
-    ->setParallelConfig(ParallelConfigFactory::detect()) // @TODO 4.0 no need to call this manually
-    ->setRiskyAllowed(false)
+    ->setParallelConfig(ParallelConfigFactory::detect())
+    ->setRiskyAllowed(true)
     ->setRules([
-        '@auto' => true
+        '@PER-CS' => true,
+        '@PHP82Migration' => true,
+        'strict_param' => true,
+        'array_syntax' => ['syntax' => 'short'],
+        'ordered_imports' => ['sort_algorithm' => 'alpha'],
+        'no_unused_imports' => true,
+        'single_quote' => true,
+        'trailing_comma_in_multiline' => true,
     ])
-    // 💡 by default, Fixer looks for `*.php` files excluding `./vendor/` - here, you can groom this config
-    ->setFinder(
-        (new Finder())
-            // 💡 root folder to check
-            ->in(__DIR__)
-            // 💡 additional files, eg bin entry file
-            // ->append([__DIR__.'/bin-entry-file'])
-            // 💡 folders to exclude, if any
-            // ->exclude([/* ... */])
-            // 💡 path patterns to exclude, if any
-            // ->notPath([/* ... */])
-            // 💡 extra configs
-            // ->ignoreDotFiles(false) // true by default in v3, false in v4 or future mode
-            // ->ignoreVCS(true) // true by default
-    )
+    ->setFinder($finder)
 ;

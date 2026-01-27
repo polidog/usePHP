@@ -18,6 +18,5 @@ class Element
         public string $type,
         public array $props = [],
         public array $children = []
-    ) {
-    }
+    ) {}
 }

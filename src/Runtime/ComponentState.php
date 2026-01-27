@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Runtime;
 
-use Polidog\UsePhp\Storage\SessionStorage;
 use Polidog\UsePhp\Storage\StateStorageInterface;
 use Polidog\UsePhp\Storage\StorageFactory;
 use Polidog\UsePhp\Storage\StorageType;

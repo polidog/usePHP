@@ -30,7 +30,7 @@ class AssetInstaller
 
         // Create public directory if it doesn't exist
         if (!is_dir($targetDir)) {
-            if (!mkdir($targetDir, 0755, true)) {
+            if (!mkdir($targetDir, 0o755, true)) {
                 $io->writeError('<warning>Could not create public directory</warning>');
                 return;
             }

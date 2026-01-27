@@ -12,8 +12,7 @@ class Action
     public function __construct(
         public string $type,
         public array $payload = []
-    ) {
-    }
+    ) {}
 
     public function toArray(): array
     {

@@ -15,9 +15,7 @@ class RenderContext
     /** @var array<string, int> Component class name => instance count */
     private array $instanceCounts = [];
 
-    private function __construct()
-    {
-    }
+    private function __construct() {}
 
     public static function getInstance(): self
     {

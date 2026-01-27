@@ -123,12 +123,12 @@ class Renderer
 
         // data-usephp-form enables JS enhancement, falls back to normal form if no JS
         return <<<HTML
-<form method="post" data-usephp-form style="display:inline;">
-<input type="hidden" name="_usephp_component" value="{$componentId}" />
-<input type="hidden" name="_usephp_action" value="{$actionJson}" />
-{$innerElement}
-</form>
-HTML;
+            <form method="post" data-usephp-form style="display:inline;">
+            <input type="hidden" name="_usephp_component" value="{$componentId}" />
+            <input type="hidden" name="_usephp_action" value="{$actionJson}" />
+            {$innerElement}
+            </form>
+            HTML;
     }
 
     /**

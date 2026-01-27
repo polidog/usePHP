@@ -7,7 +7,6 @@ namespace Polidog\UsePhp\Tests\Runtime;
 use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\ComponentState;
-use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\Runtime\Renderer;
 

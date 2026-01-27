@@ -6,7 +6,6 @@ namespace Polidog\UsePhp\Component;
 
 use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\ComponentState;
-use Polidog\UsePhp\Runtime\Element;
 
 /**
  * Base class for usePHP components with hooks support.
