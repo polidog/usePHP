@@ -7,7 +7,7 @@ React Hooks風の書き心地で、**最小限のJavaScript**でサーバード�
 - **React Hooks風API** - `useState`でシンプルに状態管理
 - **最小限のJS (~40行)** - 部分更新でスムーズなUX、JSなしでもフォールバック動作
 - **PHPがそのまま動く** - トランスパイル不要、PHPコードがサーバーで実行
-- **セッションベース状態管理** - サーバー側で状態を保持
+- **設定可能な状態ストレージ** - コンポーネントごとにセッション（永続）またはメモリ（リクエスト単位）を選択可能
 - **コンポーネント指向** - 再利用可能なコンポーネントクラス
 - **プログレッシブエンハンスメント** - JavaScriptが無効でも動作
 
@@ -176,6 +176,51 @@ class MyComponent extends BaseComponent
 [$todos, $setTodos] = $this->useState([]);
 [$user, $setUser] = $this->useState(['name' => 'John']);
 ```
+
+### 状態ストレージ
+
+デフォルトでは、コンポーネントの状態はPHPセッションに保存され、ページ遷移後も維持されます。`storage`パラメータでコンポーネントごとにこの動作を設定できます：
+
+```php
+use Polidog\UsePhp\Component\BaseComponent;
+use Polidog\UsePhp\Component\Component;
+use Polidog\UsePhp\Storage\StorageType;
+
+// セッションストレージ（デフォルト） - ページ遷移後も状態を維持
+#[Component(name: 'counter')]
+class Counter extends BaseComponent
+{
+    public function render(): Element
+    {
+        [$count, $setCount] = $this->useState(0);
+        // ユーザーが別ページに移動して戻ってきても $count は維持される
+        // ...
+    }
+}
+
+// メモリストレージ - ページ読み込みごとに状態をリセット
+#[Component(name: 'search-form', storage: StorageType::Memory)]
+class SearchForm extends BaseComponent
+{
+    public function render(): Element
+    {
+        [$query, $setQuery] = $this->useState('');
+        // ページリロード/遷移で $query は '' にリセットされる
+        // ...
+    }
+}
+
+// 文字列でも指定可能
+#[Component(name: 'wizard', storage: 'memory')]
+class Wizard extends BaseComponent { /* ... */ }
+```
+
+**ストレージタイプ：**
+
+| タイプ | 動作 | ユースケース |
+|--------|------|--------------|
+| `session`（デフォルト） | ページ遷移後も状態を維持 | カウンター、ショッピングカート、ユーザー設定 |
+| `memory` | ページ読み込みごとに状態をリセット | 検索フォーム、一時的なUI状態、リセットすべきウィザード |
 
 ### HTML要素
 
