@@ -97,6 +97,69 @@ class RenderContextTest extends TestCase
         $this->assertEquals('Counter#1', $id3);
     }
 
+    public function testBeginComponentAndEndComponent(): void
+    {
+        RenderContext::beginRender();
+
+        // No component initially
+        $this->assertNull(RenderContext::currentComponentId());
+        $this->assertEquals(0, RenderContext::getStackDepth());
+
+        // Begin rendering a Counter
+        $id1 = RenderContext::beginComponent('Counter');
+        $this->assertEquals('Counter#0', $id1);
+        $this->assertEquals('Counter#0', RenderContext::currentComponentId());
+        $this->assertEquals(1, RenderContext::getStackDepth());
+
+        // Nest a TodoList inside Counter
+        $id2 = RenderContext::beginComponent('TodoList');
+        $this->assertEquals('TodoList#0', $id2);
+        $this->assertEquals('TodoList#0', RenderContext::currentComponentId());
+        $this->assertEquals('Counter#0', RenderContext::parentComponentId());
+        $this->assertEquals(2, RenderContext::getStackDepth());
+
+        // End TodoList
+        RenderContext::endComponent();
+        $this->assertEquals('Counter#0', RenderContext::currentComponentId());
+        $this->assertEquals(1, RenderContext::getStackDepth());
+
+        // End Counter
+        RenderContext::endComponent();
+        $this->assertNull(RenderContext::currentComponentId());
+        $this->assertEquals(0, RenderContext::getStackDepth());
+    }
+
+    public function testNestedComponentInstancesHaveCorrectIds(): void
+    {
+        RenderContext::beginRender();
+
+        // Page component renders multiple Counters
+        $pageId = RenderContext::beginComponent('Page');
+        $this->assertEquals('Page#0', $pageId);
+
+        // First Counter inside Page
+        $counterId1 = RenderContext::beginComponent('Counter');
+        $this->assertEquals('Counter#0', $counterId1);
+        RenderContext::endComponent();
+
+        // Second Counter inside Page
+        $counterId2 = RenderContext::beginComponent('Counter');
+        $this->assertEquals('Counter#1', $counterId2);
+        RenderContext::endComponent();
+
+        // Nested Page (e.g., a modal)
+        $nestedPageId = RenderContext::beginComponent('Page');
+        $this->assertEquals('Page#1', $nestedPageId); // Global counting
+
+        // Counter inside nested Page - continues global counting
+        $nestedCounterId = RenderContext::beginComponent('Counter');
+        $this->assertEquals('Counter#2', $nestedCounterId);
+        RenderContext::endComponent();
+
+        RenderContext::endComponent(); // End nested Page
+        RenderContext::endComponent(); // End outer Page
+    }
+
     public function testRendererWithMultipleInstances(): void
     {
         RenderContext::beginRender();

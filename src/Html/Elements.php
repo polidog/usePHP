@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Html;
 
+use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Runtime\Action;
+use Polidog\UsePhp\Runtime\ComponentState;
 use Polidog\UsePhp\Runtime\Element;
+use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\Runtime\Renderable;
 
 /**
@@ -1239,6 +1242,10 @@ function createElement(string $type, array $params): Element
  * This allows components implementing Renderable to be used directly
  * in children arrays without explicitly calling ->render().
  *
+ * For BaseComponent instances, this function automatically:
+ * - Tracks the component in RenderContext's component stack
+ * - Sets up ComponentState if not already set
+ *
  * @param array<Element|Renderable|string> $children
  * @return array<Element|string>
  */
@@ -1246,7 +1253,23 @@ function resolveRenderables(array $children): array
 {
     $resolved = [];
     foreach ($children as $child) {
-        if ($child instanceof Renderable) {
+        if ($child instanceof BaseComponent) {
+            // Handle BaseComponent with automatic state and context setup
+            if ($child->getComponentState() === null) {
+                $componentName = $child::getComponentName();
+                $instanceId = RenderContext::beginComponent($componentName);
+                $state = ComponentState::getInstance($instanceId);
+                $child->setComponentState($state);
+                ComponentState::reset();
+
+                $resolved[] = $child->render();
+
+                RenderContext::endComponent();
+            } else {
+                // Already has state set (e.g., from UsePHP::render())
+                $resolved[] = $child->render();
+            }
+        } elseif ($child instanceof Renderable) {
             $resolved[] = $child->render();
         } else {
             $resolved[] = $child;

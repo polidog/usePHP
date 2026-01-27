@@ -115,7 +115,9 @@ final class Renderer
 
         // Build the form with hidden action data
         $actionJson = htmlspecialchars($action->toJson(), ENT_QUOTES, 'UTF-8');
-        $componentId = htmlspecialchars($this->componentId, ENT_QUOTES, 'UTF-8');
+        // Prefer componentId from Action, fall back to Renderer's componentId
+        $componentId = $action->componentId ?? $this->componentId;
+        $componentId = htmlspecialchars($componentId, ENT_QUOTES, 'UTF-8');
 
         $innerElement = in_array($tag, self::SELF_CLOSING_TAGS, true)
             ? "<{$tag}{$attributes} />"

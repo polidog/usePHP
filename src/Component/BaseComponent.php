@@ -6,6 +6,7 @@ namespace Polidog\UsePhp\Component;
 
 use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\ComponentState;
+use Polidog\UsePhp\Runtime\RenderContext;
 
 /**
  * Base class for usePHP components with hooks support.
@@ -26,7 +27,7 @@ abstract class BaseComponent implements ComponentInterface
     /**
      * Get the component state manager.
      */
-    protected function getComponentState(): ?ComponentState
+    public function getComponentState(): ?ComponentState
     {
         return $this->state;
     }
@@ -42,14 +43,17 @@ abstract class BaseComponent implements ComponentInterface
     protected function useState(mixed $initial): array
     {
         if ($this->state === null) {
-            return [$initial, fn(mixed $value): Action => Action::setState(0, $value)];
+            // Fallback when no state is set - use RenderContext for componentId
+            $componentId = RenderContext::currentComponentId();
+            return [$initial, fn(mixed $value): Action => Action::setState(0, $value, $componentId)];
         }
 
         $index = $this->state->nextHookIndex();
         $value = $this->state->getState($index, $initial);
+        $componentId = $this->state->getComponentId();
 
-        $setter = function (mixed $newValue) use ($index): Action {
-            return Action::setState($index, $newValue);
+        $setter = function (mixed $newValue) use ($index, $componentId): Action {
+            return Action::setState($index, $newValue, $componentId);
         };
 
         return [$value, $setter];
