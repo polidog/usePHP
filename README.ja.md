@@ -90,7 +90,7 @@ if ($actionResult !== null) {
 }
 
 // コンポーネントをレンダリング
-$content = UsePHP::render('counter');
+$content = UsePHP::render(Counter::class);
 ?>
 <!DOCTYPE html>
 <html>
@@ -288,19 +288,19 @@ if ($actionResult !== null) {
 
 // ルーティング
 $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
-$componentName = match ($path) {
-    '/', '/counter' => 'counter',
-    '/todo' => 'todo',
-    default => 'counter',
+$component = match ($path) {
+    '/', '/counter' => Counter::class,
+    '/todo' => TodoList::class,
+    default => Counter::class,
 };
 
 // レンダリング
-$content = UsePHP::render($componentName);
+$content = UsePHP::render($component);
 ?>
 <!DOCTYPE html>
 <html>
 <head>
-    <title><?= ucfirst($componentName) ?> - usePHP</title>
+    <title>usePHP Example</title>
 </head>
 <body>
     <?= $content ?>
