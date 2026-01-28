@@ -6,7 +6,6 @@ namespace Polidog\UsePhp\Tests\Router;
 
 use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Router\RequestContext;
-use Polidog\UsePhp\Router\Route;
 use Polidog\UsePhp\Router\RouteGroup;
 use Polidog\UsePhp\Router\SimpleRouter;
 use Polidog\UsePhp\Router\SnapshotBehavior;
