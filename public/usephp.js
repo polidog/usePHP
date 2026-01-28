@@ -35,6 +35,13 @@
                 body: formData
             });
 
+            // If redirected, the server doesn't support partial updates for this component
+            // Fall back to page navigation (PRG pattern)
+            if (response.redirected) {
+                location.href = response.url;
+                return;
+            }
+
             if (response.ok) {
                 const html = await response.text();
                 // Server-rendered HTML is trusted content from our endpoint
