@@ -171,6 +171,18 @@ $router->get('/step1', Step1Component::class)->sharedSnapshot('checkout');
 $router->get('/step2', Step2Component::class)->sharedSnapshot('checkout');
 ```
 
+#### StorageType vs SnapshotBehavior
+
+These two concepts control state at different levels:
+
+| | StorageType (Component) | SnapshotBehavior (Router) |
+|---|---|---|
+| **Scope** | Individual component | Route/page transitions |
+| **Configuration** | `#[Component(storage: '...')]` | `$router->get(...)->sessionSnapshot()` |
+| **Purpose** | How a component's state is stored | How snapshots are handled across routes |
+
+**Example:** A `TodoList` component with `storage: 'session'` stores its own state in the session. Meanwhile, `SnapshotBehavior::Persistent` on a route controls whether the entire page snapshot is passed via URL when navigating to another route.
+
 ### Framework Integration
 
 When using usePHP within Laravel, Symfony, or other frameworks:
@@ -302,6 +314,33 @@ class MyComponent extends BaseComponent
     }
 }
 ```
+
+#### Component Storage Types
+
+The `#[Component]` attribute accepts a `storage` parameter to control how component state is persisted:
+
+```php
+use Polidog\UsePhp\Component\Component;
+use Polidog\UsePhp\Storage\StorageType;
+
+// Session storage (default) - State persists across page navigations
+#[Component(storage: 'session')]
+class TodoList extends BaseComponent { ... }
+
+// Memory storage - State is reset on each page load
+#[Component(storage: 'memory')]
+class TemporaryForm extends BaseComponent { ... }
+
+// Snapshot storage - State is embedded in HTML, stateless on server
+#[Component(storage: 'snapshot')]
+class Counter extends BaseComponent { ... }
+```
+
+| Storage Type | Description | Use Case |
+|--------------|-------------|----------|
+| `session` | State stored in PHP session | Default. Forms, shopping carts, user preferences |
+| `memory` | State reset per request | Temporary UI state, modals |
+| `snapshot` | State embedded in HTML | Stateless server, shareable URLs |
 
 ### useState
 
