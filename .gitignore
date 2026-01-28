@@ -5,6 +5,7 @@ composer.lock
 mise.toml
 .idea/
 .vscode/
+.phpactor.json
 *.swp
 *.swo
 .DS_Store

@@ -36,7 +36,8 @@ final class SessionStorage implements StateStorageInterface
 
     public function clearByPrefix(string $prefix): void
     {
-        foreach (array_keys($_SESSION) as $key) {
+        $this->ensureSessionStarted();
+        foreach (array_keys($_SESSION ?? []) as $key) {
             if (str_starts_with($key, $prefix)) {
                 unset($_SESSION[$key]);
             }

@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<psalm
+    errorLevel="4"
+    resolveFromConfigFile="true"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns="https://getpsalm.org/schema/config"
+    xsi:schemaLocation="https://getpsalm.org/schema/config vendor/vimeo/psalm/config.xsd"
+    findUnusedBaselineEntry="true"
+    findUnusedCode="false"
+>
+    <projectFiles>
+        <directory name="src" />
+        <ignoreFiles>
+            <directory name="vendor" />
+        </ignoreFiles>
+    </projectFiles>
+
+    <issueHandlers>
+        <!-- PHP 8.3+ Override attribute - not critical for now -->
+        <MissingOverrideAttribute errorLevel="suppress" />
+
+        <!-- Composer Event class is only available during composer scripts -->
+        <UndefinedClass>
+            <errorLevel type="suppress">
+                <file name="src/Installer/AssetInstaller.php" />
+            </errorLevel>
+        </UndefinedClass>
+
+        <!-- Superglobals have dynamic types -->
+        <InvalidArgument>
+            <errorLevel type="suppress">
+                <file name="src/Router/RequestContext.php" />
+            </errorLevel>
+        </InvalidArgument>
+
+        <!-- Redundant conditions in switch statements are intentional for clarity -->
+        <RedundantCondition errorLevel="suppress" />
+        <RedundantCast errorLevel="suppress" />
+    </issueHandlers>
+</psalm>

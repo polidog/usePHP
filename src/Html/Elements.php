@@ -1336,7 +1336,8 @@ function getFunctionComponentName(callable $component): string
 {
     if ($component instanceof \Closure) {
         $ref = new \ReflectionFunction($component);
-        return 'FC@' . basename($ref->getFileName() ?: 'unknown') . ':' . $ref->getStartLine();
+        $line = $ref->getStartLine();
+        return 'FC@' . basename($ref->getFileName() ?: 'unknown') . ':' . ($line !== false ? $line : 0);
     }
     if (is_array($component)) {
         return is_object($component[0])
