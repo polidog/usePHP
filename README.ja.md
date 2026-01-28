@@ -171,6 +171,18 @@ $router->get('/step1', Step1Component::class)->sharedSnapshot('checkout');
 $router->get('/step2', Step2Component::class)->sharedSnapshot('checkout');
 ```
 
+#### StorageType vs SnapshotBehavior
+
+この2つの概念は異なるレベルで状態を制御します：
+
+| | StorageType（コンポーネント） | SnapshotBehavior（ルーター） |
+|---|---|---|
+| **スコープ** | 個々のコンポーネント | ルート/ページ遷移 |
+| **設定方法** | `#[Component(storage: '...')]` | `$router->get(...)->sessionSnapshot()` |
+| **用途** | コンポーネントの状態保存方法 | ルート間でのスナップショットの扱い |
+
+**例：** `storage: 'session'`を持つ`TodoList`コンポーネントは、そのコンポーネント自身の状態をセッションに保存します。一方、ルートの`SnapshotBehavior::Persistent`は、別のルートに遷移する際にページ全体のスナップショットをURLで渡すかどうかを制御します。
+
 ### フレームワーク統合
 
 Laravel、Symfony等のフレームワーク内でusePHPを使用する場合：
@@ -302,6 +314,33 @@ class MyComponent extends BaseComponent
     }
 }
 ```
+
+#### コンポーネントストレージタイプ
+
+`#[Component]`属性は`storage`パラメータでコンポーネントの状態保存方法を制御できます：
+
+```php
+use Polidog\UsePhp\Component\Component;
+use Polidog\UsePhp\Storage\StorageType;
+
+// セッションストレージ（デフォルト）- ページ遷移をまたいで状態を保持
+#[Component(storage: 'session')]
+class TodoList extends BaseComponent { ... }
+
+// メモリストレージ - ページロードごとにリセット
+#[Component(storage: 'memory')]
+class TemporaryForm extends BaseComponent { ... }
+
+// スナップショットストレージ - HTMLに状態を埋め込み、サーバーはステートレス
+#[Component(storage: 'snapshot')]
+class Counter extends BaseComponent { ... }
+```
+
+| ストレージタイプ | 説明 | ユースケース |
+|-----------------|------|-------------|
+| `session` | PHPセッションに状態を保存 | デフォルト。フォーム、ショッピングカート、ユーザー設定 |
+| `memory` | リクエストごとにリセット | 一時的なUI状態、モーダル |
+| `snapshot` | HTMLに状態を埋め込み | ステートレスサーバー、共有可能なURL |
 
 ### useState
 
