@@ -65,16 +65,6 @@ final class UsePHP
     }
 
     /**
-     * Auto-load components from a directory.
-     */
-    public static function autoload(string $directory, string $namespace): self
-    {
-        $instance = self::getInstance();
-        $instance->registry->autoload($directory, $namespace);
-        return $instance;
-    }
-
-    /**
      * Render a component and return HTML.
      *
      * @param string $componentName The registered component name

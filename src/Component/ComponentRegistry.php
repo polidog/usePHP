@@ -56,36 +56,6 @@ final class ComponentRegistry
     }
 
     /**
-     * Register all components from a directory.
-     */
-    public function autoload(string $directory, string $namespace): self
-    {
-        if (!is_dir($directory)) {
-            throw new \InvalidArgumentException("Directory not found: {$directory}");
-        }
-
-        $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($directory)
-        );
-
-        foreach ($iterator as $file) {
-            if ($file->isFile() && $file->getExtension() === 'php') {
-                $relativePath = str_replace($directory . '/', '', $file->getPathname());
-                /** @var string $relativeClass */
-                $relativeClass = str_replace(['/', '.php'], ['\\', ''], $relativePath);
-                $className = $namespace . '\\' . $relativeClass;
-
-                if (class_exists($className) && is_subclass_of($className, ComponentInterface::class)) {
-                    /** @var class-string<ComponentInterface> $className */
-                    $this->register($className);
-                }
-            }
-        }
-
-        return $this;
-    }
-
-    /**
      * Check if a component is registered.
      */
     public function has(string $name): bool
