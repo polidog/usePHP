@@ -452,7 +452,7 @@ H::button(onClick: fn() => $setCount($count + 1), children: '+')
 
 ## 要件
 
-- PHP 8.2+
+- PHP 8.5+
 - セッション有効
 
 ## 開発
