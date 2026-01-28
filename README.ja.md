@@ -8,7 +8,8 @@ React Hooks風の書き心地で、**最小限のJavaScript**でサーバード�
 - **最小限のJS (~40行)** - 部分更新でスムーズなUX、JSなしでもフォールバック動作
 - **PHPがそのまま動く** - トランスパイル不要、PHPコードがサーバーで実行
 - **設定可能な状態ストレージ** - コンポーネントごとにセッション（永続）またはメモリ（リクエスト単位）を選択可能
-- **コンポーネント指向** - 再利用可能なコンポーネントクラス
+- **コンポーネント指向** - 再利用可能なコンポーネントクラスと関数コンポーネント
+- **関数コンポーネント** - シンプルなPHP callableを使った軽量コンポーネント
 - **プログレッシブエンハンスメント** - JavaScriptが無効でも動作
 
 ## インストール
@@ -152,6 +153,8 @@ php -S localhost:8000 public/index.php
 
 ### コンポーネント定義
 
+#### クラスベースコンポーネント
+
 ```php
 use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\Component;
@@ -172,6 +175,59 @@ class MyComponent extends BaseComponent
 #[Component(name: 'custom-name')]
 class MyComponent extends BaseComponent { /* ... */ }
 ```
+
+#### 関数コンポーネント
+
+関数コンポーネントはElementを返すシンプルなPHP callableです。クラスベースコンポーネントの軽量な代替として使用できます。
+
+```php
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+
+use function Polidog\UsePhp\Runtime\useState;
+use function Polidog\UsePhp\Runtime\fc;
+
+// シンプルな関数コンポーネント（純粋、状態なし）
+$Greeting = fn(array $props): Element => H::div(
+    children: "Hello, {$props['name']}!"
+);
+
+// useStateを使用する関数コンポーネント
+$Counter = function(array $props): Element {
+    [$count, $setCount] = useState($props['initial'] ?? 0);
+    return H::div(children: [
+        H::span(children: "Count: {$count}"),
+        H::button(
+            onClick: fn() => $setCount($count + 1),
+            children: '+'
+        ),
+    ]);
+};
+```
+
+**関数コンポーネントの使用方法：**
+
+```php
+// 方法A: H::component() - useState使用時に推奨
+H::div(children: [
+    H::component($Counter, ['initial' => 5, 'key' => 'my-counter']),
+]);
+
+// 方法B: fc()ラッパーで直接呼び出し
+$Counter = fc(function(array $props): Element {
+    [$count, $setCount] = useState($props['initial'] ?? 0);
+    return H::div(children: "Count: $count");
+});
+$Counter(['initial' => 5]); // 直接呼び出しOK
+
+// 方法C: 直接呼び出し（useStateを使わない純粋コンポーネントのみ）
+$Greeting(['name' => 'World']); // 直接呼び出しOK
+```
+
+**違いのまとめ：**
+- `H::component()`: レンダリング時に解決されるElementを作成、適切な状態管理
+- `fc()`: 状態サポート付きで直接呼び出し可能なラッパー
+- 直接呼び出し: 純粋コンポーネント（useState不使用）のみで動作
 
 ### useState
 
