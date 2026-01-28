@@ -6,10 +6,12 @@ A framework that delivers server-driven UI with **minimal JavaScript**, using a 
 
 - **React Hooks-like API** - Simple state management with `useState`
 - **Function Components (Recommended)** - Lightweight components using simple PHP callables
+- **Built-in Router** - Simple, swappable router with snapshot state preservation across pages
 - **Minimal JS (~40 lines)** - Smooth UX with partial updates, graceful fallback without JS
 - **Pure PHP** - No transpilation needed, PHP code runs directly on the server
 - **Configurable State Storage** - Choose between session (persistent) or memory (per-request) storage
 - **Progressive Enhancement** - Works even with JavaScript disabled
+- **Framework Integration** - Works with Laravel, Symfony, and other frameworks
 
 ## Installation
 
@@ -55,7 +57,7 @@ $Counter = fc(function(array $props): Element {
 }, 'counter'); // 'counter' is the key for state management
 ```
 
-### 2. Create an Entry Point
+### 2. Create an Entry Point with Router
 
 ```php
 <?php
@@ -64,7 +66,6 @@ $Counter = fc(function(array $props): Element {
 require_once __DIR__ . '/../vendor/autoload.php';
 require_once __DIR__ . '/../components/Counter.php';
 
-use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\UsePHP;
 
 // Serve usephp.js (for partial updates)
@@ -74,28 +75,16 @@ if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
     exit;
 }
 
-// Handle POST actions (for partial updates)
-$actionResult = UsePHP::handleAction();
-if ($actionResult !== null) {
-    echo $actionResult;
-    exit;
-}
+// Configure snapshot security (recommended)
+UsePHP::setSnapshotSecret('your-secret-key-here');
 
-// Render component
-global $Counter;
-RenderContext::beginRender();
-$content = UsePHP::renderElement($Counter(['initial' => 0]));
-?>
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Counter - usePHP</title>
-</head>
-<body>
-    <?= $content ?>
-    <script src="/usephp.js"></script>
-</body>
-</html>
+// Configure routes
+$router = UsePHP::getRouter();
+$router->get('/', Counter::class)->name('home');
+$router->get('/about', AboutPage::class)->name('about');
+
+// Run the application
+UsePHP::run();
 ```
 
 ### 3. Start the Server
@@ -105,6 +94,102 @@ php -S localhost:8000 public/index.php
 ```
 
 Open `http://localhost:8000` in your browser.
+
+## Router
+
+usePHP includes a built-in router that can be swapped or disabled for framework integration.
+
+### Basic Usage
+
+```php
+use Polidog\UsePhp\UsePHP;
+
+$router = UsePHP::getRouter();
+
+// Register routes
+$router->get('/', HomeComponent::class)->name('home');
+$router->get('/users/{id}', UserComponent::class)->name('user.show');
+$router->post('/users', CreateUserHandler::class)->name('user.create');
+
+// Route groups
+$router->group('/admin', function ($group) {
+    $group->get('/dashboard', DashboardComponent::class)->name('admin.dashboard');
+    $group->get('/users', AdminUsersComponent::class)->name('admin.users');
+});
+
+// Run the application
+UsePHP::run();
+```
+
+### URL Generation
+
+```php
+// Generate URLs from route names
+$url = $router->generate('user.show', ['id' => '42']);  // /users/42
+```
+
+### useRouter Hook
+
+Access router functionality within components:
+
+```php
+use function Polidog\UsePhp\Runtime\useRouter;
+
+$NavComponent = fc(function(array $props): Element {
+    $router = useRouter();
+
+    return H::nav(children: [
+        H::a(href: $router['navigate']('home'), children: 'Home'),
+        H::a(href: $router['navigate']('about'), children: 'About'),
+        $router['isActive']('home') ? H::span(children: '(current)') : null,
+    ]);
+}, 'nav');
+```
+
+The `useRouter()` hook returns:
+- `navigate(routeName, params)` - Generate URL for a named route
+- `currentUrl` - Current request URL
+- `params` - Route parameters from current match
+- `isActive(routeName)` - Check if a route is currently active
+
+### Snapshot Behavior
+
+Control how state is preserved across page navigations:
+
+```php
+// Isolated (default) - State is page-specific
+$router->get('/page', PageComponent::class)->isolatedSnapshot();
+
+// Persistent - State is passed via URL when navigating
+$router->get('/cart', CartComponent::class)->persistentSnapshot();
+
+// Session - State is stored in session
+$router->get('/wizard', WizardComponent::class)->sessionSnapshot();
+
+// Shared - State is shared between specific routes
+$router->get('/step1', Step1Component::class)->sharedSnapshot('checkout');
+$router->get('/step2', Step2Component::class)->sharedSnapshot('checkout');
+```
+
+### Framework Integration
+
+When using usePHP within Laravel, Symfony, or other frameworks:
+
+```php
+// Laravel example
+Route::get('/counter', function () {
+    UsePHP::disableRouter();  // Use NullRouter
+    return UsePHP::render(Counter::class);
+});
+
+// Symfony example
+#[Route('/counter')]
+public function counter(): Response
+{
+    UsePHP::disableRouter();
+    return new Response(UsePHP::render(Counter::class));
+}
+```
 
 ## Architecture
 

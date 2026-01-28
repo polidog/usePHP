@@ -6,11 +6,15 @@ namespace Polidog\UsePhp\Tests\Runtime;
 
 use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Router\SimpleRouter;
 use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\Renderer;
 
 use function Polidog\UsePhp\Runtime\useEffect;
+use function Polidog\UsePhp\Runtime\useRouter;
 use function Polidog\UsePhp\Runtime\useState;
+
+use Polidog\UsePhp\UsePHP;
 
 class HooksTest extends TestCase
 {
@@ -180,5 +184,38 @@ class HooksTest extends TestCase
 
         $this->assertTrue($effect1Ran, 'First effect should run');
         $this->assertTrue($effect2Ran, 'Second effect should run');
+    }
+
+    public function testUseRouterReturnsRouterFunctions(): void
+    {
+        // Set up a router with routes
+        $router = new SimpleRouter();
+        $router->get('/', 'HomeComponent')->name('home');
+        $router->get('/users/{id}', 'UserComponent')->name('user.show');
+        UsePHP::setRouter($router);
+
+        $result = useRouter();
+
+        $this->assertArrayHasKey('navigate', $result);
+        $this->assertArrayHasKey('currentUrl', $result);
+        $this->assertArrayHasKey('params', $result);
+        $this->assertArrayHasKey('isActive', $result);
+
+        $this->assertIsCallable($result['navigate']);
+        $this->assertIsString($result['currentUrl']);
+        $this->assertIsArray($result['params']);
+        $this->assertIsCallable($result['isActive']);
+    }
+
+    public function testUseRouterNavigateGeneratesUrl(): void
+    {
+        $router = new SimpleRouter();
+        $router->get('/users/{id}', 'UserComponent')->name('user.show');
+        UsePHP::setRouter($router);
+
+        $result = useRouter();
+        $url = $result['navigate']('user.show', ['id' => '42']);
+
+        $this->assertEquals('/users/42', $url);
     }
 }

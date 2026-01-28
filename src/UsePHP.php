@@ -7,6 +7,12 @@ namespace Polidog\UsePhp;
 use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\ComponentInterface;
 use Polidog\UsePhp\Component\ComponentRegistry;
+use Polidog\UsePhp\Router\NullRouter;
+use Polidog\UsePhp\Router\RequestContext;
+use Polidog\UsePhp\Router\RouteMatch;
+use Polidog\UsePhp\Router\RouterInterface;
+use Polidog\UsePhp\Router\SimpleRouter;
+use Polidog\UsePhp\Router\SnapshotBehavior;
 use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\ComponentState;
 use Polidog\UsePhp\Runtime\Element;
@@ -27,6 +33,8 @@ final class UsePHP
 
     private ComponentRegistry $registry;
     private ?SnapshotSerializer $snapshotSerializer = null;
+    private ?RouterInterface $router = null;
+    private ?RouteMatch $currentMatch = null;
 
     private function __construct()
     {
@@ -128,6 +136,174 @@ final class UsePHP
     }
 
     /**
+     * Set a custom router.
+     */
+    public static function setRouter(RouterInterface $router): self
+    {
+        $instance = self::getInstance();
+        $instance->router = $router;
+        return $instance;
+    }
+
+    /**
+     * Get the current router, creating a SimpleRouter if none set.
+     */
+    public static function getRouter(): RouterInterface
+    {
+        $instance = self::getInstance();
+        if ($instance->router === null) {
+            $instance->router = new SimpleRouter($instance->getSnapshotSerializer());
+        }
+        return $instance->router;
+    }
+
+    /**
+     * Disable routing (use NullRouter).
+     * Use this when integrating with frameworks like Laravel or Symfony.
+     */
+    public static function disableRouter(): self
+    {
+        $instance = self::getInstance();
+        $instance->router = new NullRouter();
+        return $instance;
+    }
+
+    /**
+     * Get the current route match.
+     */
+    public static function getCurrentMatch(): ?RouteMatch
+    {
+        return self::getInstance()->currentMatch;
+    }
+
+    /**
+     * Run the router and render the matched component.
+     *
+     * This is the main entry point for standalone usePHP applications.
+     *
+     * @param RequestContext|null $request Optional request context (defaults to fromGlobals)
+     */
+    public static function run(?RequestContext $request = null): void
+    {
+        $instance = self::getInstance();
+        $request ??= RequestContext::fromGlobals();
+
+        // Handle POST actions first
+        if ($request->isPost() && isset($_POST['_usephp_action'])) {
+            $html = $instance->doHandleAction();
+            echo $html;
+            return;
+        }
+
+        $router = self::getRouter();
+        $match = $router->match($request);
+
+        if ($match === null) {
+            http_response_code(404);
+            echo '404 Not Found';
+            return;
+        }
+
+        $instance->currentMatch = $match;
+
+        // Handle snapshot restoration for persistent/session behaviors
+        $instance->handleSnapshotRestoration($request, $match);
+
+        // Render the component
+        $handler = $match->handler;
+        $html = '';
+
+        if (is_string($handler) && class_exists($handler)) {
+            // Component class
+            $html = self::render($handler);
+        } elseif (is_callable($handler)) {
+            // Callable handler
+            $result = $handler($match->params, $request);
+            if ($result instanceof Element) {
+                $html = self::renderElement($result);
+            } else {
+                $html = (string) $result;
+            }
+        }
+
+        echo $html;
+    }
+
+    /**
+     * Handle snapshot restoration based on route behavior.
+     */
+    private function handleSnapshotRestoration(RequestContext $request, RouteMatch $match): void
+    {
+        $router = $this->router ?? new NullRouter();
+        $snapshotData = $router->extractSnapshot($request);
+
+        if ($snapshotData === null) {
+            return;
+        }
+
+        switch ($match->snapshotBehavior) {
+            case SnapshotBehavior::Persistent:
+                // Restore snapshot from URL
+                try {
+                    $snapshot = $this->getSnapshotSerializer()->deserialize($snapshotData);
+                    ComponentState::fromSnapshot($snapshot);
+                } catch (SnapshotVerificationException $e) {
+                    // Invalid snapshot, ignore
+                }
+                break;
+
+            case SnapshotBehavior::Session:
+                // Store snapshot in session for later use
+                if (session_status() === PHP_SESSION_ACTIVE) {
+                    $_SESSION['_usephp_snapshot'] = $snapshotData;
+                }
+                break;
+
+            case SnapshotBehavior::Shared:
+                // Restore from session if in same group
+                if ($match->sharedGroup !== null && session_status() === PHP_SESSION_ACTIVE) {
+                    $sessionKey = '_usephp_shared_' . $match->sharedGroup;
+                    if (isset($_SESSION[$sessionKey])) {
+                        try {
+                            $snapshot = $this->getSnapshotSerializer()->deserialize($_SESSION[$sessionKey]);
+                            ComponentState::fromSnapshot($snapshot);
+                        } catch (SnapshotVerificationException $e) {
+                            // Invalid snapshot, ignore
+                        }
+                    }
+                }
+                break;
+
+            case SnapshotBehavior::Isolated:
+            default:
+                // No restoration for isolated pages
+                break;
+        }
+    }
+
+    /**
+     * Redirect to a named route with optional snapshot preservation.
+     *
+     * @param string $routeName The name of the route to redirect to
+     * @param array<string, string> $params Route parameters
+     * @param Snapshot|null $snapshot Optional snapshot to pass
+     */
+    public static function redirectTo(string $routeName, array $params = [], ?Snapshot $snapshot = null): never
+    {
+        $instance = self::getInstance();
+        $router = self::getRouter();
+
+        $url = $router->generate($routeName, $params);
+
+        if ($snapshot !== null && $instance->currentMatch?->snapshotBehavior === SnapshotBehavior::Persistent) {
+            $url = $router->createRedirectUrl($url, $snapshot);
+        }
+
+        header('Location: ' . $url, true, 303);
+        exit;
+    }
+
+    /**
      * Handle a POST action and return the partial HTML.
      * Returns null if not a valid action request.
      */
@@ -199,8 +375,44 @@ final class UsePHP
             return $this->doRenderComponentPartialWithInstanceId($instanceId, $componentName);
         }
 
-        // Full page - PRG pattern (for both class components and function components)
-        $redirectUrl = strtok($_SERVER['REQUEST_URI'] ?? '/', '?');
+        // Full page - PRG pattern with snapshot behavior handling
+        $redirectUrl = strtok($_SERVER['REQUEST_URI'] ?? '/', '?') ?: '/';
+
+        // Handle snapshot preservation based on route behavior
+        if ($this->currentMatch !== null && $storageType === StorageType::Snapshot) {
+            $snapshot = $state->createSnapshot();
+
+            switch ($this->currentMatch->snapshotBehavior) {
+                case SnapshotBehavior::Persistent:
+                    // Pass snapshot in URL
+                    $router = $this->router ?? new NullRouter();
+                    $redirectUrl = $router->createRedirectUrl((string) $redirectUrl, $snapshot);
+                    break;
+
+                case SnapshotBehavior::Session:
+                    // Store snapshot in session
+                    if (session_status() === PHP_SESSION_ACTIVE) {
+                        $serialized = $this->getSnapshotSerializer()->serialize($snapshot);
+                        $_SESSION['_usephp_snapshot'] = $serialized;
+                    }
+                    break;
+
+                case SnapshotBehavior::Shared:
+                    // Store in shared group session
+                    if ($this->currentMatch->sharedGroup !== null && session_status() === PHP_SESSION_ACTIVE) {
+                        $sessionKey = '_usephp_shared_' . $this->currentMatch->sharedGroup;
+                        $serialized = $this->getSnapshotSerializer()->serialize($snapshot);
+                        $_SESSION[$sessionKey] = $serialized;
+                    }
+                    break;
+
+                case SnapshotBehavior::Isolated:
+                default:
+                    // No preservation for isolated pages
+                    break;
+            }
+        }
+
         header('Location: ' . $redirectUrl, true, 303);
         exit;
     }

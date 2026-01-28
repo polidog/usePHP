@@ -28,11 +28,13 @@ require_once __DIR__ . '/components/FunctionComponents.php';
 use App\Components\Counter;
 use App\Components\TodoList;
 use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Router\RequestContext;
+use Polidog\UsePhp\Router\RouteGroup;
+use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\UsePHP;
 
-use function App\Components\FunctionCounter;
-use function App\Components\FunctionTodoList;
+use function Polidog\UsePhp\Runtime\useRouter;
 
 // ============================================
 // Component registration
@@ -43,100 +45,74 @@ UsePHP::register(TodoList::class);
 // ============================================
 // Snapshot security (optional but recommended)
 // ============================================
-// Set a secret key to prevent tampering with snapshot state
 UsePHP::setSnapshotSecret('your-secret-key-here');
 
 // ============================================
-// Handle POST action (for partial updates)
+// Router configuration
 // ============================================
-$actionResult = UsePHP::handleAction();
-if ($actionResult !== null) {
-    echo $actionResult;
-    exit;
-}
+$router = UsePHP::getRouter();
+
+// Home / Counter page
+$router->get('/', Counter::class)->name('home');
+$router->get('/counter', Counter::class)->name('counter');
+
+// Multiple counters page
+$router->get('/multi', function (array $params, RequestContext $request): Element {
+    return H::Fragment(children: [
+        H::h2(style: 'text-align:center;color:#666;', children: 'Counter A'),
+        UsePHP::createElement(Counter::class, 'counter-a'),
+        H::h2(style: 'text-align:center;color:#666;margin-top:30px;', children: 'Counter B'),
+        UsePHP::createElement(Counter::class, 'counter-b'),
+    ]);
+})->name('multi');
+
+// Todo page
+$router->get('/todo', TodoList::class)->name('todo');
+
+// Function component pages
+$router->get('/fc-counter', function (): Element {
+    RenderContext::beginRender();
+    return H::div(children: [
+        H::component('App\Components\FunctionCounter', ['initial' => 0, 'key' => 'fc-counter']),
+    ]);
+})->name('fc-counter');
+
+$router->get('/fc-todo', function (): Element {
+    RenderContext::beginRender();
+    return H::div(children: [
+        H::component('App\Components\FunctionTodoList', ['key' => 'fc-todo']),
+    ]);
+})->name('fc-todo');
+
+// fc() wrapper examples
+$router->get('/fc-wrapped-counter', function (): Element {
+    global $FcCounter;
+    RenderContext::beginRender();
+    return $FcCounter(['initial' => 0]);
+})->name('fc-wrapped-counter');
+
+$router->get('/fc-wrapped-todo', function (): Element {
+    global $FcTodoList;
+    RenderContext::beginRender();
+    return $FcTodoList([]);
+})->name('fc-wrapped-todo');
+
+// Persistent snapshot example - state is passed via URL
+$router->get('/cart', function (): Element {
+    global $FcCounter;
+    RenderContext::beginRender();
+    return H::div(children: [
+        H::h2(children: 'Cart (Persistent Snapshot)'),
+        H::p(children: 'State is preserved in URL when navigating'),
+        $FcCounter(['initial' => 0]),
+    ]);
+})->name('cart')->persistentSnapshot();
 
 // ============================================
-// Simple routing
+// Layout wrapper
 // ============================================
-$path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
-
-// ============================================
-// Render based on route
-// ============================================
-$title = 'usePHP';
-$content = '';
-
-switch ($path) {
-    case '/':
-    case '/counter':
-        $title = 'Counter';
-        $content = UsePHP::render(Counter::class);
-        break;
-
-    case '/multi':
-        // Multiple counters with explicit keys using H class
-        // Keys ensure stable state even when order changes
-        $title = 'Multiple Counters';
-        $content = UsePHP::renderElement(
-            H::Fragment(children: [
-                H::h2(style: 'text-align:center;color:#666;', children: 'Counter A'),
-                UsePHP::createElement(Counter::class, 'counter-a'),
-                H::h2(style: 'text-align:center;color:#666;margin-top:30px;', children: 'Counter B'),
-                UsePHP::createElement(Counter::class, 'counter-b'),
-            ])
-        );
-        break;
-
-    case '/todo':
-        $title = 'Todo';
-        $content = UsePHP::render(TodoList::class);
-        break;
-
-    case '/fc-counter':
-        // Function component counter using H::component()
-        $title = 'Function Counter';
-        RenderContext::beginRender();
-        $content = UsePHP::renderElement(
-            H::div(children: [
-                H::component('App\Components\FunctionCounter', ['initial' => 0, 'key' => 'fc-counter']),
-            ])
-        );
-        break;
-
-    case '/fc-todo':
-        // Function component todo list using H::component()
-        $title = 'Function Todo';
-        RenderContext::beginRender();
-        $content = UsePHP::renderElement(
-            H::div(children: [
-                H::component('App\Components\FunctionTodoList', ['key' => 'fc-todo']),
-            ])
-        );
-        break;
-
-    case '/fc-wrapped-counter':
-        // Using fc() wrapper - direct invocation style
-        // $FcCounter is defined with fc() in FunctionComponents.php
-        global $FcCounter;
-        $title = 'fc() Counter';
-        RenderContext::beginRender();
-        $content = UsePHP::renderElement($FcCounter(['initial' => 0]));
-        break;
-
-    case '/fc-wrapped-todo':
-        // Using fc() wrapper - direct invocation style
-        // $FcTodoList is defined with fc() in FunctionComponents.php
-        global $FcTodoList;
-        $title = 'fc() Todo';
-        RenderContext::beginRender();
-        $content = UsePHP::renderElement($FcTodoList([]));
-        break;
-
-    default:
-        $title = 'Counter';
-        $content = UsePHP::render(Counter::class);
-}
-?>
+$layoutWrapper = function (string $title, string $content): void {
+    ?>
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -229,7 +205,7 @@ switch ($path) {
         nav a {
             display: inline-block;
             padding: 8px 16px;
-            margin: 0 5px;
+            margin: 0 5px 5px 0;
             background: #2196F3;
             color: white;
             text-decoration: none;
@@ -237,6 +213,9 @@ switch ($path) {
         }
         nav a:hover {
             background: #1976D2;
+        }
+        nav a.active {
+            background: #1565C0;
         }
         [aria-busy="true"] {
             opacity: 0.6;
@@ -255,14 +234,72 @@ switch ($path) {
 </head>
 <body>
     <nav>
-        <a href="/counter">Counter</a>
+        <a href="/">Counter</a>
         <a href="/multi">Multi</a>
         <a href="/todo">Todo</a>
         <a href="/fc-counter">H::component</a>
         <a href="/fc-wrapped-counter">fc()</a>
+        <a href="/cart">Cart</a>
     </nav>
     <?= $content ?>
     <div class="badge">Partial updates with ~40 lines of JS</div>
     <script src="/usephp.js"></script>
 </body>
 </html>
+<?php
+};
+
+// ============================================
+// Run application with router
+// ============================================
+$request = RequestContext::fromGlobals();
+$match = $router->match($request);
+
+// Handle POST actions first
+if ($request->isPost() && isset($_POST['_usephp_action'])) {
+    $html = UsePHP::handleAction();
+    if ($html !== null) {
+        echo $html;
+        exit;
+    }
+}
+
+if ($match === null) {
+    http_response_code(404);
+    $layoutWrapper('404 Not Found', '<h1>404 Not Found</h1>');
+    exit;
+}
+
+// Get title from route name
+$titles = [
+    'home' => 'Counter',
+    'counter' => 'Counter',
+    'multi' => 'Multiple Counters',
+    'todo' => 'Todo',
+    'fc-counter' => 'Function Counter',
+    'fc-todo' => 'Function Todo',
+    'fc-wrapped-counter' => 'fc() Counter',
+    'fc-wrapped-todo' => 'fc() Todo',
+    'cart' => 'Cart',
+];
+$title = $titles[$match->name ?? ''] ?? 'usePHP';
+
+// Render the component
+$handler = $match->handler;
+
+if (is_string($handler) && class_exists($handler)) {
+    // Class-based component
+    $content = UsePHP::render($handler);
+} elseif (is_callable($handler)) {
+    // Callable handler
+    $result = $handler($match->params, $request);
+    if ($result instanceof Element) {
+        $content = UsePHP::renderElement($result);
+    } else {
+        $content = (string) $result;
+    }
+} else {
+    $content = '';
+}
+
+$layoutWrapper($title, $content);

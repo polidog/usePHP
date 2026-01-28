@@ -6,10 +6,12 @@ React Hooks風の書き心地で、**最小限のJavaScript**でサーバード�
 
 - **React Hooks風API** - `useState`でシンプルに状態管理
 - **関数コンポーネント（推奨）** - シンプルなPHP callableを使った軽量コンポーネント
+- **組み込みルーター** - シンプルで差し替え可能なルーター、ページ間でスナップショット状態を保持
 - **最小限のJS (~40行)** - 部分更新でスムーズなUX、JSなしでもフォールバック動作
 - **PHPがそのまま動く** - トランスパイル不要、PHPコードがサーバーで実行
 - **設定可能な状態ストレージ** - セッション（永続）またはメモリ（リクエスト単位）を選択可能
 - **プログレッシブエンハンスメント** - JavaScriptが無効でも動作
+- **フレームワーク統合** - Laravel、Symfony等のフレームワークと併用可能
 
 ## インストール
 
@@ -55,7 +57,7 @@ $Counter = fc(function(array $props): Element {
 }, 'counter'); // 'counter' は状態管理用のキー
 ```
 
-### 2. エントリーポイントを作成
+### 2. ルーター付きエントリーポイントを作成
 
 ```php
 <?php
@@ -64,7 +66,6 @@ $Counter = fc(function(array $props): Element {
 require_once __DIR__ . '/../vendor/autoload.php';
 require_once __DIR__ . '/../components/Counter.php';
 
-use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\UsePHP;
 
 // usephp.jsを配信（部分更新用）
@@ -74,28 +75,16 @@ if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
     exit;
 }
 
-// POSTアクション処理（部分更新用）
-$actionResult = UsePHP::handleAction();
-if ($actionResult !== null) {
-    echo $actionResult;
-    exit;
-}
+// スナップショットセキュリティを設定（推奨）
+UsePHP::setSnapshotSecret('your-secret-key-here');
 
-// コンポーネントをレンダリング
-global $Counter;
-RenderContext::beginRender();
-$content = UsePHP::renderElement($Counter(['initial' => 0]));
-?>
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Counter - usePHP</title>
-</head>
-<body>
-    <?= $content ?>
-    <script src="/usephp.js"></script>
-</body>
-</html>
+// ルートを設定
+$router = UsePHP::getRouter();
+$router->get('/', Counter::class)->name('home');
+$router->get('/about', AboutPage::class)->name('about');
+
+// アプリケーションを実行
+UsePHP::run();
 ```
 
 ### 3. サーバーを起動
@@ -105,6 +94,102 @@ php -S localhost:8000 public/index.php
 ```
 
 `http://localhost:8000` にアクセス。
+
+## ルーター
+
+usePHPには組み込みルーターが含まれており、フレームワーク統合のために差し替えや無効化が可能です。
+
+### 基本的な使い方
+
+```php
+use Polidog\UsePhp\UsePHP;
+
+$router = UsePHP::getRouter();
+
+// ルートを登録
+$router->get('/', HomeComponent::class)->name('home');
+$router->get('/users/{id}', UserComponent::class)->name('user.show');
+$router->post('/users', CreateUserHandler::class)->name('user.create');
+
+// ルートグループ
+$router->group('/admin', function ($group) {
+    $group->get('/dashboard', DashboardComponent::class)->name('admin.dashboard');
+    $group->get('/users', AdminUsersComponent::class)->name('admin.users');
+});
+
+// アプリケーションを実行
+UsePHP::run();
+```
+
+### URL生成
+
+```php
+// ルート名からURLを生成
+$url = $router->generate('user.show', ['id' => '42']);  // /users/42
+```
+
+### useRouterフック
+
+コンポーネント内でルーター機能にアクセス：
+
+```php
+use function Polidog\UsePhp\Runtime\useRouter;
+
+$NavComponent = fc(function(array $props): Element {
+    $router = useRouter();
+
+    return H::nav(children: [
+        H::a(href: $router['navigate']('home'), children: 'ホーム'),
+        H::a(href: $router['navigate']('about'), children: '概要'),
+        $router['isActive']('home') ? H::span(children: '(現在)') : null,
+    ]);
+}, 'nav');
+```
+
+`useRouter()`フックの戻り値：
+- `navigate(routeName, params)` - 名前付きルートのURLを生成
+- `currentUrl` - 現在のリクエストURL
+- `params` - 現在のマッチからのルートパラメータ
+- `isActive(routeName)` - ルートが現在アクティブかチェック
+
+### スナップショット挙動
+
+ページ遷移時の状態保持を制御：
+
+```php
+// Isolated（デフォルト）- ページ固有の状態
+$router->get('/page', PageComponent::class)->isolatedSnapshot();
+
+// Persistent - 遷移時にURLで状態を渡す
+$router->get('/cart', CartComponent::class)->persistentSnapshot();
+
+// Session - セッションに状態を保存
+$router->get('/wizard', WizardComponent::class)->sessionSnapshot();
+
+// Shared - 特定のルート間で状態を共有
+$router->get('/step1', Step1Component::class)->sharedSnapshot('checkout');
+$router->get('/step2', Step2Component::class)->sharedSnapshot('checkout');
+```
+
+### フレームワーク統合
+
+Laravel、Symfony等のフレームワーク内でusePHPを使用する場合：
+
+```php
+// Laravelの例
+Route::get('/counter', function () {
+    UsePHP::disableRouter();  // NullRouterを使用
+    return UsePHP::render(Counter::class);
+});
+
+// Symfonyの例
+#[Route('/counter')]
+public function counter(): Response
+{
+    UsePHP::disableRouter();
+    return new Response(UsePHP::render(Counter::class));
+}
+```
 
 ## アーキテクチャ
 

@@ -6,6 +6,8 @@ namespace Polidog\UsePhp\Runtime;
 
 use function Polidog\UsePhp\Html\getFunctionComponentName;
 
+use Polidog\UsePhp\UsePHP;
+
 /**
  * React-like useState hook that stores state server-side.
  *
@@ -101,4 +103,42 @@ function fc(callable $component, ?string $key = null): callable
         RenderContext::endComponent();
         return $result;
     };
+}
+
+/**
+ * Hook for accessing router functionality within components.
+ *
+ * Returns an array with:
+ * - 'navigate': Callable to generate URL for a named route
+ * - 'currentUrl': Current request URL
+ * - 'params': Route parameters from current match
+ * - 'isActive': Callable to check if a route is currently active
+ *
+ * @return array{
+ *     navigate: callable(string, array<string, string>): string,
+ *     currentUrl: string,
+ *     params: array<string, string>,
+ *     isActive: callable(string): bool
+ * }
+ */
+function useRouter(): array
+{
+    $router = UsePHP::getRouter();
+    $currentMatch = UsePHP::getCurrentMatch();
+    $currentUrl = $router->getCurrentUrl();
+
+    return [
+        'navigate' => fn(string $routeName, array $params = []): string
+            => $router->generate($routeName, $params),
+        'currentUrl' => $currentUrl,
+        'params' => $currentMatch !== null ? $currentMatch->params : [],
+        'isActive' => function (string $routeName) use ($router, $currentUrl): bool {
+            try {
+                $url = $router->generate($routeName);
+                return $currentUrl === $url || str_starts_with($currentUrl, $url . '/');
+            } catch (\InvalidArgumentException) {
+                return false;
+            }
+        },
+    ];
 }
