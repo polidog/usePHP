@@ -5,11 +5,10 @@ React Hooks風の書き心地で、**最小限のJavaScript**でサーバード�
 ## 特徴
 
 - **React Hooks風API** - `useState`でシンプルに状態管理
+- **関数コンポーネント（推奨）** - シンプルなPHP callableを使った軽量コンポーネント
 - **最小限のJS (~40行)** - 部分更新でスムーズなUX、JSなしでもフォールバック動作
 - **PHPがそのまま動く** - トランスパイル不要、PHPコードがサーバーで実行
-- **設定可能な状態ストレージ** - コンポーネントごとにセッション（永続）またはメモリ（リクエスト単位）を選択可能
-- **コンポーネント指向** - 再利用可能なコンポーネントクラスと関数コンポーネント
-- **関数コンポーネント** - シンプルなPHP callableを使った軽量コンポーネント
+- **設定可能な状態ストレージ** - セッション（永続）またはメモリ（リクエスト単位）を選択可能
 - **プログレッシブエンハンスメント** - JavaScriptが無効でも動作
 
 ## インストール
@@ -23,42 +22,37 @@ composer require polidog/use-php
 
 ## クイックスタート
 
-### 1. コンポーネントを作成
+### 1. 関数コンポーネントを作成
 
 ```php
 <?php
 // components/Counter.php
 
-namespace App\Components;
-
-use Polidog\UsePhp\Component\BaseComponent;
-use Polidog\UsePhp\Component\Component;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
 
-#[Component]
-class Counter extends BaseComponent
-{
-    public function render(): Element
-    {
-        [$count, $setCount] = $this->useState(0);
+use function Polidog\UsePhp\Runtime\fc;
+use function Polidog\UsePhp\Runtime\useState;
 
-        return H::div(
-            className: 'counter',
-            children: [
-                H::span(children: "Count: {$count}"),
-                H::button(
-                    onClick: fn() => $setCount($count + 1),
-                    children: '+'
-                ),
-                H::button(
-                    onClick: fn() => $setCount($count - 1),
-                    children: '-'
-                ),
-            ]
-        );
-    }
-}
+// fc()ラッパーでカウンターコンポーネントを定義
+$Counter = fc(function(array $props): Element {
+    [$count, $setCount] = useState($props['initial'] ?? 0);
+
+    return H::div(
+        className: 'counter',
+        children: [
+            H::span(children: "Count: {$count}"),
+            H::button(
+                onClick: fn() => $setCount($count + 1),
+                children: '+'
+            ),
+            H::button(
+                onClick: fn() => $setCount($count - 1),
+                children: '-'
+            ),
+        ]
+    );
+}, 'counter'); // 'counter' は状態管理用のキー
 ```
 
 ### 2. エントリーポイントを作成
@@ -70,7 +64,7 @@ class Counter extends BaseComponent
 require_once __DIR__ . '/../vendor/autoload.php';
 require_once __DIR__ . '/../components/Counter.php';
 
-use App\Components\Counter;
+use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\UsePHP;
 
 // usephp.jsを配信（部分更新用）
@@ -80,9 +74,6 @@ if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
     exit;
 }
 
-// コンポーネント登録
-UsePHP::register(Counter::class);
-
 // POSTアクション処理（部分更新用）
 $actionResult = UsePHP::handleAction();
 if ($actionResult !== null) {
@@ -91,7 +82,9 @@ if ($actionResult !== null) {
 }
 
 // コンポーネントをレンダリング
-$content = UsePHP::render(Counter::class);
+global $Counter;
+RenderContext::beginRender();
+$content = UsePHP::renderElement($Counter(['initial' => 0]));
 ?>
 <!DOCTYPE html>
 <html>
@@ -121,7 +114,7 @@ php -S localhost:8000 public/index.php
     |                                  |
     |  GET /                           |
     | -------------------------------->|
-    |                                  | Counter::render() 実行
+    |                                  | コンポーネントをレンダリング
     |  <html>Count: 0</html>           | useState → セッション保存
     | <--------------------------------|
     |                                  |
@@ -153,32 +146,9 @@ php -S localhost:8000 public/index.php
 
 ### コンポーネント定義
 
-#### クラスベースコンポーネント
+#### 関数コンポーネント（推奨）
 
-```php
-use Polidog\UsePhp\Component\BaseComponent;
-use Polidog\UsePhp\Component\Component;
-
-#[Component]
-class MyComponent extends BaseComponent
-{
-    public function render(): Element
-    {
-        // ...
-    }
-}
-```
-
-コンポーネント名はデフォルトでFQCN（例: `App\Components\MyComponent`）になります。明示的に指定することも可能です：
-
-```php
-#[Component(name: 'custom-name')]
-class MyComponent extends BaseComponent { /* ... */ }
-```
-
-#### 関数コンポーネント
-
-関数コンポーネントはElementを返すシンプルなPHP callableです。クラスベースコンポーネントの軽量な代替として使用できます。
+関数コンポーネントはElementを返すシンプルなPHP callableです。usePHPでコンポーネントを構築する際の推奨方法です。
 
 ```php
 use Polidog\UsePhp\Html\H;
@@ -193,7 +163,7 @@ $Greeting = fn(array $props): Element => H::div(
 );
 
 // useStateを使用する関数コンポーネント
-$Counter = function(array $props): Element {
+$Counter = fc(function(array $props): Element {
     [$count, $setCount] = useState($props['initial'] ?? 0);
     return H::div(children: [
         H::span(children: "Count: {$count}"),
@@ -202,88 +172,68 @@ $Counter = function(array $props): Element {
             children: '+'
         ),
     ]);
-};
+}, 'counter');
 ```
 
 **関数コンポーネントの使用方法：**
 
 ```php
-// 方法A: H::component() - useState使用時に推奨
-H::div(children: [
-    H::component($Counter, ['initial' => 5, 'key' => 'my-counter']),
-]);
-
-// 方法B: fc()ラッパーで直接呼び出し
+// 方法A: fc()ラッパー（推奨）
+// fc()でラップして、状態サポート付きで直接呼び出し可能に
 $Counter = fc(function(array $props): Element {
     [$count, $setCount] = useState($props['initial'] ?? 0);
     return H::div(children: "Count: $count");
-});
-$Counter(['initial' => 5]); // 直接呼び出しOK
+}, 'my-counter');
+
+$element = $Counter(['initial' => 5]); // 直接呼び出し
+$html = UsePHP::renderElement($element);
+
+// 方法B: H::component()
+// レンダリング時に解決されるElementを作成
+H::div(children: [
+    H::component($counterFn, ['initial' => 5, 'key' => 'my-counter']),
+]);
 
 // 方法C: 直接呼び出し（useStateを使わない純粋コンポーネントのみ）
-$Greeting(['name' => 'World']); // 直接呼び出しOK
+$Greeting = fn(array $props): Element => H::div(children: "Hello, {$props['name']}!");
+$Greeting(['name' => 'World']); // OK - 状態不要
 ```
 
-**違いのまとめ：**
-- `H::component()`: レンダリング時に解決されるElementを作成、適切な状態管理
-- `fc()`: 状態サポート付きで直接呼び出し可能なラッパー
-- 直接呼び出し: 純粋コンポーネント（useState不使用）のみで動作
+#### クラスベースコンポーネント
 
-### useState
-
-```php
-[$state, $setState] = $this->useState($initialValue);
-
-// 使用例
-[$count, $setCount] = $this->useState(0);
-[$todos, $setTodos] = $this->useState([]);
-[$user, $setUser] = $this->useState(['name' => 'John']);
-```
-
-### 状態ストレージ
-
-デフォルトでは、コンポーネントの状態はPHPセッションに保存され、ページ遷移後も維持されます。`storage`パラメータでコンポーネントごとにこの動作を設定できます：
+ライフサイクルメソッドやDIが必要な複雑なコンポーネントには、クラスベースコンポーネントを使用できます：
 
 ```php
 use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\Component;
-use Polidog\UsePhp\Storage\StorageType;
 
-// セッションストレージ（デフォルト） - ページ遷移後も状態を維持
 #[Component]
-class Counter extends BaseComponent
+class MyComponent extends BaseComponent
 {
     public function render(): Element
     {
         [$count, $setCount] = $this->useState(0);
-        // ユーザーが別ページに移動して戻ってきても $count は維持される
         // ...
     }
 }
-
-// メモリストレージ - ページ読み込みごとに状態をリセット
-#[Component(storage: StorageType::Memory)]
-class SearchForm extends BaseComponent
-{
-    public function render(): Element
-    {
-        [$query, $setQuery] = $this->useState('');
-        // ページリロード/遷移で $query は '' にリセットされる
-        // ...
-    }
-}
-
-// 文字列でも指定可能
-#[Component(storage: 'memory')]
-class Wizard extends BaseComponent { /* ... */ }
 ```
 
-**ストレージタイプ：**
+### useState
 
-| タイプ | 動作 | ユースケース |
-|--------|------|--------------|
-| `session`（デフォルト） | ページ遷移後も状態を維持 | カウンター、ショッピングカート、ユーザー設定 |
-| `memory` | ページ読み込みごとに状態をリセット | 検索フォーム、一時的なUI状態、リセットすべきウィザード |
+```php
+use function Polidog\UsePhp\Runtime\useState;
+
+// 関数コンポーネント内で
+[$state, $setState] = useState($initialValue);
+
+// 使用例
+[$count, $setCount] = useState(0);
+[$todos, $setTodos] = useState([]);
+[$user, $setUser] = useState(['name' => 'John']);
+
+// クラスベースコンポーネント内で
+[$state, $setState] = $this->useState($initialValue);
+```
 
 ### HTML要素
 
@@ -315,54 +265,39 @@ H::table(children: [H::tr(children: [H::td(children: 'セル')])]);
 H::video(src: 'movie.mp4', controls: true);
 ```
 
-### 複数コンポーネント + ルーティング
+### コンポーネントの合成
 
 ```php
-<?php
-// public/index.php
+// 再利用可能なコンポーネントを定義
+$Button = fc(function(array $props): Element {
+    return H::button(
+        className: 'btn',
+        onClick: $props['onClick'] ?? null,
+        children: $props['children'] ?? ''
+    );
+}, 'button');
 
-use App\Components\{Counter, TodoList};
-use Polidog\UsePhp\UsePHP;
+$Card = fc(function(array $props): Element {
+    return H::div(
+        className: 'card',
+        children: [
+            H::h2(children: $props['title']),
+            H::p(children: $props['content']),
+        ]
+    );
+}, 'card');
 
-// usephp.js配信
-if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
-    header('Content-Type: application/javascript');
-    readfile(__DIR__ . '/usephp.js');
-    exit;
-}
+// 組み合わせて使用
+$App = fc(function(array $props): Element {
+    [$count, $setCount] = useState(0);
 
-// コンポーネント登録
-UsePHP::register(Counter::class);
-UsePHP::register(TodoList::class);
+    global $Button, $Card;
 
-// POSTアクション処理
-$actionResult = UsePHP::handleAction();
-if ($actionResult !== null) {
-    echo $actionResult;
-    exit;
-}
-
-// ルーティング
-$path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
-$component = match ($path) {
-    '/', '/counter' => Counter::class,
-    '/todo' => TodoList::class,
-    default => Counter::class,
-};
-
-// レンダリング
-$content = UsePHP::render($component);
-?>
-<!DOCTYPE html>
-<html>
-<head>
-    <title>usePHP Example</title>
-</head>
-<body>
-    <?= $content ?>
-    <script src="/usephp.js"></script>
-</body>
-</html>
+    return H::div(children: [
+        $Card(['title' => 'カウンター', 'content' => "カウント: $count"]),
+        $Button(['onClick' => fn() => $setCount($count + 1), 'children' => '増加']),
+    ]);
+}, 'app');
 ```
 
 ## 生成されるHTML

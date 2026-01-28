@@ -5,11 +5,10 @@ A framework that delivers server-driven UI with **minimal JavaScript**, using a 
 ## Features
 
 - **React Hooks-like API** - Simple state management with `useState`
+- **Function Components (Recommended)** - Lightweight components using simple PHP callables
 - **Minimal JS (~40 lines)** - Smooth UX with partial updates, graceful fallback without JS
 - **Pure PHP** - No transpilation needed, PHP code runs directly on the server
-- **Configurable State Storage** - Choose between session (persistent) or memory (per-request) storage per component
-- **Component-oriented** - Reusable component classes and function components
-- **Function Components** - Lightweight components using simple PHP callables
+- **Configurable State Storage** - Choose between session (persistent) or memory (per-request) storage
 - **Progressive Enhancement** - Works even with JavaScript disabled
 
 ## Installation
@@ -23,42 +22,37 @@ composer require polidog/use-php
 
 ## Quick Start
 
-### 1. Create a Component
+### 1. Create a Function Component
 
 ```php
 <?php
 // components/Counter.php
 
-namespace App\Components;
-
-use Polidog\UsePhp\Component\BaseComponent;
-use Polidog\UsePhp\Component\Component;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
 
-#[Component]
-class Counter extends BaseComponent
-{
-    public function render(): Element
-    {
-        [$count, $setCount] = $this->useState(0);
+use function Polidog\UsePhp\Runtime\fc;
+use function Polidog\UsePhp\Runtime\useState;
 
-        return H::div(
-            className: 'counter',
-            children: [
-                H::span(children: "Count: {$count}"),
-                H::button(
-                    onClick: fn() => $setCount($count + 1),
-                    children: '+'
-                ),
-                H::button(
-                    onClick: fn() => $setCount($count - 1),
-                    children: '-'
-                ),
-            ]
-        );
-    }
-}
+// Define a counter component with fc() wrapper
+$Counter = fc(function(array $props): Element {
+    [$count, $setCount] = useState($props['initial'] ?? 0);
+
+    return H::div(
+        className: 'counter',
+        children: [
+            H::span(children: "Count: {$count}"),
+            H::button(
+                onClick: fn() => $setCount($count + 1),
+                children: '+'
+            ),
+            H::button(
+                onClick: fn() => $setCount($count - 1),
+                children: '-'
+            ),
+        ]
+    );
+}, 'counter'); // 'counter' is the key for state management
 ```
 
 ### 2. Create an Entry Point
@@ -70,7 +64,7 @@ class Counter extends BaseComponent
 require_once __DIR__ . '/../vendor/autoload.php';
 require_once __DIR__ . '/../components/Counter.php';
 
-use App\Components\Counter;
+use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\UsePHP;
 
 // Serve usephp.js (for partial updates)
@@ -80,9 +74,6 @@ if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
     exit;
 }
 
-// Register component
-UsePHP::register(Counter::class);
-
 // Handle POST actions (for partial updates)
 $actionResult = UsePHP::handleAction();
 if ($actionResult !== null) {
@@ -91,7 +82,9 @@ if ($actionResult !== null) {
 }
 
 // Render component
-$content = UsePHP::render(Counter::class);
+global $Counter;
+RenderContext::beginRender();
+$content = UsePHP::renderElement($Counter(['initial' => 0]));
 ?>
 <!DOCTYPE html>
 <html>
@@ -121,7 +114,7 @@ Open `http://localhost:8000` in your browser.
     |                                  |
     |  GET /                           |
     | -------------------------------->|
-    |                                  | Counter::render() executes
+    |                                  | Component renders
     |  <html>Count: 0</html>           | useState → saves to session
     | <--------------------------------|
     |                                  |
@@ -153,32 +146,9 @@ Open `http://localhost:8000` in your browser.
 
 ### Component Definition
 
-#### Class-based Components
+#### Function Components (Recommended)
 
-```php
-use Polidog\UsePhp\Component\BaseComponent;
-use Polidog\UsePhp\Component\Component;
-
-#[Component]
-class MyComponent extends BaseComponent
-{
-    public function render(): Element
-    {
-        // ...
-    }
-}
-```
-
-The component name defaults to the FQCN (e.g., `App\Components\MyComponent`). You can override it explicitly:
-
-```php
-#[Component(name: 'custom-name')]
-class MyComponent extends BaseComponent { /* ... */ }
-```
-
-#### Function Components
-
-Function components are simple PHP callables that return Elements. They offer a lighter-weight alternative to class-based components.
+Function components are simple PHP callables that return Elements. They are the recommended way to build components in usePHP.
 
 ```php
 use Polidog\UsePhp\Html\H;
@@ -193,7 +163,7 @@ $Greeting = fn(array $props): Element => H::div(
 );
 
 // Function component with useState
-$Counter = function(array $props): Element {
+$Counter = fc(function(array $props): Element {
     [$count, $setCount] = useState($props['initial'] ?? 0);
     return H::div(children: [
         H::span(children: "Count: {$count}"),
@@ -202,88 +172,68 @@ $Counter = function(array $props): Element {
             children: '+'
         ),
     ]);
-};
+}, 'counter');
 ```
 
 **Using function components:**
 
 ```php
-// Method A: H::component() - Recommended for useState
-H::div(children: [
-    H::component($Counter, ['initial' => 5, 'key' => 'my-counter']),
-]);
-
-// Method B: fc() wrapper for direct invocation
+// Method A: fc() wrapper (Recommended)
+// Wrap with fc() for direct invocation with state support
 $Counter = fc(function(array $props): Element {
     [$count, $setCount] = useState($props['initial'] ?? 0);
     return H::div(children: "Count: $count");
-});
-$Counter(['initial' => 5]); // Direct call OK
+}, 'my-counter');
+
+$element = $Counter(['initial' => 5]); // Direct call
+$html = UsePHP::renderElement($element);
+
+// Method B: H::component()
+// Creates an Element that resolves during render
+H::div(children: [
+    H::component($counterFn, ['initial' => 5, 'key' => 'my-counter']),
+]);
 
 // Method C: Direct call (only for pure components without useState)
-$Greeting(['name' => 'World']); // Direct call OK
+$Greeting = fn(array $props): Element => H::div(children: "Hello, {$props['name']}!");
+$Greeting(['name' => 'World']); // OK - no state needed
 ```
 
-**Key differences:**
-- `H::component()`: Creates an Element that resolves during render, proper state management
-- `fc()`: Wraps a function for direct invocation with state support
-- Direct call: Only works for pure components (no useState)
+#### Class-based Components
 
-### useState
-
-```php
-[$state, $setState] = $this->useState($initialValue);
-
-// Examples
-[$count, $setCount] = $this->useState(0);
-[$todos, $setTodos] = $this->useState([]);
-[$user, $setUser] = $this->useState(['name' => 'John']);
-```
-
-### State Storage
-
-By default, component state is stored in PHP sessions and persists across page navigations. You can configure this behavior per component using the `storage` parameter:
+For more complex components that need lifecycle methods or dependency injection, you can use class-based components:
 
 ```php
 use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\Component;
-use Polidog\UsePhp\Storage\StorageType;
 
-// Session storage (default) - state persists across page navigations
 #[Component]
-class Counter extends BaseComponent
+class MyComponent extends BaseComponent
 {
     public function render(): Element
     {
         [$count, $setCount] = $this->useState(0);
-        // $count persists when user navigates away and comes back
         // ...
     }
 }
-
-// Memory storage - state resets on each page load
-#[Component(storage: StorageType::Memory)]
-class SearchForm extends BaseComponent
-{
-    public function render(): Element
-    {
-        [$query, $setQuery] = $this->useState('');
-        // $query resets to '' on page reload/navigation
-        // ...
-    }
-}
-
-// You can also use string values
-#[Component(storage: 'memory')]
-class Wizard extends BaseComponent { /* ... */ }
 ```
 
-**Storage Types:**
+### useState
 
-| Type | Behavior | Use Case |
-|------|----------|----------|
-| `session` (default) | State persists across page navigations | Counters, shopping carts, user preferences |
-| `memory` | State resets on each page load | Search forms, temporary UI state, wizards that should reset |
+```php
+use function Polidog\UsePhp\Runtime\useState;
+
+// In function components
+[$state, $setState] = useState($initialValue);
+
+// Examples
+[$count, $setCount] = useState(0);
+[$todos, $setTodos] = useState([]);
+[$user, $setUser] = useState(['name' => 'John']);
+
+// In class-based components
+[$state, $setState] = $this->useState($initialValue);
+```
 
 ### HTML Elements
 
@@ -315,54 +265,39 @@ H::table(children: [H::tr(children: [H::td(children: 'Cell')])]);
 H::video(src: 'movie.mp4', controls: true);
 ```
 
-### Multiple Components + Routing
+### Composing Components
 
 ```php
-<?php
-// public/index.php
+// Define reusable components
+$Button = fc(function(array $props): Element {
+    return H::button(
+        className: 'btn',
+        onClick: $props['onClick'] ?? null,
+        children: $props['children'] ?? ''
+    );
+}, 'button');
 
-use App\Components\{Counter, TodoList};
-use Polidog\UsePhp\UsePHP;
+$Card = fc(function(array $props): Element {
+    return H::div(
+        className: 'card',
+        children: [
+            H::h2(children: $props['title']),
+            H::p(children: $props['content']),
+        ]
+    );
+}, 'card');
 
-// Serve usephp.js
-if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
-    header('Content-Type: application/javascript');
-    readfile(__DIR__ . '/usephp.js');
-    exit;
-}
+// Compose them together
+$App = fc(function(array $props): Element {
+    [$count, $setCount] = useState(0);
 
-// Register components
-UsePHP::register(Counter::class);
-UsePHP::register(TodoList::class);
+    global $Button, $Card;
 
-// Handle POST actions
-$actionResult = UsePHP::handleAction();
-if ($actionResult !== null) {
-    echo $actionResult;
-    exit;
-}
-
-// Routing
-$path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
-$component = match ($path) {
-    '/', '/counter' => Counter::class,
-    '/todo' => TodoList::class,
-    default => Counter::class,
-};
-
-// Render
-$content = UsePHP::render($component);
-?>
-<!DOCTYPE html>
-<html>
-<head>
-    <title>usePHP Example</title>
-</head>
-<body>
-    <?= $content ?>
-    <script src="/usephp.js"></script>
-</body>
-</html>
+    return H::div(children: [
+        $Card(['title' => 'Counter', 'content' => "Count: $count"]),
+        $Button(['onClick' => fn() => $setCount($count + 1), 'children' => 'Increment']),
+    ]);
+}, 'app');
 ```
 
 ## Generated HTML
