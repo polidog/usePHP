@@ -26,6 +26,7 @@ require_once __DIR__ . '/components/TodoList.php';
 
 use App\Components\Counter;
 use App\Components\TodoList;
+use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\UsePHP;
 
 // ============================================
@@ -33,6 +34,12 @@ use Polidog\UsePhp\UsePHP;
 // ============================================
 UsePHP::register(Counter::class);
 UsePHP::register(TodoList::class);
+
+// ============================================
+// Snapshot security (optional but recommended)
+// ============================================
+// Set a secret key to prevent tampering with snapshot state
+UsePHP::setSnapshotSecret('your-secret-key-here');
 
 // ============================================
 // Handle POST action (for partial updates)
@@ -47,17 +54,43 @@ if ($actionResult !== null) {
 // Simple routing
 // ============================================
 $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
-$componentName = match ($path) {
-    '/', '/counter' => Counter::class,
-    '/todo' => TodoList::class,
-    default => Counter::class,
-};
 
 // ============================================
-// Render
+// Render based on route
 // ============================================
-$content = UsePHP::render($componentName);
-$title = ucfirst($componentName);
+$title = 'usePHP';
+$content = '';
+
+switch ($path) {
+    case '/':
+    case '/counter':
+        $title = 'Counter';
+        $content = UsePHP::render(Counter::class);
+        break;
+
+    case '/multi':
+        // Multiple counters with explicit keys using H class
+        // Keys ensure stable state even when order changes
+        $title = 'Multiple Counters';
+        $content = UsePHP::renderElement(
+            H::Fragment(children: [
+                H::h2(style: 'text-align:center;color:#666;', children: 'Counter A'),
+                UsePHP::createElement(Counter::class, 'counter-a'),
+                H::h2(style: 'text-align:center;color:#666;margin-top:30px;', children: 'Counter B'),
+                UsePHP::createElement(Counter::class, 'counter-b'),
+            ])
+        );
+        break;
+
+    case '/todo':
+        $title = 'Todo';
+        $content = UsePHP::render(TodoList::class);
+        break;
+
+    default:
+        $title = 'Counter';
+        $content = UsePHP::render(Counter::class);
+}
 ?>
 <!DOCTYPE html>
 <html lang="ja">
@@ -178,6 +211,7 @@ $title = ucfirst($componentName);
 <body>
     <nav>
         <a href="/counter">Counter</a>
+        <a href="/multi">Multi</a>
         <a href="/todo">Todo</a>
     </nav>
     <?= $content ?>

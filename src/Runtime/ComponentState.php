@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Runtime;
 
+use Polidog\UsePhp\Snapshot\SnapshotSerializer;
+use Polidog\UsePhp\Storage\SnapshotStorage;
 use Polidog\UsePhp\Storage\StateStorageInterface;
 use Polidog\UsePhp\Storage\StorageFactory;
 use Polidog\UsePhp\Storage\StorageType;
@@ -13,36 +15,77 @@ use Polidog\UsePhp\Storage\StorageType;
  */
 final class ComponentState
 {
-    private static ?self $instance = null;
+    /** @var array<string, self> Instance cache for multiple component support */
+    private static array $instances = [];
+
+    /** @var self|null Current active instance */
+    private static ?self $current = null;
+
     private string $componentId;
     private int $hookIndex = 0;
     private StateStorageInterface $storage;
+    private StorageType $storageType;
 
-    private function __construct(string $componentId, StateStorageInterface $storage)
+    private function __construct(string $componentId, StateStorageInterface $storage, StorageType $storageType)
     {
         $this->componentId = $componentId;
         $this->storage = $storage;
+        $this->storageType = $storageType;
     }
 
     public static function getInstance(string $componentId, ?StorageType $storageType = null): self
     {
-        if (self::$instance === null || self::$instance->componentId !== $componentId) {
-            $storage = StorageFactory::create($storageType ?? StorageType::Session);
-            self::$instance = new self($componentId, $storage);
+        // Use componentId only as cache key for simpler lookup
+        // This allows renderWithForm to find the correct state without knowing storageType
+        if (isset(self::$instances[$componentId])) {
+            self::$current = self::$instances[$componentId];
+            return self::$current;
         }
-        return self::$instance;
+
+        $type = $storageType ?? StorageType::Session;
+        $storage = StorageFactory::create($type);
+        self::$instances[$componentId] = new self($componentId, $storage, $type);
+
+        self::$current = self::$instances[$componentId];
+        return self::$current;
+    }
+
+    /**
+     * Create a ComponentState from a snapshot.
+     */
+    public static function fromSnapshot(Snapshot $snapshot): self
+    {
+        $componentId = $snapshot->getInstanceId();
+
+        $storage = StorageFactory::createSnapshotStorage();
+        $storage->initializeFromSnapshot($snapshot, $componentId);
+
+        $instance = new self($componentId, $storage, StorageType::Snapshot);
+        self::$instances[$componentId] = $instance;
+        self::$current = $instance;
+
+        return $instance;
     }
 
     public static function current(): ?self
     {
-        return self::$instance;
+        return self::$current;
     }
 
     public static function reset(): void
     {
-        if (self::$instance !== null) {
-            self::$instance->hookIndex = 0;
+        if (self::$current !== null) {
+            self::$current->hookIndex = 0;
         }
+    }
+
+    /**
+     * Clear all cached instances (useful for testing).
+     */
+    public static function clearInstances(): void
+    {
+        self::$instances = [];
+        self::$current = null;
     }
 
     public function getComponentId(): string
@@ -194,5 +237,55 @@ final class ComponentState
     private function getActionKey(string $actionId): string
     {
         return "usephp:{$this->componentId}:action:{$actionId}";
+    }
+
+    /**
+     * Check if this state uses snapshot storage.
+     */
+    public function isSnapshotStorage(): bool
+    {
+        return $this->storageType === StorageType::Snapshot;
+    }
+
+    /**
+     * Get the storage type.
+     */
+    public function getStorageType(): StorageType
+    {
+        return $this->storageType;
+    }
+
+    /**
+     * Create a snapshot from the current state.
+     *
+     * Only works with Snapshot storage type.
+     *
+     * @throws \LogicException If not using snapshot storage
+     */
+    public function createSnapshot(): Snapshot
+    {
+        if (!$this->storage instanceof SnapshotStorage) {
+            throw new \LogicException('createSnapshot() can only be called on snapshot storage');
+        }
+
+        $exported = $this->storage->exportState($this->componentId);
+
+        // Parse componentId to get name and key
+        $componentId = ComponentId::fromLegacy($this->componentId);
+
+        return new Snapshot(
+            $componentId->componentName,
+            $componentId->key,
+            $exported['state'],
+            $exported['effectDeps'],
+        );
+    }
+
+    /**
+     * Get the underlying storage instance.
+     */
+    public function getStorage(): StateStorageInterface
+    {
+        return $this->storage;
     }
 }

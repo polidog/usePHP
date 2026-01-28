@@ -24,10 +24,23 @@ final class StorageFactory
             self::$instances[$key] = match ($type) {
                 StorageType::Session => new SessionStorage(),
                 StorageType::Memory => new MemoryStorage(),
+                StorageType::Snapshot => new SnapshotStorage(),
             };
         }
 
         return self::$instances[$key];
+    }
+
+    /**
+     * Get or create a SnapshotStorage instance.
+     *
+     * This is a convenience method that provides type safety.
+     */
+    public static function createSnapshotStorage(): SnapshotStorage
+    {
+        $storage = self::create(StorageType::Snapshot);
+        assert($storage instanceof SnapshotStorage);
+        return $storage;
     }
 
     /**

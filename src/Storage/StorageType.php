@@ -18,4 +18,10 @@ enum StorageType: string
      * Memory storage - state is reset on each page load.
      */
     case Memory = 'memory';
+
+    /**
+     * Snapshot storage - state is embedded in HTML and sent with each request.
+     * Stateless on the server, state lives in the HTML snapshot.
+     */
+    case Snapshot = 'snapshot';
 }

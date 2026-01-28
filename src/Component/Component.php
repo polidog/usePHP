@@ -18,6 +18,11 @@ final class Component
     public function __construct(
         public ?string $name = null,
         StorageType|string $storage = StorageType::Session,
+        /**
+         * If true, requires an explicit key when rendering.
+         * This ensures stable component identification.
+         */
+        public bool $requireKey = false,
     ) {
         $this->storageType = $storage instanceof StorageType
             ? $storage

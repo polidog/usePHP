@@ -9,7 +9,13 @@ use Polidog\UsePhp\Component\Component;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
 
-#[Component]
+/**
+ * TodoList component with session storage (default).
+ *
+ * Using 'session' storage means state persists across page reloads
+ * within the same PHP session.
+ */
+#[Component(storage: 'session')]
 class TodoList extends BaseComponent
 {
     public function render(): Element

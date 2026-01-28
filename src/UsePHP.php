@@ -8,9 +8,15 @@ use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\ComponentInterface;
 use Polidog\UsePhp\Component\ComponentRegistry;
 use Polidog\UsePhp\Runtime\Action;
+use Polidog\UsePhp\Runtime\ComponentId;
 use Polidog\UsePhp\Runtime\ComponentState;
+use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\Runtime\Renderer;
+use Polidog\UsePhp\Runtime\Snapshot;
+use Polidog\UsePhp\Snapshot\SnapshotSerializer;
+use Polidog\UsePhp\Snapshot\SnapshotVerificationException;
+use Polidog\UsePhp\Storage\StorageType;
 
 /**
  * Main application class for usePHP.
@@ -21,6 +27,7 @@ final class UsePHP
     private static ?self $instance = null;
 
     private ComponentRegistry $registry;
+    private ?SnapshotSerializer $snapshotSerializer = null;
 
     private function __construct()
     {
@@ -62,11 +69,63 @@ final class UsePHP
 
     /**
      * Render a component and return HTML.
+     *
+     * @param string $componentName The registered component name
+     * @param string|null $key Optional explicit key for the component instance
      */
-    public static function render(string $componentName): string
+    public static function render(string $componentName, ?string $key = null): string
     {
         $instance = self::getInstance();
-        return $instance->doRenderComponent($componentName);
+        return $instance->doRenderComponent($componentName, $key);
+    }
+
+    /**
+     * Create a component Element (without rendering to HTML).
+     *
+     * Use this when you want to compose multiple components using H class,
+     * then render the entire tree with renderElement().
+     *
+     * @param string $componentName The registered component name
+     * @param string|null $key Optional explicit key for the component instance
+     */
+    public static function createElement(string $componentName, ?string $key = null): Element
+    {
+        $instance = self::getInstance();
+        return $instance->doCreateElement($componentName, $key);
+    }
+
+    /**
+     * Render an Element tree to HTML.
+     *
+     * Use this to render Element trees created with createElement() and H class.
+     */
+    public static function renderElement(Element $element): string
+    {
+        $instance = self::getInstance();
+        return $instance->doRenderElement($element);
+    }
+
+    /**
+     * Configure the snapshot serializer with a secret key.
+     *
+     * @param string $secretKey The secret key for snapshot verification
+     */
+    public static function setSnapshotSecret(string $secretKey): self
+    {
+        $instance = self::getInstance();
+        $instance->snapshotSerializer = new SnapshotSerializer($secretKey);
+        return $instance;
+    }
+
+    /**
+     * Get the snapshot serializer.
+     */
+    public function getSnapshotSerializer(): SnapshotSerializer
+    {
+        if ($this->snapshotSerializer === null) {
+            $this->snapshotSerializer = new SnapshotSerializer();
+        }
+        return $this->snapshotSerializer;
     }
 
     /**
@@ -90,6 +149,7 @@ final class UsePHP
     {
         $instanceId = $_POST['_usephp_component'] ?? null;
         $actionJson = $_POST['_usephp_action'] ?? null;
+        $snapshotJson = $_POST['_usephp_snapshot'] ?? null;
         $isPartial = isset($_SERVER['HTTP_X_USEPHP_PARTIAL']);
 
         if ($instanceId === null || $actionJson === null) {
@@ -105,14 +165,21 @@ final class UsePHP
             return "Component not found: {$componentName}";
         }
 
+        $storageType = $this->registry->getStorageType($componentName);
+
         // Parse and execute the action
         try {
             $actionData = json_decode($actionJson, true, 512, JSON_THROW_ON_ERROR);
             $action = Action::fromArray($actionData);
 
-            // Use instanceId for state to match the correct component instance
-            $storageType = $this->registry->getStorageType($componentName);
-            $state = ComponentState::getInstance($instanceId, $storageType);
+            // Handle snapshot storage - restore state from snapshot
+            if ($storageType === StorageType::Snapshot && $snapshotJson !== null) {
+                $snapshot = $this->getSnapshotSerializer()->deserialize($snapshotJson);
+                $state = ComponentState::fromSnapshot($snapshot);
+            } else {
+                // Use instanceId for state to match the correct component instance
+                $state = ComponentState::getInstance($instanceId, $storageType);
+            }
 
             if ($action->type === 'setState') {
                 $index = $action->payload['index'] ?? 0;
@@ -122,6 +189,9 @@ final class UsePHP
         } catch (\JsonException $e) {
             http_response_code(400);
             return 'Invalid action data';
+        } catch (SnapshotVerificationException $e) {
+            http_response_code(400);
+            return 'Invalid snapshot';
         }
 
         // Partial update (AJAX) - return only component HTML
@@ -136,9 +206,54 @@ final class UsePHP
     }
 
     /**
+     * Create a component Element with wrapper.
+     */
+    private function doCreateElement(string $componentName, ?string $key = null): Element
+    {
+        $component = $this->registry->create($componentName);
+
+        if ($component === null) {
+            return new Element('div', [], []);
+        }
+
+        $instanceId = RenderContext::nextInstanceId($componentName, $key);
+        $storageType = $this->registry->getStorageType($componentName);
+        $state = ComponentState::getInstance($instanceId, $storageType);
+        ComponentState::reset();
+
+        if ($component instanceof BaseComponent) {
+            $component->setComponentState($state);
+        }
+
+        // Get the element from component
+        $innerElement = $component->render();
+
+        // Build wrapper props
+        $props = ['data-usephp' => $instanceId];
+
+        // Add snapshot if using snapshot storage
+        if ($storageType === StorageType::Snapshot) {
+            $snapshot = $state->createSnapshot();
+            $snapshotJson = $this->getSnapshotSerializer()->serialize($snapshot);
+            $props['data-usephp-snapshot'] = $snapshotJson;
+        }
+
+        return new Element('div', $props, [$innerElement]);
+    }
+
+    /**
+     * Render an Element tree to HTML.
+     */
+    private function doRenderElement(Element $element): string
+    {
+        $renderer = new Renderer('_root_', $this->getSnapshotSerializer());
+        return $renderer->renderElement($element);
+    }
+
+    /**
      * Render a component with wrapper.
      */
-    private function doRenderComponent(string $componentName): string
+    private function doRenderComponent(string $componentName, ?string $key = null): string
     {
         $component = $this->registry->create($componentName);
 
@@ -149,7 +264,7 @@ final class UsePHP
         // Start a new render pass
         RenderContext::beginRender();
 
-        $instanceId = RenderContext::nextInstanceId($componentName);
+        $instanceId = RenderContext::nextInstanceId($componentName, $key);
         $storageType = $this->registry->getStorageType($componentName);
         $state = ComponentState::getInstance($instanceId, $storageType);
         ComponentState::reset();
@@ -158,7 +273,11 @@ final class UsePHP
             $component->setComponentState($state);
         }
 
-        $renderer = new Renderer($instanceId);
+        $renderer = new Renderer(
+            $instanceId,
+            $storageType === StorageType::Snapshot ? $this->getSnapshotSerializer() : null,
+            $storageType,
+        );
 
         return $renderer->render(fn() => $component->render());
     }
@@ -182,7 +301,11 @@ final class UsePHP
             $component->setComponentState($state);
         }
 
-        $renderer = new Renderer($instanceId);
+        $renderer = new Renderer(
+            $instanceId,
+            $storageType === StorageType::Snapshot ? $this->getSnapshotSerializer() : null,
+            $storageType,
+        );
 
         return $renderer->renderPartial(fn() => $component->render());
     }

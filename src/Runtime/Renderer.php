@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Runtime;
 
+use Polidog\UsePhp\Snapshot\SnapshotSerializer;
+use Polidog\UsePhp\Storage\StorageType;
+
 /**
  * Renders Element tree to HTML string.
  * Supports partial updates with minimal JavaScript.
@@ -16,10 +19,17 @@ final class Renderer
     ];
 
     private string $componentId;
+    private ?SnapshotSerializer $snapshotSerializer;
+    private ?StorageType $storageType;
 
-    public function __construct(string $componentId)
-    {
+    public function __construct(
+        string $componentId,
+        ?SnapshotSerializer $snapshotSerializer = null,
+        ?StorageType $storageType = null,
+    ) {
         $this->componentId = $componentId;
+        $this->snapshotSerializer = $snapshotSerializer;
+        $this->storageType = $storageType;
     }
 
     /**
@@ -29,18 +39,23 @@ final class Renderer
      */
     public function render(callable $component): string
     {
-        $state = ComponentState::getInstance($this->componentId);
+        $state = ComponentState::getInstance($this->componentId, $this->storageType);
         ComponentState::reset();
 
         $element = $component();
         $inner = $this->renderElement($element);
 
+        // Build attributes
+        $attrs = sprintf('data-usephp="%s"', htmlspecialchars($this->componentId, ENT_QUOTES, 'UTF-8'));
+
+        // Add snapshot attribute if using snapshot storage
+        if ($this->shouldEmbedSnapshot($state)) {
+            $snapshotJson = $this->serializeSnapshot($state);
+            $attrs .= sprintf(' data-usephp-snapshot=\'%s\'', htmlspecialchars($snapshotJson, ENT_QUOTES, 'UTF-8'));
+        }
+
         // Wrap with component container for partial updates
-        return sprintf(
-            '<div data-usephp="%s">%s</div>',
-            htmlspecialchars($this->componentId, ENT_QUOTES, 'UTF-8'),
-            $inner
-        );
+        return sprintf('<div %s>%s</div>', $attrs, $inner);
     }
 
     /**
@@ -50,12 +65,22 @@ final class Renderer
      */
     public function renderPartial(callable $component): string
     {
-        $state = ComponentState::getInstance($this->componentId);
+        $state = ComponentState::getInstance($this->componentId, $this->storageType);
         ComponentState::reset();
 
         $element = $component();
+        $inner = $this->renderElement($element);
 
-        return $this->renderElement($element);
+        // For snapshot storage, include hidden field with updated snapshot
+        if ($this->shouldEmbedSnapshot($state)) {
+            $snapshotJson = $this->serializeSnapshot($state);
+            $inner .= sprintf(
+                '<input type="hidden" name="_usephp_snapshot" value="%s" data-usephp-snapshot-update />',
+                htmlspecialchars($snapshotJson, ENT_QUOTES, 'UTF-8')
+            );
+        }
+
+        return $inner;
     }
 
     /**
@@ -117,18 +142,30 @@ final class Renderer
         $actionJson = htmlspecialchars($action->toJson(), ENT_QUOTES, 'UTF-8');
         // Prefer componentId from Action, fall back to Renderer's componentId
         $componentId = $action->componentId ?? $this->componentId;
-        $componentId = htmlspecialchars($componentId, ENT_QUOTES, 'UTF-8');
+        $componentIdEscaped = htmlspecialchars($componentId, ENT_QUOTES, 'UTF-8');
 
         $innerElement = in_array($tag, self::SELF_CLOSING_TAGS, true)
             ? "<{$tag}{$attributes} />"
             : "<{$tag}{$attributes}>{$children}</{$tag}>";
 
+        // Add snapshot hidden field if using snapshot storage
+        // Use action's componentId to get the correct state from cache
+        $snapshotField = '';
+        $state = ComponentState::getInstance($componentId);
+        if ($this->shouldEmbedSnapshot($state)) {
+            $snapshotJson = $this->serializeSnapshot($state);
+            $snapshotField = sprintf(
+                '<input type="hidden" name="_usephp_snapshot" value="%s" />',
+                htmlspecialchars($snapshotJson, ENT_QUOTES, 'UTF-8')
+            );
+        }
+
         // data-usephp-form enables JS enhancement, falls back to normal form if no JS
         return <<<HTML
             <form method="post" data-usephp-form style="display:inline;">
-            <input type="hidden" name="_usephp_component" value="{$componentId}" />
+            <input type="hidden" name="_usephp_component" value="{$componentIdEscaped}" />
             <input type="hidden" name="_usephp_action" value="{$actionJson}" />
-            {$innerElement}
+            {$snapshotField}{$innerElement}
             </form>
             HTML;
     }
@@ -189,5 +226,29 @@ final class Renderer
         }
 
         return $html;
+    }
+
+    /**
+     * Check if snapshot should be embedded in the output.
+     */
+    private function shouldEmbedSnapshot(ComponentState $state): bool
+    {
+        // State must actually be using snapshot storage to create snapshots
+        return $state->isSnapshotStorage();
+    }
+
+    /**
+     * Serialize the current state as a snapshot JSON.
+     */
+    private function serializeSnapshot(ComponentState $state): string
+    {
+        $snapshot = $state->createSnapshot();
+
+        if ($this->snapshotSerializer !== null) {
+            return $this->snapshotSerializer->serialize($snapshot);
+        }
+
+        // Use default serializer without secret key
+        return $snapshot->toJson();
     }
 }

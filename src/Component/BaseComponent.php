@@ -67,6 +67,7 @@ abstract class BaseComponent implements ComponentInterface
         $reflection = new \ReflectionClass(static::class);
         $attributes = $reflection->getAttributes(Component::class);
 
-        return array_first($attributes)?->newInstance()->name ?? static::class;
+        $first = $attributes[0] ?? null;
+        return $first?->newInstance()->name ?? static::class;
     }
 }

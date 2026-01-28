@@ -9,7 +9,13 @@ use Polidog\UsePhp\Component\Component;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
 
-#[Component(storage: 'memory')]
+/**
+ * Counter component with snapshot storage.
+ *
+ * Using 'snapshot' storage means state is embedded in the HTML
+ * and sent with each request - completely stateless on the server.
+ */
+#[Component(storage: 'snapshot')]
 class Counter extends BaseComponent
 {
     public function render(): Element

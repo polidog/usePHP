@@ -21,22 +21,22 @@ final readonly class Element
     ) {}
 
     /**
-     * Create a new Element with updated props (PHP 8.5 Clone With).
+     * Create a new Element with updated props.
      *
      * @param array<string, mixed> $props
      */
     public function withProps(array $props): self
     {
-        return clone($this, ['props' => $props]);
+        return new self($this->type, $props, $this->children);
     }
 
     /**
-     * Create a new Element with updated children (PHP 8.5 Clone With).
+     * Create a new Element with updated children.
      *
      * @param array<Element|string> $children
      */
     public function withChildren(array $children): self
     {
-        return clone($this, ['children' => $children]);
+        return new self($this->type, $this->props, $children);
     }
 }

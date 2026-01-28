@@ -16,7 +16,7 @@ final class RenderContext
     /** @var array<string, int> Component class name => instance count (legacy, flat) */
     private array $instanceCounts = [];
 
-    /** @var list<string> Stack of component IDs being rendered */
+    /** @var list<ComponentId> Stack of ComponentIds being rendered */
     private array $componentStack = [];
 
     private function __construct() {}
@@ -44,13 +44,27 @@ final class RenderContext
      *
      * @param string $componentName The component class/name
      * @param string|null $key Optional explicit key from props
-     * @return string Unique instance identifier (e.g., "Counter#0")
+     * @return string Unique instance identifier (e.g., "Counter#0" for legacy format)
      */
     public static function beginComponent(string $componentName, ?string $key = null): string
     {
-        $instanceId = self::nextInstanceId($componentName, $key);
-        self::getInstance()->componentStack[] = $instanceId;
-        return $instanceId;
+        $componentId = self::createComponentId($componentName, $key);
+        self::getInstance()->componentStack[] = $componentId;
+        return $componentId->toLegacyString();
+    }
+
+    /**
+     * Begin rendering a component with new format.
+     *
+     * @param string $componentName The component class/name
+     * @param string|null $key Optional explicit key from props
+     * @return ComponentId The component identifier
+     */
+    public static function beginComponentWithId(string $componentName, ?string $key = null): ComponentId
+    {
+        $componentId = self::createComponentId($componentName, $key);
+        self::getInstance()->componentStack[] = $componentId;
+        return $componentId;
     }
 
     /**
@@ -65,22 +79,44 @@ final class RenderContext
     }
 
     /**
-     * Get the current component ID being rendered.
+     * Get the current component ID being rendered (legacy string format).
      *
      * @return string|null The current component ID, or null if not in a component
      */
     public static function currentComponentId(): ?string
+    {
+        $componentId = self::currentComponent();
+        return $componentId?->toLegacyString();
+    }
+
+    /**
+     * Get the current ComponentId object.
+     *
+     * @return ComponentId|null The current ComponentId, or null if not in a component
+     */
+    public static function currentComponent(): ?ComponentId
     {
         $stack = self::getInstance()->componentStack;
         return empty($stack) ? null : end($stack);
     }
 
     /**
-     * Get the parent component ID.
+     * Get the parent component ID (legacy string format).
      *
      * @return string|null The parent component ID, or null if at root
      */
     public static function parentComponentId(): ?string
+    {
+        $componentId = self::parentComponent();
+        return $componentId?->toLegacyString();
+    }
+
+    /**
+     * Get the parent ComponentId object.
+     *
+     * @return ComponentId|null The parent ComponentId, or null if at root
+     */
+    public static function parentComponent(): ?ComponentId
     {
         $stack = self::getInstance()->componentStack;
         $count = count($stack);
@@ -92,21 +128,38 @@ final class RenderContext
      * If a key is provided, use that instead of auto-generated ID.
      * Uses global counting to ensure unique IDs across the entire render tree.
      *
+     * @deprecated Use createComponentId() instead
+     *
      * @param string $componentName The component class/name
      * @param string|null $key Optional explicit key from props
      * @return string Unique instance identifier (e.g., "Counter#0" or "Counter#my-key")
      */
     public static function nextInstanceId(string $componentName, ?string $key = null): string
     {
+        return self::createComponentId($componentName, $key)->toLegacyString();
+    }
+
+    /**
+     * Create a ComponentId for a component.
+     *
+     * @param string $componentName The component class/name
+     * @param string|null $key Optional explicit key
+     * @return ComponentId The component identifier
+     */
+    public static function createComponentId(string $componentName, ?string $key = null): ComponentId
+    {
+        $context = self::getInstance();
+        $parent = self::currentComponent();
+
         if ($key !== null) {
-            return $componentName . '#' . $key;
+            return ComponentId::create($componentName, $key, $parent);
         }
 
-        $context = self::getInstance();
+        // Auto-generate numeric key
         $context->instanceCounts[$componentName] ??= 0;
         $index = $context->instanceCounts[$componentName]++;
 
-        return $componentName . '#' . $index;
+        return ComponentId::createWithIndex($componentName, $index, $parent);
     }
 
     /**
