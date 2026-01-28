@@ -13,6 +13,9 @@ final class RenderContext
 {
     private static ?self $instance = null;
 
+    /** @var \Polidog\UsePhp\UsePHP|null Current app instance during rendering */
+    private static ?\Polidog\UsePhp\UsePHP $app = null;
+
     /** @var array<string, int> Component class name => instance count (legacy, flat) */
     private array $instanceCounts = [];
 
@@ -20,6 +23,30 @@ final class RenderContext
     private array $componentStack = [];
 
     private function __construct() {}
+
+    /**
+     * Set the current app instance for rendering.
+     */
+    public static function setApp(\Polidog\UsePhp\UsePHP $app): void
+    {
+        self::$app = $app;
+    }
+
+    /**
+     * Get the current app instance.
+     */
+    public static function getApp(): ?\Polidog\UsePhp\UsePHP
+    {
+        return self::$app;
+    }
+
+    /**
+     * Clear the current app instance.
+     */
+    public static function clearApp(): void
+    {
+        self::$app = null;
+    }
 
     public static function getInstance(): self
     {

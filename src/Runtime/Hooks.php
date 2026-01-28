@@ -6,8 +6,6 @@ namespace Polidog\UsePhp\Runtime;
 
 use function Polidog\UsePhp\Html\getFunctionComponentName;
 
-use Polidog\UsePhp\UsePHP;
-
 /**
  * React-like useState hook that stores state server-side.
  *
@@ -123,8 +121,13 @@ function fc(callable $component, ?string $key = null): callable
  */
 function useRouter(): array
 {
-    $router = UsePHP::getRouter();
-    $currentMatch = UsePHP::getCurrentMatch();
+    $app = RenderContext::getApp();
+    if ($app === null) {
+        throw new \RuntimeException('useRouter() must be called within a render context');
+    }
+
+    $router = $app->getRouter();
+    $currentMatch = $app->getCurrentMatch();
     $currentUrl = $router->getCurrentUrl();
 
     return [

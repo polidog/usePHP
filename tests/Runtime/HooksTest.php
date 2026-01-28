@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Router\SimpleRouter;
 use Polidog\UsePhp\Runtime\Element;
+use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\Runtime\Renderer;
 
 use function Polidog\UsePhp\Runtime\useEffect;
@@ -30,6 +31,7 @@ class HooksTest extends TestCase
     protected function tearDown(): void
     {
         $_SESSION = [];
+        RenderContext::clearApp();
     }
 
     public function testUseEffectRunsOnMount(): void
@@ -192,7 +194,10 @@ class HooksTest extends TestCase
         $router = new SimpleRouter();
         $router->get('/', 'HomeComponent')->name('home');
         $router->get('/users/{id}', 'UserComponent')->name('user.show');
-        UsePHP::setRouter($router);
+
+        $app = new UsePHP();
+        $app->setRouter($router);
+        RenderContext::setApp($app);
 
         $result = useRouter();
 
@@ -211,7 +216,10 @@ class HooksTest extends TestCase
     {
         $router = new SimpleRouter();
         $router->get('/users/{id}', 'UserComponent')->name('user.show');
-        UsePHP::setRouter($router);
+
+        $app = new UsePHP();
+        $app->setRouter($router);
+        RenderContext::setApp($app);
 
         $result = useRouter();
         $url = $result['navigate']('user.show', ['id' => '42']);

@@ -29,40 +29,42 @@ use App\Components\Counter;
 use App\Components\TodoList;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Router\RequestContext;
-use Polidog\UsePhp\Router\RouteGroup;
 use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\UsePHP;
 
-use function Polidog\UsePhp\Runtime\useRouter;
+// ============================================
+// Application setup
+// ============================================
+$app = new UsePHP();
 
 // ============================================
 // Component registration
 // ============================================
-UsePHP::register(Counter::class);
-UsePHP::register(TodoList::class);
+$app->register(Counter::class);
+$app->register(TodoList::class);
 
 // ============================================
 // Snapshot security (optional but recommended)
 // ============================================
-UsePHP::setSnapshotSecret('your-secret-key-here');
+$app->setSnapshotSecret('your-secret-key-here');
 
 // ============================================
 // Router configuration
 // ============================================
-$router = UsePHP::getRouter();
+$router = $app->getRouter();
 
 // Home / Counter page
 $router->get('/', Counter::class)->name('home');
 $router->get('/counter', Counter::class)->name('counter');
 
 // Multiple counters page
-$router->get('/multi', function (array $params, RequestContext $request): Element {
+$router->get('/multi', function (array $params, RequestContext $request) use ($app): Element {
     return H::Fragment(children: [
         H::h2(style: 'text-align:center;color:#666;', children: 'Counter A'),
-        UsePHP::createElement(Counter::class, 'counter-a'),
+        $app->createElement(Counter::class, 'counter-a'),
         H::h2(style: 'text-align:center;color:#666;margin-top:30px;', children: 'Counter B'),
-        UsePHP::createElement(Counter::class, 'counter-b'),
+        $app->createElement(Counter::class, 'counter-b'),
     ]);
 })->name('multi');
 
@@ -257,7 +259,7 @@ $match = $router->match($request);
 
 // Handle POST actions first
 if ($request->isPost() && isset($_POST['_usephp_action'])) {
-    $html = UsePHP::handleAction();
+    $html = $app->handleAction();
     if ($html !== null) {
         echo $html;
         exit;
@@ -289,12 +291,12 @@ $handler = $match->handler;
 
 if (is_string($handler) && class_exists($handler)) {
     // Class-based component
-    $content = UsePHP::render($handler);
+    $content = $app->render($handler);
 } elseif (is_callable($handler)) {
     // Callable handler
     $result = $handler($match->params, $request);
     if ($result instanceof Element) {
-        $content = UsePHP::renderElement($result);
+        $content = $app->renderElement($result);
     } else {
         $content = (string) $result;
     }

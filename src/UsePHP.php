@@ -29,27 +29,14 @@ use Polidog\UsePhp\Storage\StorageType;
  */
 final class UsePHP
 {
-    private static ?self $instance = null;
-
     private ComponentRegistry $registry;
     private ?SnapshotSerializer $snapshotSerializer = null;
     private ?RouterInterface $router = null;
     private ?RouteMatch $currentMatch = null;
 
-    private function __construct()
+    public function __construct()
     {
         $this->registry = new ComponentRegistry();
-    }
-
-    /**
-     * Get the singleton instance.
-     */
-    public static function getInstance(): self
-    {
-        if (self::$instance === null) {
-            self::$instance = new self();
-        }
-        return self::$instance;
     }
 
     /**
@@ -57,11 +44,10 @@ final class UsePHP
      *
      * @param class-string<ComponentInterface> $className
      */
-    public static function register(string $className): self
+    public function register(string $className): self
     {
-        $instance = self::getInstance();
-        $instance->registry->register($className);
-        return $instance;
+        $this->registry->register($className);
+        return $this;
     }
 
     /**
@@ -70,10 +56,9 @@ final class UsePHP
      * @param string $componentName The registered component name
      * @param string|null $key Optional explicit key for the component instance
      */
-    public static function render(string $componentName, ?string $key = null): string
+    public function render(string $componentName, ?string $key = null): string
     {
-        $instance = self::getInstance();
-        return $instance->doRenderComponent($componentName, $key);
+        return $this->doRenderComponent($componentName, $key);
     }
 
     /**
@@ -85,10 +70,9 @@ final class UsePHP
      * @param string $componentName The registered component name
      * @param string|null $key Optional explicit key for the component instance
      */
-    public static function createElement(string $componentName, ?string $key = null): Element
+    public function createElement(string $componentName, ?string $key = null): Element
     {
-        $instance = self::getInstance();
-        return $instance->doCreateElement($componentName, $key);
+        return $this->doCreateElement($componentName, $key);
     }
 
     /**
@@ -96,10 +80,9 @@ final class UsePHP
      *
      * Use this to render Element trees created with createElement() and H class.
      */
-    public static function renderElement(Element $element): string
+    public function renderElement(Element $element): string
     {
-        $instance = self::getInstance();
-        return $instance->doRenderElement($element);
+        return $this->doRenderElement($element);
     }
 
     /**
@@ -107,11 +90,10 @@ final class UsePHP
      *
      * @param string $secretKey The secret key for snapshot verification
      */
-    public static function setSnapshotSecret(string $secretKey): self
+    public function setSnapshotSecret(string $secretKey): self
     {
-        $instance = self::getInstance();
-        $instance->snapshotSerializer = new SnapshotSerializer($secretKey);
-        return $instance;
+        $this->snapshotSerializer = new SnapshotSerializer($secretKey);
+        return $this;
     }
 
     /**
@@ -128,42 +110,39 @@ final class UsePHP
     /**
      * Set a custom router.
      */
-    public static function setRouter(RouterInterface $router): self
+    public function setRouter(RouterInterface $router): self
     {
-        $instance = self::getInstance();
-        $instance->router = $router;
-        return $instance;
+        $this->router = $router;
+        return $this;
     }
 
     /**
      * Get the current router, creating a SimpleRouter if none set.
      */
-    public static function getRouter(): RouterInterface
+    public function getRouter(): RouterInterface
     {
-        $instance = self::getInstance();
-        if ($instance->router === null) {
-            $instance->router = new SimpleRouter($instance->getSnapshotSerializer());
+        if ($this->router === null) {
+            $this->router = new SimpleRouter($this->getSnapshotSerializer());
         }
-        return $instance->router;
+        return $this->router;
     }
 
     /**
      * Disable routing (use NullRouter).
      * Use this when integrating with frameworks like Laravel or Symfony.
      */
-    public static function disableRouter(): self
+    public function disableRouter(): self
     {
-        $instance = self::getInstance();
-        $instance->router = new NullRouter();
-        return $instance;
+        $this->router = new NullRouter();
+        return $this;
     }
 
     /**
      * Get the current route match.
      */
-    public static function getCurrentMatch(): ?RouteMatch
+    public function getCurrentMatch(): ?RouteMatch
     {
-        return self::getInstance()->currentMatch;
+        return $this->currentMatch;
     }
 
     /**
@@ -173,50 +152,55 @@ final class UsePHP
      *
      * @param RequestContext|null $request Optional request context (defaults to fromGlobals)
      */
-    public static function run(?RequestContext $request = null): void
+    public function run(?RequestContext $request = null): void
     {
-        $instance = self::getInstance();
-        $request ??= RequestContext::fromGlobals();
+        RenderContext::setApp($this);
 
-        // Handle POST actions first
-        if ($request->isPost() && isset($_POST['_usephp_action'])) {
-            $html = $instance->doHandleAction();
-            echo $html;
-            return;
-        }
+        try {
+            $request ??= RequestContext::fromGlobals();
 
-        $router = self::getRouter();
-        $match = $router->match($request);
-
-        if ($match === null) {
-            http_response_code(404);
-            echo '404 Not Found';
-            return;
-        }
-
-        $instance->currentMatch = $match;
-
-        // Handle snapshot restoration for persistent/session behaviors
-        $instance->handleSnapshotRestoration($request, $match);
-
-        // Render the component
-        $handler = $match->handler;
-        $html = '';
-
-        if (is_string($handler) && class_exists($handler)) {
-            // Component class
-            $html = self::render($handler);
-        } elseif (is_callable($handler)) {
-            // Callable handler
-            $result = $handler($match->params, $request);
-            if ($result instanceof Element) {
-                $html = self::renderElement($result);
-            } else {
-                $html = (string) $result;
+            // Handle POST actions first
+            if ($request->isPost() && isset($_POST['_usephp_action'])) {
+                $html = $this->doHandleAction();
+                echo $html;
+                return;
             }
-        }
 
-        echo $html;
+            $router = $this->getRouter();
+            $match = $router->match($request);
+
+            if ($match === null) {
+                http_response_code(404);
+                echo '404 Not Found';
+                return;
+            }
+
+            $this->currentMatch = $match;
+
+            // Handle snapshot restoration for persistent/session behaviors
+            $this->handleSnapshotRestoration($request, $match);
+
+            // Render the component
+            $handler = $match->handler;
+            $html = '';
+
+            if (is_string($handler) && class_exists($handler)) {
+                // Component class
+                $html = $this->render($handler);
+            } elseif (is_callable($handler)) {
+                // Callable handler
+                $result = $handler($match->params, $request);
+                if ($result instanceof Element) {
+                    $html = $this->renderElement($result);
+                } else {
+                    $html = (string) $result;
+                }
+            }
+
+            echo $html;
+        } finally {
+            RenderContext::clearApp();
+        }
     }
 
     /**
@@ -278,14 +262,13 @@ final class UsePHP
      * @param array<string, string> $params Route parameters
      * @param Snapshot|null $snapshot Optional snapshot to pass
      */
-    public static function redirectTo(string $routeName, array $params = [], ?Snapshot $snapshot = null): never
+    public function redirectTo(string $routeName, array $params = [], ?Snapshot $snapshot = null): never
     {
-        $instance = self::getInstance();
-        $router = self::getRouter();
+        $router = $this->getRouter();
 
         $url = $router->generate($routeName, $params);
 
-        if ($snapshot !== null && $instance->currentMatch?->snapshotBehavior === SnapshotBehavior::Persistent) {
+        if ($snapshot !== null && $this->currentMatch?->snapshotBehavior === SnapshotBehavior::Persistent) {
             $url = $router->createRedirectUrl($url, $snapshot);
         }
 
@@ -297,14 +280,19 @@ final class UsePHP
      * Handle a POST action and return the partial HTML.
      * Returns null if not a valid action request.
      */
-    public static function handleAction(): ?string
+    public function handleAction(): ?string
     {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !isset($_POST['_usephp_action'])) {
             return null;
         }
 
-        $instance = self::getInstance();
-        return $instance->doHandleAction();
+        RenderContext::setApp($this);
+
+        try {
+            return $this->doHandleAction();
+        } finally {
+            RenderContext::clearApp();
+        }
     }
 
     /**
@@ -412,35 +400,41 @@ final class UsePHP
      */
     private function doCreateElement(string $componentName, ?string $key = null): Element
     {
-        $component = $this->registry->create($componentName);
+        RenderContext::setApp($this);
 
-        if ($component === null) {
-            return new Element('div', [], []);
+        try {
+            $component = $this->registry->create($componentName);
+
+            if ($component === null) {
+                return new Element('div', [], []);
+            }
+
+            $instanceId = RenderContext::nextInstanceId($componentName, $key);
+            $storageType = $this->registry->getStorageType($componentName);
+            $state = ComponentState::getInstance($instanceId, $storageType);
+            ComponentState::reset();
+
+            if ($component instanceof BaseComponent) {
+                $component->setComponentState($state);
+            }
+
+            // Get the element from component
+            $innerElement = $component->render();
+
+            // Build wrapper props
+            $props = ['data-usephp' => $instanceId];
+
+            // Add snapshot if using snapshot storage
+            if ($storageType === StorageType::Snapshot) {
+                $snapshot = $state->createSnapshot();
+                $snapshotJson = $this->getSnapshotSerializer()->serialize($snapshot);
+                $props['data-usephp-snapshot'] = $snapshotJson;
+            }
+
+            return new Element('div', $props, [$innerElement]);
+        } finally {
+            RenderContext::clearApp();
         }
-
-        $instanceId = RenderContext::nextInstanceId($componentName, $key);
-        $storageType = $this->registry->getStorageType($componentName);
-        $state = ComponentState::getInstance($instanceId, $storageType);
-        ComponentState::reset();
-
-        if ($component instanceof BaseComponent) {
-            $component->setComponentState($state);
-        }
-
-        // Get the element from component
-        $innerElement = $component->render();
-
-        // Build wrapper props
-        $props = ['data-usephp' => $instanceId];
-
-        // Add snapshot if using snapshot storage
-        if ($storageType === StorageType::Snapshot) {
-            $snapshot = $state->createSnapshot();
-            $snapshotJson = $this->getSnapshotSerializer()->serialize($snapshot);
-            $props['data-usephp-snapshot'] = $snapshotJson;
-        }
-
-        return new Element('div', $props, [$innerElement]);
     }
 
     /**
@@ -448,8 +442,14 @@ final class UsePHP
      */
     private function doRenderElement(Element $element): string
     {
-        $renderer = new Renderer('_root_', $this->getSnapshotSerializer());
-        return $renderer->renderElement($element);
+        RenderContext::setApp($this);
+
+        try {
+            $renderer = new Renderer('_root_', $this->getSnapshotSerializer());
+            return $renderer->renderElement($element);
+        } finally {
+            RenderContext::clearApp();
+        }
     }
 
     /**
@@ -457,31 +457,37 @@ final class UsePHP
      */
     private function doRenderComponent(string $componentName, ?string $key = null): string
     {
-        $component = $this->registry->create($componentName);
+        RenderContext::setApp($this);
 
-        if ($component === null) {
-            return '';
+        try {
+            $component = $this->registry->create($componentName);
+
+            if ($component === null) {
+                return '';
+            }
+
+            // Start a new render pass
+            RenderContext::beginRender();
+
+            $instanceId = RenderContext::nextInstanceId($componentName, $key);
+            $storageType = $this->registry->getStorageType($componentName);
+            $state = ComponentState::getInstance($instanceId, $storageType);
+            ComponentState::reset();
+
+            if ($component instanceof BaseComponent) {
+                $component->setComponentState($state);
+            }
+
+            $renderer = new Renderer(
+                $instanceId,
+                $storageType === StorageType::Snapshot ? $this->getSnapshotSerializer() : null,
+                $storageType,
+            );
+
+            return $renderer->render(fn() => $component->render());
+        } finally {
+            RenderContext::clearApp();
         }
-
-        // Start a new render pass
-        RenderContext::beginRender();
-
-        $instanceId = RenderContext::nextInstanceId($componentName, $key);
-        $storageType = $this->registry->getStorageType($componentName);
-        $state = ComponentState::getInstance($instanceId, $storageType);
-        ComponentState::reset();
-
-        if ($component instanceof BaseComponent) {
-            $component->setComponentState($state);
-        }
-
-        $renderer = new Renderer(
-            $instanceId,
-            $storageType === StorageType::Snapshot ? $this->getSnapshotSerializer() : null,
-            $storageType,
-        );
-
-        return $renderer->render(fn() => $component->render());
     }
 
     /**
