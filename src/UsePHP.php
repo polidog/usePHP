@@ -8,7 +8,6 @@ use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\ComponentInterface;
 use Polidog\UsePhp\Component\ComponentRegistry;
 use Polidog\UsePhp\Runtime\Action;
-use Polidog\UsePhp\Runtime\ComponentId;
 use Polidog\UsePhp\Runtime\ComponentState;
 use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\RenderContext;

@@ -8,8 +8,8 @@ use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\ComponentState;
 use Polidog\UsePhp\Runtime\Element;
-use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\Runtime\Renderable;
+use Polidog\UsePhp\Runtime\RenderContext;
 
 /**
  * H class - Hyperscript-style static methods for all HTML elements.

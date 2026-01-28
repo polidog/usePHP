@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Runtime;
 
-use Polidog\UsePhp\Snapshot\SnapshotSerializer;
 use Polidog\UsePhp\Storage\SnapshotStorage;
 use Polidog\UsePhp\Storage\StateStorageInterface;
 use Polidog\UsePhp\Storage\StorageFactory;

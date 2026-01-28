@@ -5,13 +5,17 @@ declare(strict_types=1);
 namespace Polidog\UsePhp\Tests\Runtime;
 
 use PHPUnit\Framework\TestCase;
+
+use function Polidog\UsePhp\Html\getFunctionComponentName;
+
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\ComponentState;
 use Polidog\UsePhp\Runtime\Element;
+
+use function Polidog\UsePhp\Runtime\fc;
+
 use Polidog\UsePhp\Runtime\RenderContext;
 
-use function Polidog\UsePhp\Html\getFunctionComponentName;
-use function Polidog\UsePhp\Runtime\fc;
 use function Polidog\UsePhp\Runtime\useEffect;
 use function Polidog\UsePhp\Runtime\useState;
 

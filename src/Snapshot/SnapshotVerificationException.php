@@ -7,6 +7,4 @@ namespace Polidog\UsePhp\Snapshot;
 /**
  * Exception thrown when snapshot verification fails.
  */
-final class SnapshotVerificationException extends \RuntimeException
-{
-}
+final class SnapshotVerificationException extends \RuntimeException {}
