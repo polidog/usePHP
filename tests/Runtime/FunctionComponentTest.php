@@ -19,6 +19,8 @@ use Polidog\UsePhp\Runtime\RenderContext;
 use function Polidog\UsePhp\Runtime\useEffect;
 use function Polidog\UsePhp\Runtime\useState;
 
+use Polidog\UsePhp\Storage\StorageType;
+
 class FunctionComponentTest extends TestCase
 {
     protected function setUp(): void
@@ -81,8 +83,14 @@ class FunctionComponentTest extends TestCase
 
         $element = $Counter(['initial' => 10]);
 
+        // fc() returns a wrapper div with data-usephp attribute
         $this->assertEquals('div', $element->type);
-        $this->assertEquals(['Count: 10'], $element->children);
+        $this->assertArrayHasKey('data-usephp', $element->props);
+
+        // The inner element is the first child
+        $inner = $element->children[0];
+        $this->assertEquals('div', $inner->type);
+        $this->assertEquals(['Count: 10'], $inner->children);
     }
 
     public function testKeyBasedStateSeparation(): void
@@ -157,11 +165,13 @@ class FunctionComponentTest extends TestCase
 
         // First call
         $element1 = $Counter(['initial' => 100]);
-        $this->assertEquals(['Count: 100'], $element1->children);
+        $inner1 = $element1->children[0];
+        $this->assertEquals(['Count: 100'], $inner1->children);
 
         // Second call with same key should get same state
         $element2 = $Counter(['initial' => 200]);
-        $this->assertEquals(['Count: 100'], $element2->children);
+        $inner2 = $element2->children[0];
+        $this->assertEquals(['Count: 100'], $inner2->children);
     }
 
     public function testFcWrapperWithPropsKey(): void
@@ -173,15 +183,18 @@ class FunctionComponentTest extends TestCase
 
         // First call with key 'a'
         $element1 = $Counter(['initial' => 10, 'key' => 'a']);
-        $this->assertEquals(['Count: 10'], $element1->children);
+        $inner1 = $element1->children[0];
+        $this->assertEquals(['Count: 10'], $inner1->children);
 
         // Second call with key 'b' gets different state
         $element2 = $Counter(['initial' => 20, 'key' => 'b']);
-        $this->assertEquals(['Count: 20'], $element2->children);
+        $inner2 = $element2->children[0];
+        $this->assertEquals(['Count: 20'], $inner2->children);
 
         // Third call with key 'a' gets same state as first
         $element3 = $Counter(['initial' => 30, 'key' => 'a']);
-        $this->assertEquals(['Count: 10'], $element3->children);
+        $inner3 = $element3->children[0];
+        $this->assertEquals(['Count: 10'], $inner3->children);
     }
 
     public function testMultipleUseStateInFunctionComponent(): void
@@ -276,7 +289,8 @@ class FunctionComponentTest extends TestCase
 
         // First render
         $element1 = $Counter([]);
-        $this->assertEquals(['Count: 0'], $element1->children);
+        $inner1 = $element1->children[0];
+        $this->assertEquals(['Count: 0'], $inner1->children);
 
         // Simulate state change via session
         $_SESSION['usephp:FC@FunctionComponentTest.php:' . __LINE__ . '#persistence-test:state:0'] = 42;
@@ -289,7 +303,8 @@ class FunctionComponentTest extends TestCase
         }, 'persistence-test-2');
 
         $element2 = $Counter2([]);
-        $this->assertEquals(['Count: 0'], $element2->children);
+        $inner2 = $element2->children[0];
+        $this->assertEquals(['Count: 0'], $inner2->children);
     }
 
     public function testMultipleFunctionComponentsInFragment(): void
@@ -342,5 +357,85 @@ class FunctionComponentTest extends TestCase
         ]));
 
         $this->assertCount(0, $element2->children);
+    }
+
+    public function testFcWithSnapshotStorage(): void
+    {
+        $Counter = fc(function (array $props): Element {
+            [$count, $setCount] = useState($props['initial'] ?? 0);
+            return H::div(children: "Count: $count");
+        }, 'snapshot-counter', StorageType::Snapshot);
+
+        $element = $Counter(['initial' => 5]);
+
+        // fc() with snapshot storage returns a wrapper div with data-usephp-snapshot attribute
+        $this->assertEquals('div', $element->type);
+        $this->assertArrayHasKey('data-usephp', $element->props);
+        $this->assertArrayHasKey('data-usephp-snapshot', $element->props);
+
+        // The snapshot should be valid JSON
+        $snapshotJson = $element->props['data-usephp-snapshot'];
+        $this->assertJson($snapshotJson);
+
+        // The inner element is the first child
+        $inner = $element->children[0];
+        $this->assertEquals('div', $inner->type);
+        $this->assertEquals(['Count: 5'], $inner->children);
+    }
+
+    public function testFcWithSessionStorageNoSnapshot(): void
+    {
+        $Counter = fc(function (array $props): Element {
+            [$count, $setCount] = useState($props['initial'] ?? 0);
+            return H::div(children: "Count: $count");
+        }, 'session-counter', StorageType::Session);
+
+        $element = $Counter(['initial' => 10]);
+
+        // fc() with session storage returns a wrapper div without data-usephp-snapshot
+        $this->assertEquals('div', $element->type);
+        $this->assertArrayHasKey('data-usephp', $element->props);
+        $this->assertArrayNotHasKey('data-usephp-snapshot', $element->props);
+
+        // The inner element is the first child
+        $inner = $element->children[0];
+        $this->assertEquals(['Count: 10'], $inner->children);
+    }
+
+    public function testFcWithMemoryStorage(): void
+    {
+        $Counter = fc(function (array $props): Element {
+            [$count, $setCount] = useState($props['initial'] ?? 0);
+            return H::div(children: "Count: $count");
+        }, 'memory-counter', StorageType::Memory);
+
+        $element = $Counter(['initial' => 15]);
+
+        // fc() with memory storage returns a wrapper div without data-usephp-snapshot
+        $this->assertEquals('div', $element->type);
+        $this->assertArrayHasKey('data-usephp', $element->props);
+        $this->assertArrayNotHasKey('data-usephp-snapshot', $element->props);
+
+        // The inner element is the first child
+        $inner = $element->children[0];
+        $this->assertEquals(['Count: 15'], $inner->children);
+    }
+
+    public function testFcSnapshotContainsCorrectState(): void
+    {
+        $Counter = fc(function (array $props): Element {
+            [$count, $setCount] = useState(42);
+            [$name, $setName] = useState('test');
+            return H::div(children: "Count: $count, Name: $name");
+        }, 'multi-state', StorageType::Snapshot);
+
+        $element = $Counter([]);
+
+        $snapshotJson = $element->props['data-usephp-snapshot'];
+        $snapshot = json_decode($snapshotJson, true);
+
+        // Snapshot should contain the state values
+        $this->assertEquals(42, $snapshot['state'][0]);
+        $this->assertEquals('test', $snapshot['state'][1]);
     }
 }

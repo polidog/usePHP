@@ -307,23 +307,28 @@ final class UsePHP
             return 'Invalid action request';
         }
 
+        // Parse action first to get storageType
+        try {
+            $actionData = json_decode($actionJson, true, 512, JSON_THROW_ON_ERROR);
+            $action = Action::fromArray($actionData);
+        } catch (\JsonException $e) {
+            http_response_code(400);
+            return 'Invalid action data';
+        }
+
         // Extract component name from instanceId (e.g., "Counter#0" => "Counter")
         $componentName = explode('#', $instanceId)[0];
 
         // Check if this is a registered class-based component
         $isRegisteredComponent = $this->registry->has($componentName);
 
-        // For function components (not in registry), use session storage
-        $storageType = $isRegisteredComponent
-            ? $this->registry->getStorageType($componentName)
-            : StorageType::Session;
+        // Determine storage type: use action's storageType if available (for function components),
+        // otherwise use registry for class components, default to Session
+        $storageType = $action->storageType
+            ?? ($isRegisteredComponent ? $this->registry->getStorageType($componentName) : StorageType::Session);
 
-        // Parse and execute the action
+        // Handle snapshot storage - restore state from snapshot
         try {
-            $actionData = json_decode($actionJson, true, 512, JSON_THROW_ON_ERROR);
-            $action = Action::fromArray($actionData);
-
-            // Handle snapshot storage - restore state from snapshot
             if ($storageType === StorageType::Snapshot && $snapshotJson !== null) {
                 $snapshot = $this->getSnapshotSerializer()->deserialize($snapshotJson);
                 $state = ComponentState::fromSnapshot($snapshot);
@@ -331,18 +336,16 @@ final class UsePHP
                 // Use instanceId for state to match the correct component instance
                 $state = ComponentState::getInstance($instanceId, $storageType);
             }
-
-            if ($action->type === 'setState') {
-                $index = $action->payload['index'] ?? 0;
-                $value = $action->payload['value'] ?? null;
-                $state->setState($index, $value);
-            }
-        } catch (\JsonException $e) {
-            http_response_code(400);
-            return 'Invalid action data';
         } catch (SnapshotVerificationException $e) {
             http_response_code(400);
             return 'Invalid snapshot';
+        }
+
+        // Execute the action
+        if ($action->type === 'setState') {
+            $index = $action->payload['index'] ?? 0;
+            $value = $action->payload['value'] ?? null;
+            $state->setState($index, $value);
         }
 
         // Partial update (AJAX) - return only component HTML

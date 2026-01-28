@@ -270,6 +270,14 @@ $Counter = fc(function(array $props): Element {
         ),
     ]);
 }, 'counter');
+
+// Function component with snapshot storage (stateless server)
+use Polidog\UsePhp\Storage\StorageType;
+
+$SnapshotCounter = fc(function(array $props): Element {
+    [$count, $setCount] = useState($props['initial'] ?? 0);
+    return H::div(children: "Count: {$count}");
+}, 'snapshot-counter', StorageType::Snapshot);
 ```
 
 **Using function components:**
@@ -295,6 +303,30 @@ H::div(children: [
 $Greeting = fn(array $props): Element => H::div(children: "Hello, {$props['name']}!");
 $Greeting(['name' => 'World']); // OK - no state needed
 ```
+
+**fc() Storage Types:**
+
+The `fc()` function accepts an optional third parameter to specify the storage type:
+
+```php
+use Polidog\UsePhp\Storage\StorageType;
+
+// Session storage (default) - State persists in PHP session
+$Counter = fc(fn() => ..., 'key');
+$Counter = fc(fn() => ..., 'key', StorageType::Session);
+
+// Memory storage - State resets on each request
+$TempForm = fc(fn() => ..., 'key', StorageType::Memory);
+
+// Snapshot storage - State is embedded in HTML (stateless server)
+$SnapshotCounter = fc(fn() => ..., 'key', StorageType::Snapshot);
+```
+
+| Storage Type | Description | Use Case |
+|--------------|-------------|----------|
+| `Session` | State stored in PHP session | Default. Forms, shopping carts |
+| `Memory` | State reset per request | Temporary UI state, modals |
+| `Snapshot` | State embedded in HTML | Stateless server, shareable URLs |
 
 #### Class-based Components
 

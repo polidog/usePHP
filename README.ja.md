@@ -270,6 +270,14 @@ $Counter = fc(function(array $props): Element {
         ),
     ]);
 }, 'counter');
+
+// スナップショットストレージを使用する関数コンポーネント（ステートレスサーバー）
+use Polidog\UsePhp\Storage\StorageType;
+
+$SnapshotCounter = fc(function(array $props): Element {
+    [$count, $setCount] = useState($props['initial'] ?? 0);
+    return H::div(children: "Count: {$count}");
+}, 'snapshot-counter', StorageType::Snapshot);
 ```
 
 **関数コンポーネントの使用方法：**
@@ -295,6 +303,30 @@ H::div(children: [
 $Greeting = fn(array $props): Element => H::div(children: "Hello, {$props['name']}!");
 $Greeting(['name' => 'World']); // OK - 状態不要
 ```
+
+**fc()のストレージタイプ：**
+
+`fc()`関数は第3引数でストレージタイプを指定できます：
+
+```php
+use Polidog\UsePhp\Storage\StorageType;
+
+// セッションストレージ（デフォルト）- PHPセッションに状態を保持
+$Counter = fc(fn() => ..., 'key');
+$Counter = fc(fn() => ..., 'key', StorageType::Session);
+
+// メモリストレージ - リクエストごとにリセット
+$TempForm = fc(fn() => ..., 'key', StorageType::Memory);
+
+// スナップショットストレージ - HTMLに状態を埋め込み（ステートレスサーバー）
+$SnapshotCounter = fc(fn() => ..., 'key', StorageType::Snapshot);
+```
+
+| ストレージタイプ | 説明 | ユースケース |
+|-----------------|------|-------------|
+| `Session` | PHPセッションに状態を保存 | デフォルト。フォーム、ショッピングカート |
+| `Memory` | リクエストごとにリセット | 一時的なUI状態、モーダル |
+| `Snapshot` | HTMLに状態を埋め込み | ステートレスサーバー、共有可能なURL |
 
 #### クラスベースコンポーネント
 

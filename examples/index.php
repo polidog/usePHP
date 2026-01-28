@@ -110,6 +110,13 @@ $router->get('/cart', function (): Element {
     ]);
 })->persistentSnapshot();
 
+// fc() with StorageType::Snapshot - stateless server example
+$router->get('/snapshot', function (): Element {
+    global $FcSnapshotCounter;
+    RenderContext::beginRender();
+    return $FcSnapshotCounter(['initial' => 0]);
+});
+
 // ============================================
 // Layout wrapper
 // ============================================
@@ -241,6 +248,7 @@ $layoutWrapper = function (string $title, string $content): void {
         <a href="/todo">Todo</a>
         <a href="/fc-counter">H::component</a>
         <a href="/fc-wrapped-counter">fc()</a>
+        <a href="/snapshot">Snapshot</a>
         <a href="/cart">Cart</a>
     </nav>
     <?= $content ?>
@@ -282,6 +290,7 @@ $titles = [
     '/fc-todo' => 'Function Todo',
     '/fc-wrapped-counter' => 'fc() Counter',
     '/fc-wrapped-todo' => 'fc() Todo',
+    '/snapshot' => 'Snapshot Counter',
     '/cart' => 'Cart',
 ];
 $title = $titles[$request->path] ?? 'usePHP';

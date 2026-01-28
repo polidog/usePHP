@@ -6,6 +6,7 @@ namespace App\Components;
 
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
+use Polidog\UsePhp\Storage\StorageType;
 
 use function Polidog\UsePhp\Runtime\fc;
 use function Polidog\UsePhp\Runtime\useState;
@@ -237,3 +238,64 @@ $FcTodoList = fc(function (array $props): Element {
         ]
     );
 }, 'fc-todo');
+
+// ============================================================================
+// fc() with StorageType - Snapshot storage example
+// ============================================================================
+//
+// The third parameter of fc() allows specifying a StorageType:
+// - StorageType::Session (default) - State persists in PHP session
+// - StorageType::Memory - State resets on each request
+// - StorageType::Snapshot - State is embedded in HTML (stateless server)
+//
+// Snapshot storage is useful for:
+// - Shareable URLs that preserve component state
+// - Stateless server deployments
+// - Components that don't need server-side session persistence
+
+/**
+ * Counter with Snapshot storage - state is embedded in HTML.
+ *
+ * The state is serialized and included in the HTML output,
+ * allowing the server to remain stateless.
+ *
+ * @var callable(array<string, mixed>): Element
+ */
+$FcSnapshotCounter = fc(function (array $props): Element {
+    [$count, $setCount] = useState($props['initial'] ?? 0);
+
+    return H::div(
+        className: 'counter',
+        children: [
+            H::h1(children: 'Snapshot Counter'),
+            H::p(
+                style: 'text-align:center;color:#666;font-size:14px;',
+                children: 'State is embedded in HTML (stateless server)'
+            ),
+            H::div(
+                className: 'counter-display',
+                children: "Count: {$count}"
+            ),
+            H::div(
+                className: 'counter-buttons',
+                children: [
+                    H::button(
+                        className: 'btn btn-decrement',
+                        onClick: fn() => $setCount($count - 1),
+                        children: '-'
+                    ),
+                    H::button(
+                        className: 'btn btn-increment',
+                        onClick: fn() => $setCount($count + 1),
+                        children: '+'
+                    ),
+                    H::button(
+                        className: 'btn btn-reset',
+                        onClick: fn() => $setCount(0),
+                        children: 'Reset'
+                    ),
+                ]
+            ),
+        ]
+    );
+}, 'snapshot-counter', StorageType::Snapshot);

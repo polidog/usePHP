@@ -6,6 +6,8 @@ namespace Polidog\UsePhp\Runtime;
 
 use function Polidog\UsePhp\Html\getFunctionComponentName;
 
+use Polidog\UsePhp\Storage\StorageType;
+
 /**
  * React-like useState hook that stores state server-side.
  *
@@ -26,9 +28,10 @@ function useState(mixed $initial): array
     $index = $componentState->nextHookIndex();
     $value = $componentState->getState($index, $initial);
     $componentId = $componentState->getComponentId();
+    $storageType = $componentState->getStorageType();
 
-    $setter = function (mixed $newValue) use ($index, $componentId): Action {
-        return Action::setState($index, $newValue, $componentId);
+    $setter = function (mixed $newValue) use ($index, $componentId, $storageType): Action {
+        return Action::setState($index, $newValue, $componentId, $storageType);
     };
 
     return [$value, $setter];
@@ -83,23 +86,37 @@ function useEffect(callable $callback, ?array $deps = null): void
  *
  * @param callable(array<string, mixed>): Element $component
  * @param string|null $key State management key
+ * @param StorageType $storageType Storage type for component state
  * @return callable(array<string, mixed>): Element
  */
-function fc(callable $component, ?string $key = null): callable
+function fc(callable $component, ?string $key = null, StorageType $storageType = StorageType::Session): callable
 {
-    return function (array $props = []) use ($component, $key): Element {
+    return function (array $props = []) use ($component, $key, $storageType): Element {
         $componentName = getFunctionComponentName($component);
         $instanceKey = $key ?? ($props['key'] ?? null);
         unset($props['key']);
 
         $instanceId = RenderContext::beginComponent($componentName, $instanceKey);
-        ComponentState::getInstance($instanceId);
+        $state = ComponentState::getInstance($instanceId, $storageType);
         ComponentState::reset();
 
         $result = $component($props);
 
         RenderContext::endComponent();
-        return $result;
+
+        // Wrap with component container for snapshot support
+        $wrapperProps = ['data-usephp' => $instanceId];
+
+        if ($storageType === StorageType::Snapshot) {
+            $snapshot = $state->createSnapshot();
+            $app = RenderContext::getApp();
+            $snapshotJson = $app !== null
+                ? $app->getSnapshotSerializer()->serialize($snapshot)
+                : $snapshot->toJson();
+            $wrapperProps['data-usephp-snapshot'] = $snapshotJson;
+        }
+
+        return new Element('div', $wrapperProps, [$result]);
     };
 }
 
