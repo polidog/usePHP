@@ -15,17 +15,14 @@ use Polidog\UsePhp\Snapshot\SnapshotSerializer;
  *
  * Usage:
  *   $router = new SimpleRouter();
- *   $router->get('/', HomePage::class)->name('home');
- *   $router->get('/users/{id}', UserPage::class)->name('user');
+ *   $router->get('/', HomePage::class);
+ *   $router->get('/users/{id}', UserPage::class);
  *   $router->post('/cart/add', CartAddAction::class);
  */
 final class SimpleRouter implements RouterInterface
 {
     /** @var array<string, Route> Routes indexed by internal key */
     private array $routes = [];
-
-    /** @var array<string, Route> Routes indexed by name */
-    private array $namedRoutes = [];
 
     private ?RequestContext $currentRequest = null;
 
@@ -123,10 +120,6 @@ final class SimpleRouter implements RouterInterface
             registerCallback: function (Route $route) use ($method, $pattern) {
                 $key = strtoupper($method) . ':' . $pattern;
                 $this->routes[$key] = $route;
-
-                if ($route->name !== null) {
-                    $this->namedRoutes[$route->name] = $route;
-                }
             },
         );
 
@@ -172,15 +165,6 @@ final class SimpleRouter implements RouterInterface
         }
 
         return null;
-    }
-
-    public function generate(string $name, array $params = []): string
-    {
-        if (!isset($this->namedRoutes[$name])) {
-            throw new \InvalidArgumentException("Route not found: {$name}");
-        }
-
-        return $this->namedRoutes[$name]->generate($params);
     }
 
     public function getCurrentUrl(): string
@@ -237,21 +221,5 @@ final class SimpleRouter implements RouterInterface
     public function getRoutes(): array
     {
         return $this->routes;
-    }
-
-    /**
-     * Get a route by name.
-     */
-    public function getRoute(string $name): ?Route
-    {
-        return $this->namedRoutes[$name] ?? null;
-    }
-
-    /**
-     * Check if a named route exists.
-     */
-    public function hasRoute(string $name): bool
-    {
-        return isset($this->namedRoutes[$name]);
     }
 }

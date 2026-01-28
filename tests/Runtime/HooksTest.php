@@ -192,8 +192,8 @@ class HooksTest extends TestCase
     {
         // Set up a router with routes
         $router = new SimpleRouter();
-        $router->get('/', 'HomeComponent')->name('home');
-        $router->get('/users/{id}', 'UserComponent')->name('user.show');
+        $router->get('/', 'HomeComponent');
+        $router->get('/users/{id}', 'UserComponent');
 
         $app = new UsePHP();
         $app->setRouter($router);
@@ -201,29 +201,10 @@ class HooksTest extends TestCase
 
         $result = useRouter();
 
-        $this->assertArrayHasKey('navigate', $result);
         $this->assertArrayHasKey('currentUrl', $result);
         $this->assertArrayHasKey('params', $result);
-        $this->assertArrayHasKey('isActive', $result);
 
-        $this->assertIsCallable($result['navigate']);
         $this->assertIsString($result['currentUrl']);
         $this->assertIsArray($result['params']);
-        $this->assertIsCallable($result['isActive']);
-    }
-
-    public function testUseRouterNavigateGeneratesUrl(): void
-    {
-        $router = new SimpleRouter();
-        $router->get('/users/{id}', 'UserComponent')->name('user.show');
-
-        $app = new UsePHP();
-        $app->setRouter($router);
-        RenderContext::setApp($app);
-
-        $result = useRouter();
-        $url = $result['navigate']('user.show', ['id' => '42']);
-
-        $this->assertEquals('/users/42', $url);
     }
 }

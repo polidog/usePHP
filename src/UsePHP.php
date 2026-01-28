@@ -256,17 +256,14 @@ final class UsePHP
     }
 
     /**
-     * Redirect to a named route with optional snapshot preservation.
+     * Redirect to a URL with optional snapshot preservation.
      *
-     * @param string $routeName The name of the route to redirect to
-     * @param array<string, string> $params Route parameters
+     * @param string $url The URL to redirect to
      * @param Snapshot|null $snapshot Optional snapshot to pass
      */
-    public function redirectTo(string $routeName, array $params = [], ?Snapshot $snapshot = null): never
+    public function redirect(string $url, ?Snapshot $snapshot = null): never
     {
         $router = $this->getRouter();
-
-        $url = $router->generate($routeName, $params);
 
         if ($snapshot !== null && $this->currentMatch?->snapshotBehavior === SnapshotBehavior::Persistent) {
             $url = $router->createRedirectUrl($url, $snapshot);

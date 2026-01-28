@@ -32,16 +32,6 @@ interface RouterInterface
     public function match(RequestContext $request): ?RouteMatch;
 
     /**
-     * Generate a URL for a named route.
-     *
-     * @param string $name Route name
-     * @param array<string, string> $params URL parameters
-     * @return string Generated URL
-     * @throws \InvalidArgumentException If route name is not found
-     */
-    public function generate(string $name, array $params = []): string;
-
-    /**
      * Get the current request URL.
      */
     public function getCurrentUrl(): string;

@@ -9,12 +9,10 @@ namespace Polidog\UsePhp\Router;
  *
  * Usage:
  *   $router->get('/cart', Cart::class)
- *       ->name('cart')
  *       ->persistentSnapshot();
  */
 final class RouteBuilder
 {
-    private ?string $name = null;
     private SnapshotBehavior $snapshotBehavior = SnapshotBehavior::Isolated;
     private ?string $sharedGroup = null;
 
@@ -30,17 +28,6 @@ final class RouteBuilder
         private readonly mixed $handler,
         private readonly \Closure $registerCallback,
     ) {}
-
-    /**
-     * Set a name for this route (used in URL generation).
-     */
-    public function name(string $name): self
-    {
-        $this->name = $name;
-        $this->register();
-
-        return $this;
-    }
 
     /**
      * Set snapshot behavior to Isolated (default).
@@ -113,7 +100,6 @@ final class RouteBuilder
             method: $this->method,
             pattern: $this->pattern,
             handler: $this->handler,
-            name: $this->name,
             snapshotBehavior: $this->snapshotBehavior,
             sharedGroup: $this->sharedGroup,
             middleware: $this->middleware,

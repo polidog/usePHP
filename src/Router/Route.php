@@ -21,7 +21,6 @@ final readonly class Route
         public string $method,
         public string $pattern,
         public mixed $handler,
-        public ?string $name = null,
         public SnapshotBehavior $snapshotBehavior = SnapshotBehavior::Isolated,
         public ?string $sharedGroup = null,
         public array $middleware = [],
@@ -106,43 +105,6 @@ final readonly class Route
     }
 
     /**
-     * Generate a URL for this route.
-     *
-     * @param array<string, string> $params
-     */
-    public function generate(array $params = []): string
-    {
-        $url = $this->pattern;
-
-        // Replace parameters
-        /** @var string $url */
-        $url = preg_replace_callback(
-            '/\{(\w+)(\?)?(:[^}]+)?\}/',
-            function ($matches) use ($params) {
-                $name = $matches[1];
-                $optional = isset($matches[2]) && $matches[2] === '?';
-
-                if (isset($params[$name])) {
-                    return $params[$name];
-                }
-
-                if ($optional) {
-                    return '';
-                }
-
-                throw new \InvalidArgumentException("Missing required parameter: {$name}");
-            },
-            $url
-        ) ?? $url;
-
-        // Clean up double slashes from optional params
-        /** @var string $url */
-        $url = preg_replace('#//+#', '/', $url) ?? $url;
-
-        return $url;
-    }
-
-    /**
      * Create a RouteMatch from this route.
      *
      * @param array<string, string> $params
@@ -152,7 +114,6 @@ final readonly class Route
         return new RouteMatch(
             handler: $this->handler,
             params: $params,
-            name: $this->name,
             snapshotBehavior: $this->snapshotBehavior,
             sharedGroup: $this->sharedGroup,
         );

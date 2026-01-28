@@ -55,8 +55,8 @@ $app->setSnapshotSecret('your-secret-key-here');
 $router = $app->getRouter();
 
 // Home / Counter page
-$router->get('/', Counter::class)->name('home');
-$router->get('/counter', Counter::class)->name('counter');
+$router->get('/', Counter::class);
+$router->get('/counter', Counter::class);
 
 // Multiple counters page
 $router->get('/multi', function (array $params, RequestContext $request) use ($app): Element {
@@ -66,10 +66,10 @@ $router->get('/multi', function (array $params, RequestContext $request) use ($a
         H::h2(style: 'text-align:center;color:#666;margin-top:30px;', children: 'Counter B'),
         $app->createElement(Counter::class, 'counter-b'),
     ]);
-})->name('multi');
+});
 
 // Todo page
-$router->get('/todo', TodoList::class)->name('todo');
+$router->get('/todo', TodoList::class);
 
 // Function component pages
 $router->get('/fc-counter', function (): Element {
@@ -77,27 +77,27 @@ $router->get('/fc-counter', function (): Element {
     return H::div(children: [
         H::component('App\Components\FunctionCounter', ['initial' => 0, 'key' => 'fc-counter']),
     ]);
-})->name('fc-counter');
+});
 
 $router->get('/fc-todo', function (): Element {
     RenderContext::beginRender();
     return H::div(children: [
         H::component('App\Components\FunctionTodoList', ['key' => 'fc-todo']),
     ]);
-})->name('fc-todo');
+});
 
 // fc() wrapper examples
 $router->get('/fc-wrapped-counter', function (): Element {
     global $FcCounter;
     RenderContext::beginRender();
     return $FcCounter(['initial' => 0]);
-})->name('fc-wrapped-counter');
+});
 
 $router->get('/fc-wrapped-todo', function (): Element {
     global $FcTodoList;
     RenderContext::beginRender();
     return $FcTodoList([]);
-})->name('fc-wrapped-todo');
+});
 
 // Persistent snapshot example - state is passed via URL
 $router->get('/cart', function (): Element {
@@ -108,7 +108,7 @@ $router->get('/cart', function (): Element {
         H::p(children: 'State is preserved in URL when navigating'),
         $FcCounter(['initial' => 0]),
     ]);
-})->name('cart')->persistentSnapshot();
+})->persistentSnapshot();
 
 // ============================================
 // Layout wrapper
@@ -272,19 +272,19 @@ if ($match === null) {
     exit;
 }
 
-// Get title from route name
+// Get title from path
 $titles = [
-    'home' => 'Counter',
-    'counter' => 'Counter',
-    'multi' => 'Multiple Counters',
-    'todo' => 'Todo',
-    'fc-counter' => 'Function Counter',
-    'fc-todo' => 'Function Todo',
-    'fc-wrapped-counter' => 'fc() Counter',
-    'fc-wrapped-todo' => 'fc() Todo',
-    'cart' => 'Cart',
+    '/' => 'Counter',
+    '/counter' => 'Counter',
+    '/multi' => 'Multiple Counters',
+    '/todo' => 'Todo',
+    '/fc-counter' => 'Function Counter',
+    '/fc-todo' => 'Function Todo',
+    '/fc-wrapped-counter' => 'fc() Counter',
+    '/fc-wrapped-todo' => 'fc() Todo',
+    '/cart' => 'Cart',
 ];
-$title = $titles[$match->name ?? ''] ?? 'usePHP';
+$title = $titles[$request->path] ?? 'usePHP';
 
 // Render the component
 $handler = $match->handler;

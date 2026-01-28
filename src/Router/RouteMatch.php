@@ -12,14 +12,12 @@ final readonly class RouteMatch
     /**
      * @param callable|string $handler The route handler (component class or callable)
      * @param array<string, string> $params URL parameters extracted from the route pattern
-     * @param string|null $name Optional route name for URL generation
      * @param SnapshotBehavior $snapshotBehavior How snapshots should be handled for this route
      * @param string|null $sharedGroup Group name for shared snapshot behavior
      */
     public function __construct(
         public mixed $handler,
         public array $params = [],
-        public ?string $name = null,
         public SnapshotBehavior $snapshotBehavior = SnapshotBehavior::Isolated,
         public ?string $sharedGroup = null,
     ) {}
@@ -34,7 +32,6 @@ final readonly class RouteMatch
         return new self(
             handler: $this->handler,
             params: $params,
-            name: $this->name,
             snapshotBehavior: $this->snapshotBehavior,
             sharedGroup: $this->sharedGroup,
         );

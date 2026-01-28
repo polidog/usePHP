@@ -48,14 +48,6 @@ final class NullRouter implements RouterInterface
         return $this->currentMatch;
     }
 
-    public function generate(string $name, array $params = []): string
-    {
-        throw new \RuntimeException(
-            'URL generation is not available with NullRouter. '
-            . 'Use your framework\'s URL generator instead.'
-        );
-    }
-
     public function getCurrentUrl(): string
     {
         if ($this->currentRequest !== null) {

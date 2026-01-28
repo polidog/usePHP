@@ -99,27 +99,9 @@ class SimpleRouterTest extends TestCase
         $this->assertNotNull($this->router->match($putRequest));
     }
 
-    public function testNamedRoute(): void
-    {
-        $this->router->get('/users/{id}', 'UserComponent')->name('user.show');
-
-        $url = $this->router->generate('user.show', ['id' => '42']);
-
-        $this->assertEquals('/users/42', $url);
-    }
-
-    public function testGenerateThrowsExceptionForUnknownRoute(): void
-    {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Route not found: unknown.route');
-
-        $this->router->generate('unknown.route');
-    }
-
     public function testRouteWithSnapshotBehavior(): void
     {
         $this->router->get('/cart', 'CartComponent')
-            ->name('cart')
             ->persistentSnapshot();
 
         $request = new RequestContext('GET', '/cart');
@@ -132,7 +114,6 @@ class SimpleRouterTest extends TestCase
     public function testRouteWithSessionSnapshot(): void
     {
         $this->router->get('/checkout', 'CheckoutComponent')
-            ->name('checkout')
             ->sessionSnapshot();
 
         $request = new RequestContext('GET', '/checkout');
@@ -145,7 +126,6 @@ class SimpleRouterTest extends TestCase
     public function testRouteWithSharedSnapshot(): void
     {
         $this->router->get('/step1', 'Step1Component')
-            ->name('step1')
             ->sharedSnapshot('wizard');
 
         $request = new RequestContext('GET', '/step1');
@@ -159,8 +139,8 @@ class SimpleRouterTest extends TestCase
     public function testGroupedRoutes(): void
     {
         $this->router->group('/admin', function (RouteGroup $group) {
-            $group->get('/dashboard', 'DashboardComponent')->name('admin.dashboard');
-            $group->get('/users', 'AdminUsersComponent')->name('admin.users');
+            $group->get('/dashboard', 'DashboardComponent');
+            $group->get('/users', 'AdminUsersComponent');
         });
 
         $dashboardRequest = new RequestContext('GET', '/admin/dashboard');
@@ -168,9 +148,6 @@ class SimpleRouterTest extends TestCase
 
         $this->assertNotNull($this->router->match($dashboardRequest));
         $this->assertNotNull($this->router->match($usersRequest));
-
-        $this->assertEquals('/admin/dashboard', $this->router->generate('admin.dashboard'));
-        $this->assertEquals('/admin/users', $this->router->generate('admin.users'));
     }
 
     public function testOptionalParameter(): void
@@ -235,25 +212,6 @@ class SimpleRouterTest extends TestCase
         $this->assertNotNull($this->router->match($getRequest));
         $this->assertNotNull($this->router->match($postRequest));
         $this->assertNull($this->router->match($putRequest));
-    }
-
-    public function testHasRoute(): void
-    {
-        $this->router->get('/users', 'UsersComponent')->name('users.index');
-
-        $this->assertTrue($this->router->hasRoute('users.index'));
-        $this->assertFalse($this->router->hasRoute('users.show'));
-    }
-
-    public function testGetRoute(): void
-    {
-        $this->router->get('/users', 'UsersComponent')->name('users.index');
-
-        $route = $this->router->getRoute('users.index');
-
-        $this->assertNotNull($route);
-        $this->assertInstanceOf(Route::class, $route);
-        $this->assertEquals('/users', $route->pattern);
     }
 
     public function testGetRoutes(): void

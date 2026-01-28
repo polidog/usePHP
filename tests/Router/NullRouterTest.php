@@ -47,16 +47,6 @@ class NullRouterTest extends TestCase
         $this->assertSame($match, $result);
     }
 
-    public function testGenerateThrowsException(): void
-    {
-        $router = new NullRouter();
-
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('URL generation is not available with NullRouter');
-
-        $router->generate('any.route');
-    }
-
     public function testForComponent(): void
     {
         $router = NullRouter::forComponent(
@@ -121,7 +111,7 @@ class NullRouterTest extends TestCase
         $builder = $router->addRoute('GET', '/test', 'TestHandler');
 
         // Call builder methods (they should be no-op)
-        $builder->name('test')->persistentSnapshot();
+        $builder->persistentSnapshot();
 
         // Route should not be registered
         $request = new RequestContext('GET', '/test');
