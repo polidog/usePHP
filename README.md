@@ -8,7 +8,8 @@ A framework that delivers server-driven UI with **minimal JavaScript**, using a 
 - **Minimal JS (~40 lines)** - Smooth UX with partial updates, graceful fallback without JS
 - **Pure PHP** - No transpilation needed, PHP code runs directly on the server
 - **Configurable State Storage** - Choose between session (persistent) or memory (per-request) storage per component
-- **Component-oriented** - Reusable component classes
+- **Component-oriented** - Reusable component classes and function components
+- **Function Components** - Lightweight components using simple PHP callables
 - **Progressive Enhancement** - Works even with JavaScript disabled
 
 ## Installation
@@ -152,6 +153,8 @@ Open `http://localhost:8000` in your browser.
 
 ### Component Definition
 
+#### Class-based Components
+
 ```php
 use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\Component;
@@ -172,6 +175,59 @@ The component name defaults to the FQCN (e.g., `App\Components\MyComponent`). Yo
 #[Component(name: 'custom-name')]
 class MyComponent extends BaseComponent { /* ... */ }
 ```
+
+#### Function Components
+
+Function components are simple PHP callables that return Elements. They offer a lighter-weight alternative to class-based components.
+
+```php
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+
+use function Polidog\UsePhp\Runtime\useState;
+use function Polidog\UsePhp\Runtime\fc;
+
+// Simple function component (pure, no state)
+$Greeting = fn(array $props): Element => H::div(
+    children: "Hello, {$props['name']}!"
+);
+
+// Function component with useState
+$Counter = function(array $props): Element {
+    [$count, $setCount] = useState($props['initial'] ?? 0);
+    return H::div(children: [
+        H::span(children: "Count: {$count}"),
+        H::button(
+            onClick: fn() => $setCount($count + 1),
+            children: '+'
+        ),
+    ]);
+};
+```
+
+**Using function components:**
+
+```php
+// Method A: H::component() - Recommended for useState
+H::div(children: [
+    H::component($Counter, ['initial' => 5, 'key' => 'my-counter']),
+]);
+
+// Method B: fc() wrapper for direct invocation
+$Counter = fc(function(array $props): Element {
+    [$count, $setCount] = useState($props['initial'] ?? 0);
+    return H::div(children: "Count: $count");
+});
+$Counter(['initial' => 5]); // Direct call OK
+
+// Method C: Direct call (only for pure components without useState)
+$Greeting(['name' => 'World']); // Direct call OK
+```
+
+**Key differences:**
+- `H::component()`: Creates an Element that resolves during render, proper state management
+- `fc()`: Wraps a function for direct invocation with state support
+- Direct call: Only works for pure components (no useState)
 
 ### useState
 

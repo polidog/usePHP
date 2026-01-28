@@ -23,11 +23,16 @@ if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
 require_once __DIR__ . '/../vendor/autoload.php';
 require_once __DIR__ . '/components/Counter.php';
 require_once __DIR__ . '/components/TodoList.php';
+require_once __DIR__ . '/components/FunctionComponents.php';
 
 use App\Components\Counter;
 use App\Components\TodoList;
 use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\UsePHP;
+
+use function App\Components\FunctionCounter;
+use function App\Components\FunctionTodoList;
 
 // ============================================
 // Component registration
@@ -85,6 +90,46 @@ switch ($path) {
     case '/todo':
         $title = 'Todo';
         $content = UsePHP::render(TodoList::class);
+        break;
+
+    case '/fc-counter':
+        // Function component counter using H::component()
+        $title = 'Function Counter';
+        RenderContext::beginRender();
+        $content = UsePHP::renderElement(
+            H::div(children: [
+                H::component('App\Components\FunctionCounter', ['initial' => 0, 'key' => 'fc-counter']),
+            ])
+        );
+        break;
+
+    case '/fc-todo':
+        // Function component todo list using H::component()
+        $title = 'Function Todo';
+        RenderContext::beginRender();
+        $content = UsePHP::renderElement(
+            H::div(children: [
+                H::component('App\Components\FunctionTodoList', ['key' => 'fc-todo']),
+            ])
+        );
+        break;
+
+    case '/fc-wrapped-counter':
+        // Using fc() wrapper - direct invocation style
+        // $FcCounter is defined with fc() in FunctionComponents.php
+        global $FcCounter;
+        $title = 'fc() Counter';
+        RenderContext::beginRender();
+        $content = UsePHP::renderElement($FcCounter(['initial' => 0]));
+        break;
+
+    case '/fc-wrapped-todo':
+        // Using fc() wrapper - direct invocation style
+        // $FcTodoList is defined with fc() in FunctionComponents.php
+        global $FcTodoList;
+        $title = 'fc() Todo';
+        RenderContext::beginRender();
+        $content = UsePHP::renderElement($FcTodoList([]));
         break;
 
     default:
@@ -213,6 +258,8 @@ switch ($path) {
         <a href="/counter">Counter</a>
         <a href="/multi">Multi</a>
         <a href="/todo">Todo</a>
+        <a href="/fc-counter">H::component</a>
+        <a href="/fc-wrapped-counter">fc()</a>
     </nav>
     <?= $content ?>
     <div class="badge">Partial updates with ~40 lines of JS</div>

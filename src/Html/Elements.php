@@ -1158,7 +1158,31 @@ final class H
     /** @param array<Element|string> $children */
     public static function Fragment(array $children): Element
     {
-        return new Element('Fragment', [], $children);
+        return new Element('Fragment', [], resolveRenderables($children));
+    }
+
+    // =========================================================================
+    // Function Component
+    // =========================================================================
+
+    /**
+     * Create an element from a function component.
+     *
+     * @param callable(array<string, mixed>): Element $component
+     * @param array<string, mixed> $props
+     */
+    public static function component(
+        callable $component,
+        array $props = [],
+    ): Element {
+        $key = $props['key'] ?? null;
+        unset($props['key']);
+
+        return new Element('__function_component__', [
+            '__component' => $component,
+            '__props' => $props,
+            '__key' => $key,
+        ], []);
     }
 
     // =========================================================================
@@ -1253,7 +1277,10 @@ function resolveRenderables(array $children): array
 {
     $resolved = [];
     foreach ($children as $child) {
-        if ($child instanceof BaseComponent) {
+        if ($child instanceof Element && $child->type === '__function_component__') {
+            // Function component Element
+            $resolved[] = resolveFunctionComponent($child);
+        } elseif ($child instanceof BaseComponent) {
             // Handle BaseComponent with automatic state and context setup
             if ($child->getComponentState() === null) {
                 $componentName = $child::getComponentName();
@@ -1276,4 +1303,45 @@ function resolveRenderables(array $children): array
         }
     }
     return $resolved;
+}
+
+/**
+ * Resolve a function component Element with proper state setup.
+ */
+function resolveFunctionComponent(Element $element): Element
+{
+    /** @var callable(array<string, mixed>): Element $component */
+    $component = $element->props['__component'];
+    /** @var array<string, mixed> $props */
+    $props = $element->props['__props'];
+    /** @var string|null $key */
+    $key = $element->props['__key'];
+
+    $componentName = getFunctionComponentName($component);
+    $instanceId = RenderContext::beginComponent($componentName, $key);
+    ComponentState::getInstance($instanceId);
+    ComponentState::reset();
+
+    $result = $component($props);
+
+    RenderContext::endComponent();
+
+    return $result;
+}
+
+/**
+ * Get a descriptive name for a function component.
+ */
+function getFunctionComponentName(callable $component): string
+{
+    if ($component instanceof \Closure) {
+        $ref = new \ReflectionFunction($component);
+        return 'FC@' . basename($ref->getFileName() ?: 'unknown') . ':' . $ref->getStartLine();
+    }
+    if (is_array($component)) {
+        return is_object($component[0])
+            ? get_class($component[0]) . '::' . $component[1]
+            : $component[0] . '::' . $component[1];
+    }
+    return is_string($component) ? $component : 'AnonymousFC';
 }

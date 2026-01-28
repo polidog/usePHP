@@ -160,12 +160,13 @@ final class UsePHP
         // Extract component name from instanceId (e.g., "Counter#0" => "Counter")
         $componentName = explode('#', $instanceId)[0];
 
-        if (!$this->registry->has($componentName)) {
-            http_response_code(404);
-            return "Component not found: {$componentName}";
-        }
+        // Check if this is a registered class-based component
+        $isRegisteredComponent = $this->registry->has($componentName);
 
-        $storageType = $this->registry->getStorageType($componentName);
+        // For function components (not in registry), use session storage
+        $storageType = $isRegisteredComponent
+            ? $this->registry->getStorageType($componentName)
+            : StorageType::Session;
 
         // Parse and execute the action
         try {
@@ -195,11 +196,11 @@ final class UsePHP
         }
 
         // Partial update (AJAX) - return only component HTML
-        if ($isPartial) {
+        if ($isPartial && $isRegisteredComponent) {
             return $this->doRenderComponentPartialWithInstanceId($instanceId, $componentName);
         }
 
-        // Full page - PRG pattern
+        // Full page - PRG pattern (for both class components and function components)
         $redirectUrl = strtok($_SERVER['REQUEST_URI'] ?? '/', '?');
         header('Location: ' . $redirectUrl, true, 303);
         exit;

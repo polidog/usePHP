@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Runtime;
 
+use function Polidog\UsePhp\Html\getFunctionComponentName;
+
 /**
  * React-like useState hook that stores state server-side.
  *
@@ -23,9 +25,10 @@ function useState(mixed $initial): array
 
     $index = $componentState->nextHookIndex();
     $value = $componentState->getState($index, $initial);
+    $componentId = $componentState->getComponentId();
 
-    $setter = function (mixed $newValue) use ($index): Action {
-        return Action::setState($index, $newValue);
+    $setter = function (mixed $newValue) use ($index, $componentId): Action {
+        return Action::setState($index, $newValue, $componentId);
     };
 
     return [$value, $setter];
@@ -73,4 +76,29 @@ function useEffect(callable $callback, ?array $deps = null): void
         // Store current deps for next comparison
         $componentState->setEffectDeps($index, $deps);
     }
+}
+
+/**
+ * Wrap a function component for direct invocation with useState support.
+ *
+ * @param callable(array<string, mixed>): Element $component
+ * @param string|null $key State management key
+ * @return callable(array<string, mixed>): Element
+ */
+function fc(callable $component, ?string $key = null): callable
+{
+    return function (array $props = []) use ($component, $key): Element {
+        $componentName = getFunctionComponentName($component);
+        $instanceKey = $key ?? ($props['key'] ?? null);
+        unset($props['key']);
+
+        $instanceId = RenderContext::beginComponent($componentName, $instanceKey);
+        ComponentState::getInstance($instanceId);
+        ComponentState::reset();
+
+        $result = $component($props);
+
+        RenderContext::endComponent();
+        return $result;
+    };
 }
