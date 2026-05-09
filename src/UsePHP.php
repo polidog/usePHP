@@ -34,6 +34,12 @@ final class UsePHP
     private ?RouterInterface $router = null;
     private ?RouteMatch $currentMatch = null;
 
+    /** @var array<string, string> FQCN => path to .psx.php file */
+    private array $psxManifest = [];
+
+    /** @var array<string, callable> FQCN => loaded callable */
+    private array $psxLoaded = [];
+
     public function __construct()
     {
         $this->registry = new ComponentRegistry();
@@ -48,6 +54,107 @@ final class UsePHP
     {
         $this->registry->register($className);
         return $this;
+    }
+
+    /**
+     * Load a PSX component manifest. The manifest is a PHP file that returns
+     * an array mapping FQCN to compiled .psx.php file paths.
+     */
+    public function loadComponentManifest(string $path): self
+    {
+        if (!\file_exists($path)) {
+            throw new \RuntimeException("PSX manifest not found: $path");
+        }
+        $manifest = require $path;
+        if (!\is_array($manifest)) {
+            throw new \RuntimeException("PSX manifest must return an array: $path");
+        }
+        foreach ($manifest as $fqcn => $filePath) {
+            $this->psxManifest[(string) $fqcn] = (string) $filePath;
+        }
+        return $this;
+    }
+
+    /**
+     * Register a callable component under an FQCN. Used as a bridge for
+     * variable-based fc() components defined outside .psx files.
+     */
+    public function registerComponent(string $fqcn, callable $component): self
+    {
+        $this->psxLoaded[$fqcn] = $component;
+        return $this;
+    }
+
+    /**
+     * Register a global exception handler that prints stack traces with
+     * `.psx.php` file paths rewritten to their original `.psx` source paths.
+     * Combined with line-preserving compilation, errors look like they came
+     * from the .psx source.
+     *
+     * NOTE: this REPLACES the active exception handler (set_exception_handler
+     * semantics). If you have an existing reporter such as Sentry/Bugsnag/
+     * Whoops installed, calling this method silently disables it. Either:
+     *  - call this BEFORE installing your reporter so the reporter wins, or
+     *  - capture the return value and chain manually inside your reporter, or
+     *  - use `StackTraceRewriter::formatException($e)` directly inside your
+     *    own handler.
+     *
+     * Returns the previous exception handler (if any).
+     */
+    public function installPsxErrorHandler(): ?callable
+    {
+        return \set_exception_handler(static function (\Throwable $e): void {
+            $message = \Polidog\UsePhp\Psx\StackTraceRewriter::formatException($e) . "\n";
+            // STDERR is only defined in CLI/phpdbg; opening php://stderr works
+            // in any SAPI (and falls back to error_log on the rare case the
+            // stream can't be opened — e.g., bizarre stream-wrapper config).
+            $stderr = \fopen('php://stderr', 'wb');
+            if ($stderr !== false) {
+                \fwrite($stderr, $message);
+                \fclose($stderr);
+                return;
+            }
+            \error_log($message);
+        });
+    }
+
+    /**
+     * Invoke a PSX component by FQCN. Compiled PSX tags <Counter />
+     * lower to a call to this method.
+     *
+     * @param array<string, mixed> $props
+     */
+    public function renderPsxComponent(string $fqcn, array $props = []): Element
+    {
+        if (!isset($this->psxLoaded[$fqcn])) {
+            if (!isset($this->psxManifest[$fqcn])) {
+                throw new \RuntimeException("PSX component not registered: $fqcn");
+            }
+            $compiledPath = $this->psxManifest[$fqcn];
+            if (!\is_file($compiledPath) || !\is_readable($compiledPath)) {
+                throw new \RuntimeException(
+                    "Compiled PSX file not found for $fqcn: $compiledPath. "
+                    . 'Run `vendor/bin/usephp compile` to regenerate.'
+                );
+            }
+            try {
+                $callable = require $compiledPath;
+            } catch (\ParseError $e) {
+                throw new \RuntimeException(
+                    "Compiled PSX file is invalid PHP: $compiledPath. "
+                    . 'Run `vendor/bin/usephp compile` to regenerate. ('
+                    . $e->getMessage() . ')',
+                    0,
+                    $e,
+                );
+            }
+            if (!\is_callable($callable)) {
+                throw new \RuntimeException("PSX file did not return a callable: $compiledPath");
+            }
+            $this->psxLoaded[$fqcn] = $callable;
+        }
+
+        return ($this->psxLoaded[$fqcn])($props);
     }
 
     /**

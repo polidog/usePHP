@@ -1,0 +1,42 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Components\Psx;
+
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Storage\StorageType;
+
+use function Polidog\UsePhp\Runtime\fc;
+use function Polidog\UsePhp\Runtime\useState;
+
+return fc(function (array $props) {
+    [$todos, $setTodos] = useState($props['initial'] ?? [
+        ['id' => 1, 'text' => 'Learn usePHP', 'done' => false],
+        ['id' => 2, 'text' => 'Try PSX syntax', 'done' => false],
+        ['id' => 3, 'text' => 'Build something cool', 'done' => false],
+    ]);
+
+    $toggle = fn(int $id) => $setTodos(array_map(
+        fn($t) => $t['id'] === $id ? [...$t, 'done' => !$t['done']] : $t,
+        $todos
+    ));
+
+    $completed = count(array_filter($todos, fn($t) => $t['done']));
+    $total = count($todos);
+
+    return <div className="todo-app">
+        <h1>usePHP Todo (PSX)</h1>
+        <ul className="todo-list">
+            {array_map(fn($todo) => <li className={$todo['done'] ? 'todo-item done' : 'todo-item'}>
+                <span>{$todo['text']}</span>
+                <button className="btn-toggle" onClick={fn() => $toggle($todo['id'])}>
+                    {$todo['done'] ? '✓' : '○'}
+                </button>
+            </li>, $todos)}
+        </ul>
+        <div className="todo-stats">
+            <span>{$completed} / {$total} completed</span>
+        </div>
+    </div>;
+}, 'psx-todo-list', StorageType::Session);
