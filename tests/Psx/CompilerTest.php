@@ -73,7 +73,10 @@ class CompilerTest extends TestCase
     public function testFragment(): void
     {
         $result = $this->compileExpression('<><li>One</li><li>Two</li></>');
-        self::assertStringContainsString("[H::li(children: 'One'), H::li(children: 'Two')]", $result);
+        self::assertStringContainsString(
+            "H::Fragment([H::li(children: 'One'), H::li(children: 'Two')])",
+            $result
+        );
     }
 
     public function testFragmentInsideArrayMap(): void

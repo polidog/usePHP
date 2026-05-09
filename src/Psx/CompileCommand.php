@@ -25,7 +25,7 @@ final class CompileCommand
     {
         [$flags, $paths] = $this->splitArgs($argv);
 
-        $manifestPath = $flags['manifest'] ?? $cwd . '/psx-manifest.php';
+        $manifestPath = $this->absPath($flags['manifest'] ?? $cwd . '/psx-manifest.php');
         $check = isset($flags['check']);
         $clean = isset($flags['clean']);
 
@@ -159,7 +159,7 @@ final class CompileCommand
         $files = [];
         foreach ($paths as $path) {
             if (\is_file($path) && \str_ends_with($path, '.psx')) {
-                $files[] = $path;
+                $files[] = $this->absPath($path);
                 continue;
             }
             if (!\is_dir($path)) {
@@ -168,12 +168,28 @@ final class CompileCommand
             $iter = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($path));
             foreach ($iter as $file) {
                 if ($file->isFile() && \str_ends_with($file->getPathname(), '.psx')) {
-                    $files[] = $file->getPathname();
+                    $files[] = $this->absPath($file->getPathname());
                 }
             }
         }
         \sort($files);
         return $files;
+    }
+
+    /**
+     * Normalise a path to an absolute one. We avoid realpath() on the leaf
+     * because the compiled .psx.php sibling may not exist yet; instead we
+     * resolve the directory and recombine.
+     */
+    private function absPath(string $path): string
+    {
+        $dir = \dirname($path);
+        $base = \basename($path);
+        $absDir = \realpath($dir);
+        if ($absDir === false) {
+            return $path;
+        }
+        return $absDir . \DIRECTORY_SEPARATOR . $base;
     }
 
     /**

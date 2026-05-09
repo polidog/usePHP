@@ -197,11 +197,10 @@ PSX 内では camelCase で書き、内部 API もそのまま camelCase。
 
 ```php
 <span>Count: {$count}</span>
-// → H::span(children: "Count: {$count}")
+// → H::span(children: ['Count: ', $count])
 ```
 
-注: テキストノード内の `{}` は変数補間ではなく**式埋め込み**として扱う(JSX流)。
-複数の式・テキストが混在する場合は配列に展開:
+テキストノード内の `{}` は **式埋め込み**として扱う(JSX流)。テキスト部分と式部分はそれぞれ別の子要素として配列に展開される。複数の式・テキスト混在も同様:
 
 ```php
 <span>Count: {$count} (max: {$max})</span>
@@ -239,8 +238,11 @@ PSX 内では camelCase で書き、内部 API もそのまま camelCase。
 
 ```php
 <Counter initial={5} />
-// → UsePHP::component('App\\Components\\Counter', ['initial' => 5])
+// → \Polidog\UsePhp\Runtime\RenderContext::getApp()
+//       ->renderPsxComponent('App\\Components\\Counter', ['initial' => 5])
 ```
+
+`renderPsxComponent($fqcn, $props)` は `UsePHP` インスタンスのメソッドで、レジストリから `$fqcn` を引いて遅延ロードした callable を `$props` で invoke する。
 
 #### children を持つコンポーネント
 
@@ -248,10 +250,10 @@ PSX 内では camelCase で書き、内部 API もそのまま camelCase。
 <Card title="Hello">
     <p>Body</p>
 </Card>
-// → UsePHP::component('App\\Components\\Card', [
-//     'title' => 'Hello',
-//     'children' => [H::p(children: 'Body')],
-//   ])
+// → \Polidog\UsePhp\Runtime\RenderContext::getApp()->renderPsxComponent(
+//        'App\\Components\\Card',
+//        ['title' => 'Hello', 'children' => H::p(children: 'Body')]
+//    )
 ```
 
 `children` は予約キーで、開閉タグの中身が自動的に渡される。
@@ -284,13 +286,14 @@ return <>
     <li>One</li>
     <li>Two</li>
 </>;
-// → [H::li(children: 'One'), H::li(children: 'Two')]
+// → H::Fragment([H::li(children: 'One'), H::li(children: 'Two')])
 
 {array_map(fn($t) => <>
     <dt>{$t['term']}</dt>
     <dd>{$t['def']}</dd>
 </>, $items)}
-// 各反復で配列を返し、親の children 内で flatten される
+// → array_map(fn($t) => H::Fragment([...]), $items)
+// Renderer が type='Fragment' の Element を unwrap し、children を直接出力する。
 ```
 
 ### 4.6 自己終了タグ
@@ -298,7 +301,7 @@ return <>
 ```php
 <br />            // OK — H::br()
 <input />         // OK — H::input()
-<Counter />       // OK — UsePHP::component('...\\Counter', [])
+<Counter />       // OK — RenderContext::getApp()->renderPsxComponent('...\\Counter', [])
 ```
 
 ### 4.7 PSXとPHP式の境界

@@ -5,32 +5,41 @@ declare(strict_types=1);
 namespace Polidog\UsePhp\Psx;
 
 /**
- * PSX (TSX-like syntax) compiler — Phase 0 prototype.
+ * PSX (TSX-like syntax) compiler.
  *
- * Transforms .psx source into equivalent PHP that calls H::xxx() / renderPsxComponent().
+ * Transforms .psx source into equivalent PHP that calls H::xxx() / H::__callStatic()
+ * / RenderContext::getApp()->renderPsxComponent(...) and emits H::Fragment(...) for
+ * `<>...</>` syntax.
  *
  * Strategy:
  * 1. Tokenize PHP code with token_get_all().
- * 2. Walk tokens tracking expression-start context.
- * 3. When `<` appears in expression-start context and is followed by an
- *    identifier, switch to PsxParser to consume one PSX expression.
- * 4. Reassemble: emit PHP for PSX regions, copy original PHP otherwise.
+ * 2. Build a NamespaceContext from `namespace` / `use` declarations so component
+ *    tags can be resolved to FQCNs.
+ * 3. Walk tokens tracking expression-start context.
+ * 4. When `<` (or T_IS_NOT_EQUAL `<>` for Fragment) appears at an expression-start
+ *    position with a valid lookahead, hand off to PsxParser for one PSX expression.
+ * 5. Reassemble the output: emit lowered PHP for PSX regions, copy original PHP
+ *    elsewhere.
  *
- * Out of scope for Phase 0:
- * - Component name resolution against namespace + use statements
- *   (component tags currently emit a runtime call by short name)
- * - Source maps
- * - data-* / aria-* dispatch via __callStatic (uses H::xxx by default)
+ * Not yet implemented (see docs/PSX.md §8):
+ * - Source maps (errors point to .psx.php, not the original .psx)
+ * - PHPStan extension / IDE plugins
+ * - Watch mode
  */
 final class Compiler
 {
     /** @var list<string> FQCNs of component tags seen during the most recent compile() call */
     private array $lastReferences = [];
 
-    public function compile(string $source): string
+    /**
+     * @param NamespaceContext|null $context Optional pre-existing context (used when
+     *        recursively compiling brace expressions inside an outer .psx file so
+     *        namespace + use resolution is preserved).
+     */
+    public function compile(string $source, ?NamespaceContext $context = null): string
     {
         $tokens = \token_get_all($source);
-        $namespaceContext = NamespaceContext::parse($tokens);
+        $namespaceContext = $context ?? NamespaceContext::parse($tokens);
         $this->lastReferences = [];
         $output = '';
         $expectExpression = true;

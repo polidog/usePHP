@@ -437,7 +437,9 @@ final class PsxParser
      */
     private function emitFragment(array $children): string
     {
-        return '[' . \implode(', ', $children) . ']';
+        // H::Fragment yields an Element with type='Fragment', which the Renderer
+        // unwraps (children are emitted directly without a surrounding tag).
+        return 'H::Fragment([' . \implode(', ', $children) . '])';
     }
 
     /**
@@ -453,7 +455,9 @@ final class PsxParser
 
     /**
      * Recursively compile a brace-expression body so that PSX tags appearing
-     * inside `{...}` (e.g. inside array_map) are also transformed.
+     * inside `{...}` (e.g. inside array_map) are also transformed. The outer
+     * file's NamespaceContext is propagated so component tag resolution and
+     * reference tracking continue to work for nested PSX.
      */
     private function compileNestedExpression(string $expr): string
     {
@@ -461,13 +465,14 @@ final class PsxParser
             return $expr;
         }
         $wrapped = '<?php ' . $expr;
-        $compiled = new Compiler()->compile($wrapped);
+        $compiled = new Compiler()->compile($wrapped, $this->namespaceContext);
         return \substr($compiled, \strlen('<?php '));
     }
 
     private function normalizeAttrName(string $name): string
     {
-        // Phase 0: pass-through. Phase 1 will add data-*/aria-* dispatch routing.
+        // Pass-through. Routing of data-*/aria-* attributes happens earlier in
+        // requiresCallStaticDispatch() / emitCallStaticElement().
         return $name;
     }
 }

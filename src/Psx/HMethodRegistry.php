@@ -20,8 +20,17 @@ final class HMethodRegistry
     private static array $cache = [];
 
     /**
+     * Static H methods that are not HTML tag emitters and must NOT be selected
+     * as the typed dispatch target for a PSX `<tag>`.
+     */
+    private const NON_TAG_HELPERS = [
+        '__callStatic',
+        'component',
+    ];
+
+    /**
      * Returns the named parameters of H::$tagName(), or null if the tag
-     * isn't a defined method (and therefore must go through __callStatic).
+     * isn't a defined HTML emitter (and therefore must go through __callStatic).
      *
      * @return list<string>|null
      */
@@ -31,14 +40,17 @@ final class HMethodRegistry
             return self::$cache[$tagName];
         }
 
+        if (\in_array($tagName, self::NON_TAG_HELPERS, true)) {
+            return self::$cache[$tagName] = null;
+        }
+
         try {
             $method = new \ReflectionMethod(H::class, $tagName);
         } catch (\ReflectionException) {
             return self::$cache[$tagName] = null;
         }
 
-        // __callStatic and component() aren't HTML tag emitters.
-        if ($method->isStatic() === false || $method->getName() === '__callStatic') {
+        if ($method->isStatic() === false) {
             return self::$cache[$tagName] = null;
         }
 
