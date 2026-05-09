@@ -59,7 +59,7 @@ final class Compiler
                     $offset = $this->tokenOffset($tokens, $i);
                     $parser = new PsxParser($source, $offset, $namespaceContext);
                     $result = $parser->parseElement();
-                    $output .= $result['php'];
+                    $output .= $this->padNewlines($source, $offset, $result['end'], $result['php']);
                     $i = $this->advanceTokensBeyond($tokens, $i, $result['end']);
                     $expectExpression = false;
                     continue;
@@ -79,7 +79,7 @@ final class Compiler
                     $offset = $this->tokenOffset($tokens, $i);
                     $parser = new PsxParser($source, $offset, $namespaceContext);
                     $result = $parser->parseElement();
-                    $output .= $result['php'];
+                    $output .= $this->padNewlines($source, $offset, $result['end'], $result['php']);
 
                     // Skip tokens consumed by the PSX parser.
                     $i = $this->advanceTokensBeyond($tokens, $i, $result['end']);
@@ -103,6 +103,23 @@ final class Compiler
     public function getLastReferences(): array
     {
         return $this->lastReferences;
+    }
+
+    /**
+     * Append trailing newlines to the emitted PSX code so that the .psx.php
+     * line numbers stay aligned with the original .psx file. Without this,
+     * a multi-line PSX block compresses to a single line and any code below
+     * shifts upward, making PHP error line numbers misleading.
+     */
+    private function padNewlines(string $source, int $offset, int $end, string $emitted): string
+    {
+        $originalSpan = \substr($source, $offset, $end - $offset);
+        $originalNewlines = \substr_count($originalSpan, "\n");
+        $emittedNewlines = \substr_count($emitted, "\n");
+        if ($emittedNewlines >= $originalNewlines) {
+            return $emitted;
+        }
+        return $emitted . \str_repeat("\n", $originalNewlines - $emittedNewlines);
     }
 
     /**

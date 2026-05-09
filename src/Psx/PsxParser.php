@@ -325,8 +325,17 @@ final class PsxParser
 
     private function error(string $message): \RuntimeException
     {
-        $line = \substr_count(\substr($this->source, 0, $this->pos), "\n") + 1;
-        return new \RuntimeException("PSX parse error at line $line: $message");
+        $upTo = \substr($this->source, 0, $this->pos);
+        $line = \substr_count($upTo, "\n") + 1;
+        $lineStart = \strrpos($upTo, "\n");
+        $column = $this->pos - ($lineStart === false ? 0 : $lineStart + 1) + 1;
+
+        $sourceLines = \explode("\n", $this->source);
+        $offendingLine = $sourceLines[$line - 1] ?? '';
+        $caret = \str_repeat(' ', \max(0, $column - 1)) . '^';
+
+        $context = '    ' . $offendingLine . "\n    " . $caret;
+        return new \RuntimeException("PSX parse error at line $line, column $column: $message\n$context");
     }
 
     /**

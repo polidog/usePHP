@@ -79,6 +79,31 @@ class CompilerTest extends TestCase
         );
     }
 
+    public function testPrivateHelperViaLocalClosure(): void
+    {
+        $source = "<?php\n"
+            . "namespace App;\n"
+            . "use Polidog\\UsePhp\\Html\\H;\n"
+            . "\n"
+            . "// Private helper — local closure, not a PSX tag.\n"
+            . "\$row = fn(array \$item) => <li className=\"row\">{\$item['text']}</li>;\n"
+            . "\n"
+            . "return fn(array \$items) => <ul>\n"
+            . "    {array_map(\$row, \$items)}\n"
+            . "</ul>;\n";
+
+        $compiled = $this->compiler->compile($source);
+
+        self::assertStringContainsString(
+            "\$row = fn(array \$item) => H::li(className: 'row', children: \$item['text'])",
+            $compiled
+        );
+        self::assertStringContainsString('H::ul(children: array_map($row, $items))', $compiled);
+
+        // Helper closure should not be added to the manifest reference list.
+        self::assertSame([], $this->compiler->getLastReferences());
+    }
+
     public function testFragmentInsideArrayMap(): void
     {
         $source = "<?php\nreturn fn(\$items) => <ul>\n  {array_map(fn(\$t) => <li>{\$t}</li>, \$items)}\n</ul>;\n";
@@ -171,6 +196,43 @@ class CompilerTest extends TestCase
             self::assertSame('42', $element->props['data-id']);
         } finally {
             @\unlink($tmp);
+        }
+    }
+
+    public function testCompilationPreservesLineCount(): void
+    {
+        $source = "<?php\n\nreturn fn() => <div>\n    <span>line 4</span>\n    <span>line 5</span>\n</div>;\n\n// trailing line 8\n";
+        $compiled = $this->compiler->compile($source);
+
+        self::assertSame(
+            \substr_count($source, "\n"),
+            \substr_count($compiled, "\n"),
+            'Compiled output should preserve line count so error line numbers stay aligned.'
+        );
+    }
+
+    public function testTrailingCodeStaysOnOriginalLine(): void
+    {
+        $source = "<?php\n\nreturn fn() => <div>\n    <span>x</span>\n    <span>y</span>\n</div>;\nthrow new \\Exception('on line 7');\n";
+        $compiled = $this->compiler->compile($source);
+
+        $compiledLines = \explode("\n", $compiled);
+        self::assertStringContainsString("throw new \\Exception('on line 7');", $compiledLines[6] ?? '');
+    }
+
+    public function testParseErrorIncludesLineColumnAndSourceCaret(): void
+    {
+        $source = "<?php\nreturn fn() => <div>\n    <p>oops\n</div>;\n";
+        try {
+            $this->compiler->compile($source);
+            self::fail('Expected RuntimeException');
+        } catch (\RuntimeException $e) {
+            $msg = $e->getMessage();
+            self::assertStringContainsString('line 4', $msg);
+            self::assertStringContainsString('column', $msg);
+            self::assertStringContainsString('Mismatched closing tag', $msg);
+            // The caret line should be present.
+            self::assertMatchesRegularExpression('/\n {4,} *\^/', $msg);
         }
     }
 

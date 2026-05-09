@@ -636,17 +636,23 @@ PSX コンパイラは `<Counter />` をコンパイル時に検証する際、�
 - `bin/usephp` に `compile` サブコマンド追加
 - E2E: `examples/components/psx/{Counter,Card,Page}.psx` で 3 階層構成を実機動作確認
 
-### Phase 2(検討中)— 残タスク
-- Private ヘルパーコンポーネントの正式サポート(設計書 §3 で言及済、実装は未)
-- ソースマップ(`.psx.php` のエラー行 → `.psx` の元行)
-- IDE プラグイン / PHPStan エクステンション
-- 複数の公開コンポーネント/1ファイル
-- watch モード / HMR
+### ✅ Phase 2: DX 改善 — 完了
+- TodoList を `.psx` に移植(`examples/components/psx/TodoList.psx`)、array_map + 条件付き className パターンの実機検証
+- README に PSX セクション追加(syntax/CLI/runtime/composition の概要)
+- `usephp compile --watch`: mtime ポーリング(500ms)で自動再コンパイル
+- 行番号保持(line-preserving compilation): 元 `.psx` と同じ行に PHP コードが配置されるよう改行をパディング → エラー行が原本と一致
+- Private ヘルパーコンポーネント検証: ローカルクロージャ + `{$helper(...)}` で動作することをテストで確認(レジストリ非汚染)
+- コンパイルエラーに行・列・ソース行・キャレットを表示
+
+### Phase 3 候補 — 残タスク
+- 完全なソースマップ(`.psx.php` 経由の Throwable のスタックトレースを `.psx` に rewrite するエラーハンドラ)
+- IDE プラグイン / PHPStan エクステンション(PSX タグの型推論)
+- 複数の公開コンポーネント/1ファイル(現状の制約は意図的に維持。1 file = 1 component の明確さがメリット)
 - nikic/php-parser ベースの再実装検討(現状ハンドコードで支障なし)
 
 ### テストカバレッジ
-198 件全パス。新規 PSX 関連 37 件:
-- `tests/Psx/CompilerTest.php` — 構文ケース 22 件
+202 件全パス。PSX 関連 41 件:
+- `tests/Psx/CompilerTest.php` — 構文ケース・行保持・エラー表示 26 件
 - `tests/Psx/CompileCommandTest.php` — CLI 動作 7 件
 - `tests/Psx/NamespaceContextTest.php` — 名前解決 8 件
 
@@ -668,6 +674,15 @@ PSX コンパイラは `<Counter />` をコンパイル時に検証する際、�
 - [nikic/php-parser](https://github.com/nikic/PHP-Parser)
 
 ## 11. 改訂履歴
+
+### 2026-05-09(Phase 2: DX 改善ラウンド)
+- `usephp compile --watch` でファイル変更を検知して自動再コンパイル
+- 行番号保持: コンパイル後 `.psx.php` の行番号が `.psx` 原本と一致するよう改行パディング
+- コンパイルエラーに行・列・ソース行・キャレット表示
+- TodoList 移植例 (`examples/components/psx/TodoList.psx`) で array_map + 条件付き className パターンを検証
+- Private ヘルパーコンポーネントの動作確認テスト追加
+- README に PSX セクション追加
+- 202 tests pass(PSX 関連 +4 件)
 
 ### 2026-05-09(Phase 0 + Phase 1 実装完了)
 - Phase 0 プロトタイプを `src/Psx/{Compiler, PsxParser}.php` で実装、Counter.psx → ブラウザ動作確認
