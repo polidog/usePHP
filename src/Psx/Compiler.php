@@ -24,7 +24,7 @@ namespace Polidog\UsePhp\Psx;
  * is prefixed with newlines matching the source between siblings) so the
  * compiled output's lines remain aligned with the original .psx source.
  */
-final class Compiler
+final class Compiler implements CompilerInterface
 {
     /** @var list<string> FQCNs of component tags seen during the most recent compile() call */
     private array $lastReferences = [];

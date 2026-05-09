@@ -9,7 +9,7 @@ namespace Polidog\UsePhp\Psx;
  *
  * Produces equivalent PHP source code (calls to H::xxx() or renderPsxComponent()).
  */
-final class PsxParser
+final class PsxParser implements PsxParserInterface
 {
     private int $pos;
 
