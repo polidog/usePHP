@@ -18,7 +18,7 @@ namespace Polidog\UsePhp\Psx;
  * the lowered code actually consumes, so line numbers in the final output
  * match the original .psx source.
  */
-final class PsxPreProcessor
+final class PsxPreProcessor implements PsxPreProcessorInterface
 {
     public const PLACEHOLDER_NAMESPACE = '\\Polidog\\UsePhp\\Psx\\Internal\\';
 
