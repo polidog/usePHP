@@ -16,6 +16,7 @@ final class PsxParser
     public function __construct(
         private readonly string $source,
         int $start,
+        private readonly ?NamespaceContext $namespaceContext = null,
     ) {
         $this->pos = $start;
     }
@@ -30,6 +31,7 @@ final class PsxParser
 
         if ($tagName === '') {
             // Fragment <>...</>
+            $this->expect('>');
             $children = $this->parseChildren(closingTag: '');
             $this->consumeFragmentClose();
             return ['php' => $this->emitFragment($children), 'end' => $this->pos];
@@ -120,7 +122,7 @@ final class PsxParser
                     return $children;
                 }
                 $this->flushTextBuffer($textBuffer, $children);
-                $sub = (new self($this->source, $this->pos))->parseElement();
+                $sub = (new self($this->source, $this->pos, $this->namespaceContext))->parseElement();
                 $children[] = $sub['php'];
                 $this->pos = $sub['end'];
                 continue;
@@ -251,7 +253,7 @@ final class PsxParser
                 if ($depth === 0) {
                     $expr = \substr($this->source, $start, $this->pos - $start);
                     $this->pos++; // consume closing '}'
-                    return \trim($expr);
+                    return $this->compileNestedExpression(\trim($expr));
                 }
             }
             $this->pos++;
@@ -351,8 +353,11 @@ final class PsxParser
      */
     private function emitHtmlElement(string $tagName, array $attrs, ?array $children): string
     {
-        $namedArgs = [];
+        if ($this->requiresCallStaticDispatch($tagName, $attrs)) {
+            return $this->emitCallStaticElement($tagName, $attrs, $children);
+        }
 
+        $namedArgs = [];
         foreach ($attrs as $attr) {
             $name = $this->normalizeAttrName($attr['name']);
             $value = $attr['value'];
@@ -368,10 +373,51 @@ final class PsxParser
 
     /**
      * @param list<array{name: string, value: string|null, isExpr: bool}> $attrs
+     */
+    private function requiresCallStaticDispatch(string $tagName, array $attrs): bool
+    {
+        $known = HMethodRegistry::getParams($tagName);
+        if ($known === null) {
+            // Unknown tag (e.g., custom element). __callStatic is the only path.
+            return true;
+        }
+        foreach ($attrs as $attr) {
+            if (!\in_array($this->normalizeAttrName($attr['name']), $known, true)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @param list<array{name: string, value: string|null, isExpr: bool}> $attrs
+     * @param list<string>|null $children
+     */
+    private function emitCallStaticElement(string $tagName, array $attrs, ?array $children): string
+    {
+        $entries = [];
+        foreach ($attrs as $attr) {
+            $name = $attr['name']; // raw HTML attribute name (e.g. 'data-id')
+            $value = $attr['value'];
+            $entries[] = "'$name' => $value";
+        }
+        if ($children !== null && $children !== []) {
+            $entries[] = "'children' => " . $this->emitChildrenArg($children);
+        }
+        $args = '[' . \implode(', ', $entries) . ']';
+        return "H::__callStatic('$tagName', $args)";
+    }
+
+    /**
+     * @param list<array{name: string, value: string|null, isExpr: bool}> $attrs
      * @param list<string>|null $children
      */
     private function emitComponent(string $tagName, array $attrs, ?array $children): string
     {
+        $fqcn = $this->namespaceContext !== null
+            ? $this->namespaceContext->resolve($tagName)
+            : $tagName;
+
         $propsEntries = [];
         foreach ($attrs as $attr) {
             $name = $attr['name'];
@@ -382,7 +428,8 @@ final class PsxParser
             $propsEntries[] = "'children' => " . $this->emitChildrenArg($children);
         }
         $props = '[' . \implode(', ', $propsEntries) . ']';
-        return "\\Polidog\\UsePhp\\Runtime\\RenderContext::getApp()->renderPsxComponent('$tagName', $props)";
+        $escapedFqcn = \str_replace('\\', '\\\\', $fqcn);
+        return "\\Polidog\\UsePhp\\Runtime\\RenderContext::getApp()->renderPsxComponent('$escapedFqcn', $props)";
     }
 
     /**
@@ -402,6 +449,20 @@ final class PsxParser
             return $children[0];
         }
         return '[' . \implode(', ', $children) . ']';
+    }
+
+    /**
+     * Recursively compile a brace-expression body so that PSX tags appearing
+     * inside `{...}` (e.g. inside array_map) are also transformed.
+     */
+    private function compileNestedExpression(string $expr): string
+    {
+        if ($expr === '' || !\str_contains($expr, '<')) {
+            return $expr;
+        }
+        $wrapped = '<?php ' . $expr;
+        $compiled = (new Compiler())->compile($wrapped);
+        return \substr($compiled, \strlen('<?php '));
     }
 
     private function normalizeAttrName(string $name): string

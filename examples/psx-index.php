@@ -3,16 +3,17 @@
 declare(strict_types=1);
 
 /**
- * usePHP PSX Phase 0 demo
+ * usePHP PSX demo (Phase 1)
  *
- * Compiles examples/components/psx/Counter.psx on startup and renders it.
+ * Auto-compiles .psx files on each request during development. In production
+ * you would run `./vendor/bin/usephp compile components/` once during deploy.
  *
  * Run: php -S localhost:8000 examples/psx-index.php
  */
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
-use Polidog\UsePhp\Psx\Compiler;
+use Polidog\UsePhp\Psx\CompileCommand;
 use Polidog\UsePhp\UsePHP;
 
 if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
@@ -21,66 +22,82 @@ if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
     exit;
 }
 
-$psxSource = __DIR__ . '/components/psx/Counter.psx';
-$compiledPath = __DIR__ . '/components/psx/Counter.psx.php';
-$manifestPath = __DIR__ . '/components/psx/psx-manifest.php';
+$psxDir = __DIR__ . '/components/psx';
+$manifestPath = $psxDir . '/psx-manifest.php';
 
-if (!file_exists($compiledPath) || filemtime($psxSource) > filemtime($compiledPath)) {
-    $compiler = new Compiler();
-    $compiled = $compiler->compile(file_get_contents($psxSource));
-    file_put_contents($compiledPath, $compiled);
-}
-
-if (!file_exists($manifestPath) || filemtime($compiledPath) > filemtime($manifestPath)) {
-    $manifest = [
-        'App\\Components\\Psx\\Counter' => $compiledPath,
-    ];
-    file_put_contents(
-        $manifestPath,
-        "<?php\n\nreturn " . var_export($manifest, true) . ";\n"
-    );
+// Dev mode: re-compile if any .psx file is newer than the manifest.
+if (psxNeedsCompile($psxDir, $manifestPath)) {
+    ob_start();
+    $cmd = new CompileCommand();
+    $exitCode = $cmd->run([$psxDir, '--manifest=' . $manifestPath], $psxDir);
+    ob_end_clean();
+    if ($exitCode !== 0) {
+        http_response_code(500);
+        echo "PSX compile failed. Run: ./vendor/bin/usephp compile examples/components/psx/";
+        exit;
+    }
 }
 
 $app = new UsePHP();
-$app->setSnapshotSecret('phase-0-demo-secret');
+$app->setSnapshotSecret('phase-1-demo-secret');
 $app->loadComponentManifest($manifestPath);
 
 $router = $app->getRouter();
 $router->get('/', function (): \Polidog\UsePhp\Runtime\Element {
     \Polidog\UsePhp\Runtime\RenderContext::beginRender();
     return \Polidog\UsePhp\Runtime\RenderContext::getApp()
+        ->renderPsxComponent('App\\Components\\Psx\\Page', []);
+});
+$router->get('/counter', function (): \Polidog\UsePhp\Runtime\Element {
+    \Polidog\UsePhp\Runtime\RenderContext::beginRender();
+    return \Polidog\UsePhp\Runtime\RenderContext::getApp()
         ->renderPsxComponent('App\\Components\\Psx\\Counter', ['initial' => 0]);
 });
-
-$layoutWrapper = function (string $title, string $content): void {
-    ?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title><?= $title ?> - usePHP PSX</title>
-    <style>
-        body { font-family: system-ui, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; background: #f5f5f5; }
-        .counter { background: white; border-radius: 12px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        h1 { margin: 0 0 20px; color: #333; text-align: center; }
-        .counter-display { text-align: center; font-size: 2rem; margin: 20px 0; color: #555; }
-        .counter-buttons { display: flex; gap: 10px; justify-content: center; }
-        .btn { padding: 10px 20px; font-size: 1rem; border: none; border-radius: 6px; cursor: pointer; background: #4a90e2; color: white; }
-        .btn:hover { background: #357abd; }
-        .btn-reset { background: #888; }
-    </style>
-</head>
-<body>
-    <h1><?= $title ?></h1>
-    <?= $content ?>
-    <script src="/usephp.js"></script>
-</body>
-</html>
-<?php
-};
 
 ob_start();
 $app->run();
 $content = ob_get_clean();
 
-$layoutWrapper('PSX Counter', $content);
+?><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>usePHP PSX demo</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 720px; margin: 50px auto; padding: 20px; background: #f5f5f5; }
+        .page { display: flex; flex-direction: column; gap: 20px; }
+        h1 { margin: 0; color: #333; text-align: center; }
+        .card { background: white; border-radius: 12px; padding: 24px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }
+        .card-title { margin: 0 0 12px; color: #4a4a4a; font-size: 1.15rem; }
+        .card-body { color: #555; }
+        .counter { background: #fafafa; border-radius: 8px; padding: 16px; }
+        .counter-display { text-align: center; font-size: 1.5rem; margin: 12px 0; }
+        .counter-buttons { display: flex; gap: 8px; justify-content: center; }
+        .btn { padding: 8px 16px; font-size: 0.95rem; border: none; border-radius: 6px; cursor: pointer; background: #4a90e2; color: white; }
+        .btn:hover { background: #357abd; }
+        .btn-reset { background: #888; }
+    </style>
+</head>
+<body>
+    <?= $content ?>
+    <script src="/usephp.js"></script>
+</body>
+</html>
+<?php
+
+function psxNeedsCompile(string $dir, string $manifest): bool
+{
+    if (!file_exists($manifest)) {
+        return true;
+    }
+    $manifestMtime = filemtime($manifest);
+    $iter = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir));
+    foreach ($iter as $file) {
+        if ($file->isFile() && str_ends_with($file->getPathname(), '.psx')) {
+            if (filemtime($file->getPathname()) > $manifestMtime) {
+                return true;
+            }
+        }
+    }
+    return false;
+}

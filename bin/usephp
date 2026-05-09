@@ -25,6 +25,9 @@ switch ($command) {
     case 'publish':
         publishAssets();
         break;
+    case 'compile':
+        $cmd = new \Polidog\UsePhp\Psx\CompileCommand();
+        exit($cmd->run(\array_slice($argv, 2), \getcwd() ?: '.'));
     case 'help':
     default:
         showHelp();
@@ -80,10 +83,18 @@ Usage:
 
 Commands:
   publish    Copy usephp.js to your project's public directory
+  compile    Compile .psx files to .psx.php and generate the manifest
   help       Show this help message
 
-Example:
+Compile options:
+  --check               Verify generated files are up to date (CI use)
+  --clean               Remove generated .psx.php files and the manifest
+  --manifest=PATH       Manifest output path (default: ./psx-manifest.php)
+
+Examples:
   ./vendor/bin/usephp publish
+  ./vendor/bin/usephp compile components/
+  ./vendor/bin/usephp compile --check
 
 HELP;
 }

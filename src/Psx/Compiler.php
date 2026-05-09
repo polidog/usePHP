@@ -24,9 +24,14 @@ namespace Polidog\UsePhp\Psx;
  */
 final class Compiler
 {
+    /** @var list<string> FQCNs of component tags seen during the most recent compile() call */
+    private array $lastReferences = [];
+
     public function compile(string $source): string
     {
         $tokens = \token_get_all($source);
+        $namespaceContext = NamespaceContext::parse($tokens);
+        $this->lastReferences = [];
         $output = '';
         $expectExpression = true;
 
@@ -38,6 +43,19 @@ final class Compiler
 
             if (\is_array($token)) {
                 [$id, $text] = $token;
+
+                // PHP tokenizes `<>` as T_IS_NOT_EQUAL. In expression context this
+                // is a Fragment opener — switch to PSX parsing.
+                if ($id === \T_IS_NOT_EQUAL && $expectExpression && $text === '<>') {
+                    $offset = $this->tokenOffset($tokens, $i);
+                    $parser = new PsxParser($source, $offset, $namespaceContext);
+                    $result = $parser->parseElement();
+                    $output .= $result['php'];
+                    $i = $this->advanceTokensBeyond($tokens, $i, $result['end']);
+                    $expectExpression = false;
+                    continue;
+                }
+
                 $output .= $text;
                 $expectExpression = $this->updateExpressionContext($id, $expectExpression);
                 $i++;
@@ -50,7 +68,7 @@ final class Compiler
                 $next = $tokens[$i + 1] ?? null;
                 if ($this->isPsxTagStart($next)) {
                     $offset = $this->tokenOffset($tokens, $i);
-                    $parser = new PsxParser($source, $offset);
+                    $parser = new PsxParser($source, $offset, $namespaceContext);
                     $result = $parser->parseElement();
                     $output .= $result['php'];
 
@@ -66,7 +84,16 @@ final class Compiler
             $i++;
         }
 
+        $this->lastReferences = $namespaceContext->getResolvedReferences();
         return $output;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function getLastReferences(): array
+    {
+        return $this->lastReferences;
     }
 
     /**
