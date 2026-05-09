@@ -492,7 +492,7 @@ return fc(function (array $props) {
 }, 'counter', StorageType::Session);
 ```
 
-Lowers to (`Counter.psx.php`):
+Lowers to (cached file inside `var/cache/psx/`):
 
 ```php
 return fc(function (array $props) {
@@ -517,22 +517,26 @@ return fc(function (array $props) {
 # CI: fail if anything is out of date
 ./vendor/bin/usephp compile components/ --check
 
-# Remove all generated .psx.php and the manifest
+# Remove the cache directory
 ./vendor/bin/usephp compile components/ --clean
+
+# Use a custom cache directory
+./vendor/bin/usephp compile components/ --cache=build/psx
 ```
 
-`compile` produces `Counter.psx.php` next to each `.psx`, plus a `psx-manifest.php` (FQCN → compiled-path map). Both are intended to be ignored by version control:
+`compile` writes its output to `var/cache/psx/` (configurable with `--cache=PATH`). Each `.psx` source file produces a sha1-named `.php` companion in that directory, plus a single `manifest.php` (FQCN → compiled-path map). The `.psx` source files in your project tree are the only PSX-related files you commit — the cache directory is intended to be ignored:
 
 ```gitignore
-*.psx.php
-psx-manifest.php
+/var/cache/psx/
 ```
 
 ### Loading PSX components at runtime
 
 ```php
+use Polidog\UsePhp\Psx\CompileCommand;
+
 $app = new UsePHP();
-$app->loadComponentManifest(__DIR__ . '/psx-manifest.php');
+$app->loadComponentManifest(__DIR__ . '/../var/cache/psx/' . CompileCommand::MANIFEST_FILENAME);
 
 // Use a PSX component as a route handler
 $router->get('/', function () use ($app) {

@@ -7,7 +7,7 @@
 
 usePHP の現状の `H::div(children: [...])` スタイルは、ネストが深くなると視覚的に HTML として読み取りにくく、属性 vs 子要素の境界も冗長。一方で「ビルドステップなし」「純粋PHP」という現状の強みもある。
 
-PSX は、TSX (TypeScript JSX) と同じアイデアを PHP に持ち込み、**HTMLのように書ける UI 記述構文**を提供する。`.psx` ファイルを `usephp compile` でコンパイルして `.psx.php` を生成し、ランタイムは既存の `H::xxx()` 呼び出しと同じものを実行する。
+PSX は、TSX (TypeScript JSX) と同じアイデアを PHP に持ち込み、**HTMLのように書ける UI 記述構文**を提供する。`.psx` ファイルを `usephp compile` でコンパイルすると、`var/cache/psx/` 配下にコンパイル成果物が生成され、ランタイムは既存の `H::xxx()` 呼び出しと同じものを実行する。ソースツリーには `.psx` だけが残り、`.psx.php` という複合拡張子のファイルがソースに混じらない。
 
 ### Before / After
 
@@ -332,49 +332,42 @@ fn() => <button>+</button>;                     // OK
 ./vendor/bin/usephp compile --clean
 ```
 
-### 5.2 設定 (`usephp.config.php`)
+### 5.2 オプション
 
-```php
-return [
-    'psx' => [
-        'sourceDirs' => ['components/', 'pages/'],
-        'manifestPath' => __DIR__ . '/psx-manifest.php',
-        'cacheStrategy' => 'sidecar',  // 'sidecar' | 'centralized'
-    ],
-];
-```
-
-| 設定 | 意味 | デフォルト |
+| フラグ | 意味 | デフォルト |
 |---|---|---|
-| `sourceDirs` | コンパイル対象ディレクトリ | `['components/']` |
-| `manifestPath` | マニフェスト出力先 | プロジェクトルート |
-| `cacheStrategy` | `.psx.php` 配置 | `sidecar`(`.psx` と同階層) |
+| `--cache=PATH` | コンパイル成果物 + manifest の出力先ディレクトリ | `<cwd>/var/cache/psx` |
+| `--check` | 書き込まず差分があれば exit 1(CI 用) | — |
+| `--clean` | キャッシュディレクトリの中身を削除 | — |
+| `--watch` | ソース変更を polling で検知して自動再コンパイル | — |
 
 ### 5.3 出力
 
 #### 個別ファイル
 
-```php
-// 入力: components/Counter.psx
-// 出力: components/Counter.psx.php
+```
+入力: components/Counter.psx
+出力: var/cache/psx/<sha1(realpath(source))>.php
 ```
 
-各 `.psx` ファイルの直接の出力。PSXタグだけを `H::xxx()` / `H::__callStatic()` / `renderPsxComponent()` に変換し、それ以外のPHPコードはそのまま転写。
+ソースツリーには `.psx` のみ残り、コンパイル成果物はキャッシュディレクトリに集約される。ファイル名は **ソースの絶対パスの sha1 ハッシュ** + `.php`(衝突なし、安定、再現性あり)。
+
+`PsxParser` は PSX タグを `H::xxx()` / `H::__callStatic()` / `renderPsxComponent()` に変換し、それ以外の PHP コードはそのまま転写。
 
 #### マニフェスト
 
 ```php
-// psx-manifest.php(自動生成)
+// var/cache/psx/manifest.php(自動生成)
 return [
-    'App\\Components\\Counter'      => __DIR__ . '/components/Counter.psx.php',
-    'App\\Components\\Card'         => __DIR__ . '/components/Card.psx.php',
-    'App\\Components\\Forms\\Input' => __DIR__ . '/components/forms/Input.psx.php',
+    'App\\Components\\Counter'      => '/abs/.../var/cache/psx/abc123…def.php',
+    'App\\Components\\Card'         => '/abs/.../var/cache/psx/789…012.php',
+    'App\\Components\\Forms\\Input' => '/abs/.../var/cache/psx/345…678.php',
 ];
 ```
 
 #### コミット方針
 
-**推奨: `.psx.php` と `psx-manifest.php` は git管理しない**(`.gitignore` に追加)。
+**推奨: `var/cache/psx/` は git管理しない**(`.gitignore` に追加)。
 
 理由:
 - 生成物なのでチームの merge conflict を生む
@@ -383,8 +376,7 @@ return [
 
 ```gitignore
 # .gitignore
-*.psx.php
-psx-manifest.php
+/var/cache/psx/
 ```
 
 CI 設定例:
@@ -488,8 +480,10 @@ return <Counter />;      // タグ(大文字始まりも識別子)
 
 ```php
 // public/index.php
+use Polidog\UsePhp\Psx\CompileCommand;
+
 $app = new UsePHP();
-$app->loadComponentManifest(__DIR__ . '/../psx-manifest.php');
+$app->loadComponentManifest(__DIR__ . '/../var/cache/psx/' . CompileCommand::MANIFEST_FILENAME);
 ```
 
 マニフェストはパスのマップだけ持ち、実際のファイルロードは初回参照時に遅延実行。
@@ -687,6 +681,16 @@ PSX コンパイラは `<Counter />` をコンパイル時に検証する際、�
 - [nikic/php-parser](https://github.com/nikic/PHP-Parser)
 
 ## 11. 改訂履歴
+
+### 2026-05-09(Phase 5: キャッシュディレクトリ方式)
+- `.psx.php` の sibling 出力を廃止、`var/cache/psx/` 配下に集約
+- ファイル名は `sha1(realpath(source)).php`(衝突なし、安定、再現性あり)
+- マニフェストは `var/cache/psx/manifest.php` に移動
+- `--cache=PATH` フラグで出力先を上書き可
+- `--clean` はキャッシュディレクトリの中身を削除
+- `--manifest=PATH` フラグは廃止(`--cache=` に統合)
+- `.gitignore` 推奨は `*.psx.php` + `psx-manifest.php` から `/var/cache/psx/` のみに
+- 公開 helper `CompileCommand::cachePathFor($cacheDir, $sourcePath)` を追加(外部ツールが同じ規約で path 計算できるように)
 
 ### 2026-05-09(Phase 4: nikic/php-parser 移行)
 - `nikic/php-parser ^5.7` を依存に追加

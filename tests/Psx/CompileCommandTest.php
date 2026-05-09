@@ -10,11 +10,15 @@ use Polidog\UsePhp\Psx\CompileCommand;
 class CompileCommandTest extends TestCase
 {
     private string $workDir;
+    private string $cacheDir;
+    private string $manifestPath;
 
     protected function setUp(): void
     {
         $this->workDir = \sys_get_temp_dir() . '/psx-cmd-test-' . \uniqid();
         \mkdir($this->workDir . '/components', 0o777, true);
+        $this->cacheDir = $this->workDir . '/var/cache/psx';
+        $this->manifestPath = $this->cacheDir . '/manifest.php';
     }
 
     protected function tearDown(): void
@@ -22,7 +26,7 @@ class CompileCommandTest extends TestCase
         $this->rmrf($this->workDir);
     }
 
-    public function testCompilesFilesAndGeneratesManifest(): void
+    public function testCompilesFilesAndGeneratesManifestInsideCacheDir(): void
     {
         \file_put_contents(
             $this->workDir . '/components/Counter.psx',
@@ -33,15 +37,37 @@ class CompileCommandTest extends TestCase
         $exitCode = $this->runCmd($cmd, [$this->workDir . '/components']);
 
         self::assertSame(0, $exitCode);
-        self::assertFileExists($this->workDir . '/components/Counter.psx.php');
-        self::assertFileExists($this->workDir . '/psx-manifest.php');
+        self::assertFileDoesNotExist($this->workDir . '/components/Counter.psx.php', 'No sibling .psx.php — output goes to cache dir.');
+        self::assertFileExists($this->manifestPath);
+        self::assertDirectoryExists($this->cacheDir);
 
-        $manifest = require $this->workDir . '/psx-manifest.php';
+        $manifest = require $this->manifestPath;
         self::assertArrayHasKey('App\\Components\\Counter', $manifest);
-        self::assertSame(
-            $this->workDir . '/components/Counter.psx.php',
-            $manifest['App\\Components\\Counter']
+
+        $expected = CompileCommand::cachePathFor(
+            $this->cacheDir,
+            $this->workDir . '/components/Counter.psx',
         );
+        self::assertSame($expected, $manifest['App\\Components\\Counter']);
+        self::assertFileExists($expected);
+    }
+
+    public function testCustomCacheDirViaFlag(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/components/Counter.psx',
+            "<?php\nnamespace App;\nuse Polidog\\UsePhp\\Html\\H;\nreturn fn() => <div>x</div>;\n"
+        );
+        $customCache = $this->workDir . '/build/psx';
+
+        $cmd = new CompileCommand();
+        $exitCode = $this->runCmd($cmd, [
+            $this->workDir . '/components',
+            '--cache=' . $customCache,
+        ]);
+
+        self::assertSame(0, $exitCode);
+        self::assertFileExists($customCache . '/manifest.php');
     }
 
     public function testCheckExitsNonZeroWhenStale(): void
@@ -53,7 +79,6 @@ class CompileCommandTest extends TestCase
         $cmd = new CompileCommand();
         $this->runCmd($cmd, [$this->workDir . '/components']);
 
-        // Modify source so compiled output would differ.
         \file_put_contents(
             $this->workDir . '/components/A.psx',
             "<?php\nnamespace X;\nuse Polidog\\UsePhp\\Html\\H;\nreturn fn() => <div>new</div>;\n"
@@ -63,7 +88,7 @@ class CompileCommandTest extends TestCase
         self::assertSame(1, $exitCode);
     }
 
-    public function testCleanRemovesGeneratedFiles(): void
+    public function testCleanEmptiesCacheDir(): void
     {
         \file_put_contents(
             $this->workDir . '/components/A.psx',
@@ -72,13 +97,17 @@ class CompileCommandTest extends TestCase
         $cmd = new CompileCommand();
         $this->runCmd($cmd, [$this->workDir . '/components']);
 
-        self::assertFileExists($this->workDir . '/components/A.psx.php');
-        self::assertFileExists($this->workDir . '/psx-manifest.php');
+        $compiledPath = CompileCommand::cachePathFor(
+            $this->cacheDir,
+            $this->workDir . '/components/A.psx',
+        );
+        self::assertFileExists($compiledPath);
+        self::assertFileExists($this->manifestPath);
 
         $this->runCmd($cmd, [$this->workDir . '/components', '--clean']);
 
-        self::assertFileDoesNotExist($this->workDir . '/components/A.psx.php');
-        self::assertFileDoesNotExist($this->workDir . '/psx-manifest.php');
+        self::assertFileDoesNotExist($compiledPath);
+        self::assertFileDoesNotExist($this->manifestPath);
     }
 
     public function testErrorsOnUnresolvedComponentReference(): void
@@ -136,6 +165,17 @@ class CompileCommandTest extends TestCase
         $cmd = new CompileCommand();
         $exitCode = $this->runCmd($cmd, [$this->workDir . '/components']);
         self::assertSame(1, $exitCode);
+    }
+
+    public function testCachePathForIsStable(): void
+    {
+        $source = $this->workDir . '/components/A.psx';
+        \file_put_contents($source, '<?php');
+        $a = CompileCommand::cachePathFor($this->cacheDir, $source);
+        $b = CompileCommand::cachePathFor($this->cacheDir, $source);
+        self::assertSame($a, $b);
+        self::assertStringStartsWith($this->cacheDir, $a);
+        self::assertStringEndsWith('.php', $a);
     }
 
     /**
