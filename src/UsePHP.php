@@ -86,6 +86,21 @@ final class UsePHP
     }
 
     /**
+     * Register a global exception handler that prints stack traces with
+     * `.psx.php` file paths rewritten to their original `.psx` source paths.
+     * Combined with line-preserving compilation, errors look like they came
+     * from the .psx source.
+     *
+     * Returns the previous exception handler (if any) so callers can restore.
+     */
+    public function installPsxErrorHandler(): ?callable
+    {
+        return \set_exception_handler(static function (\Throwable $e): void {
+            \fwrite(\STDERR, \Polidog\UsePhp\Psx\StackTraceRewriter::formatException($e) . "\n");
+        });
+    }
+
+    /**
      * Invoke a PSX component by FQCN. Compiled PSX tags <Counter />
      * lower to a call to this method.
      *

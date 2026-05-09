@@ -644,17 +644,21 @@ PSX コンパイラは `<Counter />` をコンパイル時に検証する際、�
 - Private ヘルパーコンポーネント検証: ローカルクロージャ + `{$helper(...)}` で動作することをテストで確認(レジストリ非汚染)
 - コンパイルエラーに行・列・ソース行・キャレットを表示
 
-### Phase 3 候補 — 残タスク
-- 完全なソースマップ(`.psx.php` 経由の Throwable のスタックトレースを `.psx` に rewrite するエラーハンドラ)
+### ✅ Phase 3: 行レベル DX 改善 — 完了
+- スタックトレース rewrite (`StackTraceRewriter`): `.psx.php` パスを `.psx` に置換、`UsePHP::installPsxErrorHandler()` でグローバルハンドラ登録
+- Per-tag 行保持: 各 PSX 子要素にソース行から計算した `\n` プレフィックスを付与し、`H::xxx()` 呼び出しが元の `<tag>` と同じ行に出力される。多階層ネストでも実証済(`<span>{$undefined}</span>` がソース行 10 → コンパイル後行 10 のエラー)。
+
+### Phase 4 候補 — 残タスク
 - IDE プラグイン / PHPStan エクステンション(PSX タグの型推論)
 - 複数の公開コンポーネント/1ファイル(現状の制約は意図的に維持。1 file = 1 component の明確さがメリット)
 - nikic/php-parser ベースの再実装検討(現状ハンドコードで支障なし)
 
 ### テストカバレッジ
-202 件全パス。PSX 関連 41 件:
+207 件全パス。PSX 関連 46 件:
 - `tests/Psx/CompilerTest.php` — 構文ケース・行保持・エラー表示 26 件
 - `tests/Psx/CompileCommandTest.php` — CLI 動作 7 件
 - `tests/Psx/NamespaceContextTest.php` — 名前解決 8 件
+- `tests/Psx/StackTraceRewriterTest.php` — トレース rewrite 5 件
 
 ## 9. オープン課題(MVP後検討)
 
@@ -674,6 +678,12 @@ PSX コンパイラは `<Counter />` をコンパイル時に検証する際、�
 - [nikic/php-parser](https://github.com/nikic/PHP-Parser)
 
 ## 11. 改訂履歴
+
+### 2026-05-09(Phase 3: 行レベル DX 改善)
+- `StackTraceRewriter` 追加: `.psx.php` パスを `.psx` に書き換え、Throwable を整形
+- `UsePHP::installPsxErrorHandler()`: グローバル例外ハンドラの自動登録
+- Per-tag 行保持: 子要素間に元ソースの改行数だけ `\n` を挿入し、各 `H::xxx()` が元 `<tag>` と同じ行に来るよう調整
+- 207 tests pass(PSX 関連 +5 件、`StackTraceRewriterTest`)
 
 ### 2026-05-09(Phase 2: DX 改善ラウンド)
 - `usephp compile --watch` でファイル変更を検知して自動再コンパイル

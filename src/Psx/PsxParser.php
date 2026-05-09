@@ -32,9 +32,12 @@ final class PsxParser
         if ($tagName === '') {
             // Fragment <>...</>
             $this->expect('>');
-            $children = $this->parseChildren(closingTag: '');
+            [$children, $trailingNewlines] = $this->parseChildren(closingTag: '');
             $this->consumeFragmentClose();
-            return ['php' => $this->emitFragment($children), 'end' => $this->pos];
+            return [
+                'php' => $this->emitFragment($children, $trailingNewlines),
+                'end' => $this->pos,
+            ];
         }
 
         $attrs = $this->parseAttributes();
@@ -45,17 +48,17 @@ final class PsxParser
             $this->pos++; // consume '/'
             $this->expect('>');
             return [
-                'php' => $this->emitElement($tagName, $attrs, null),
+                'php' => $this->emitElement($tagName, $attrs, null, 0),
                 'end' => $this->pos,
             ];
         }
 
         $this->expect('>');
-        $children = $this->parseChildren(closingTag: $tagName);
+        [$children, $trailingNewlines] = $this->parseChildren(closingTag: $tagName);
         $this->consumeClosingTag($tagName);
 
         return [
-            'php' => $this->emitElement($tagName, $attrs, $children),
+            'php' => $this->emitElement($tagName, $attrs, $children, $trailingNewlines),
             'end' => $this->pos,
         ];
     }
@@ -105,12 +108,20 @@ final class PsxParser
     }
 
     /**
-     * @return list<string> Each entry is a PHP expression representing a child.
+     * @return array{0: list<string>, 1: int} children PHP expressions, plus
+     *         the number of newlines between the last child and the closing
+     *         tag (so the emitter can place `])` on the right line).
+     *
+     * Each child string is prefixed with '\n' characters matching the newlines
+     * in the source between the parent's `>` and that child's start (or the
+     * previous child's end and this child's start), giving per-tag line
+     * preservation in multi-line markup.
      */
     private function parseChildren(string $closingTag): array
     {
         $children = [];
         $textBuffer = '';
+        $lastChildEnd = $this->pos; // right after parent's `>`
 
         while ($this->pos < \strlen($this->source)) {
             $c = $this->peek();
@@ -119,18 +130,24 @@ final class PsxParser
                 $next = $this->source[$this->pos + 1] ?? '';
                 if ($next === '/') {
                     $this->flushTextBuffer($textBuffer, $children);
-                    return $children;
+                    $trailing = \substr_count(\substr($this->source, $lastChildEnd, $this->pos - $lastChildEnd), "\n");
+                    return [$children, $trailing];
                 }
                 $this->flushTextBuffer($textBuffer, $children);
+                $childStart = $this->pos;
                 $sub = new self($this->source, $this->pos, $this->namespaceContext)->parseElement();
-                $children[] = $sub['php'];
+                $children[] = $this->prefixForNewlinesBetween($lastChildEnd, $childStart) . $sub['php'];
                 $this->pos = $sub['end'];
+                $lastChildEnd = $sub['end'];
                 continue;
             }
 
             if ($c === '{') {
                 $this->flushTextBuffer($textBuffer, $children);
-                $children[] = $this->readBraceExpression();
+                $childStart = $this->pos;
+                $expr = $this->readBraceExpression();
+                $children[] = $this->prefixForNewlinesBetween($lastChildEnd, $childStart) . $expr;
+                $lastChildEnd = $this->pos;
                 continue;
             }
 
@@ -139,7 +156,18 @@ final class PsxParser
         }
 
         $this->flushTextBuffer($textBuffer, $children);
-        return $children;
+        return [$children, 0];
+    }
+
+    /**
+     * Returns a string of '\n' characters matching the newlines in the source
+     * span between two positions.
+     */
+    private function prefixForNewlinesBetween(int $start, int $end): string
+    {
+        $span = \substr($this->source, $start, $end - $start);
+        $count = \substr_count($span, "\n");
+        return $count > 0 ? \str_repeat("\n", $count) : '';
     }
 
     /**
@@ -344,26 +372,27 @@ final class PsxParser
      *
      * @param list<array{name: string, value: string|null, isExpr: bool}> $attrs
      * @param list<string>|null $children Each child is a PHP expression. Null = self-closing.
+     * @param int $trailingNewlines Newlines between last child and closing tag (for line preservation).
      */
-    private function emitElement(string $tagName, array $attrs, ?array $children): string
+    private function emitElement(string $tagName, array $attrs, ?array $children, int $trailingNewlines): string
     {
         $isComponent = \ctype_upper($tagName[0]);
 
         if ($isComponent) {
-            return $this->emitComponent($tagName, $attrs, $children);
+            return $this->emitComponent($tagName, $attrs, $children, $trailingNewlines);
         }
 
-        return $this->emitHtmlElement($tagName, $attrs, $children);
+        return $this->emitHtmlElement($tagName, $attrs, $children, $trailingNewlines);
     }
 
     /**
      * @param list<array{name: string, value: string|null, isExpr: bool}> $attrs
      * @param list<string>|null $children
      */
-    private function emitHtmlElement(string $tagName, array $attrs, ?array $children): string
+    private function emitHtmlElement(string $tagName, array $attrs, ?array $children, int $trailingNewlines): string
     {
         if ($this->requiresCallStaticDispatch($tagName, $attrs)) {
-            return $this->emitCallStaticElement($tagName, $attrs, $children);
+            return $this->emitCallStaticElement($tagName, $attrs, $children, $trailingNewlines);
         }
 
         $namedArgs = [];
@@ -374,7 +403,7 @@ final class PsxParser
         }
 
         if ($children !== null && $children !== []) {
-            $namedArgs[] = 'children: ' . $this->emitChildrenArg($children);
+            $namedArgs[] = 'children: ' . $this->emitChildrenArg($children, $trailingNewlines);
         }
 
         return 'H::' . $tagName . '(' . \implode(', ', $namedArgs) . ')';
@@ -402,7 +431,7 @@ final class PsxParser
      * @param list<array{name: string, value: string|null, isExpr: bool}> $attrs
      * @param list<string>|null $children
      */
-    private function emitCallStaticElement(string $tagName, array $attrs, ?array $children): string
+    private function emitCallStaticElement(string $tagName, array $attrs, ?array $children, int $trailingNewlines): string
     {
         $entries = [];
         foreach ($attrs as $attr) {
@@ -411,7 +440,7 @@ final class PsxParser
             $entries[] = "'$name' => $value";
         }
         if ($children !== null && $children !== []) {
-            $entries[] = "'children' => " . $this->emitChildrenArg($children);
+            $entries[] = "'children' => " . $this->emitChildrenArg($children, $trailingNewlines);
         }
         $args = '[' . \implode(', ', $entries) . ']';
         return "H::__callStatic('$tagName', $args)";
@@ -421,7 +450,7 @@ final class PsxParser
      * @param list<array{name: string, value: string|null, isExpr: bool}> $attrs
      * @param list<string>|null $children
      */
-    private function emitComponent(string $tagName, array $attrs, ?array $children): string
+    private function emitComponent(string $tagName, array $attrs, ?array $children, int $trailingNewlines): string
     {
         $fqcn = $this->namespaceContext !== null
             ? $this->namespaceContext->resolve($tagName)
@@ -434,7 +463,7 @@ final class PsxParser
             $propsEntries[] = "'$name' => $value";
         }
         if ($children !== null && $children !== []) {
-            $propsEntries[] = "'children' => " . $this->emitChildrenArg($children);
+            $propsEntries[] = "'children' => " . $this->emitChildrenArg($children, $trailingNewlines);
         }
         $props = '[' . \implode(', ', $propsEntries) . ']';
         $escapedFqcn = \str_replace('\\', '\\\\', $fqcn);
@@ -444,22 +473,30 @@ final class PsxParser
     /**
      * @param list<string> $children
      */
-    private function emitFragment(array $children): string
+    private function emitFragment(array $children, int $trailingNewlines): string
     {
         // H::Fragment yields an Element with type='Fragment', which the Renderer
         // unwraps (children are emitted directly without a surrounding tag).
-        return 'H::Fragment([' . \implode(', ', $children) . '])';
+        $body = \implode(', ', $children) . \str_repeat("\n", $trailingNewlines);
+        return 'H::Fragment([' . $body . '])';
     }
 
     /**
      * @param list<string> $children
      */
-    private function emitChildrenArg(array $children): string
+    private function emitChildrenArg(array $children, int $trailingNewlines): string
     {
+        // Single child: pass directly so expressions returning arrays
+        // (e.g. {array_map(...)}) are accepted as-is by createElement's
+        // is_array branch instead of being wrapped in an outer [...].
+        // The newline prefix on the child (if any) keeps line preservation
+        // working; the block-level padding in Compiler tops up trailing
+        // newlines for the closing tag's line.
         if (\count($children) === 1) {
             return $children[0];
         }
-        return '[' . \implode(', ', $children) . ']';
+        $body = \implode(', ', $children) . \str_repeat("\n", $trailingNewlines);
+        return '[' . $body . ']';
     }
 
     /**

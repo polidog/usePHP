@@ -98,7 +98,8 @@ class CompilerTest extends TestCase
             "\$row = fn(array \$item) => H::li(className: 'row', children: \$item['text'])",
             $compiled
         );
-        self::assertStringContainsString('H::ul(children: array_map($row, $items))', $compiled);
+        self::assertStringContainsString('array_map($row, $items)', $compiled);
+        self::assertStringContainsString('H::ul(children:', $compiled);
 
         // Helper closure should not be added to the manifest reference list.
         self::assertSame([], $this->compiler->getLastReferences());
