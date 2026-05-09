@@ -6,9 +6,11 @@ namespace App\Components\Psx;
 
 use Polidog\UsePhp\Html\H;
 
-return fn(array $props) => <div className="card">
-    <h3 className="card-title">{$props['title']}</h3>
-    <div className="card-body">
-        {$props['children'] ?? null}
+return fn(array $props) => (
+    <div className="card">
+        <h3 className="card-title">{$props['title']}</h3>
+        <div className="card-body">
+            {$props['children'] ?? null}
+        </div>
     </div>
-</div>;
+);

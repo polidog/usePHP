@@ -25,18 +25,22 @@ return fc(function (array $props) {
     $completed = count(array_filter($todos, fn($t) => $t['done']));
     $total = count($todos);
 
-    return <div className="todo-app">
-        <h1>usePHP Todo (PSX)</h1>
-        <ul className="todo-list">
-            {array_map(fn($todo) => <li className={$todo['done'] ? 'todo-item done' : 'todo-item'}>
-                <span>{$todo['text']}</span>
-                <button className="btn-toggle" onClick={fn() => $toggle($todo['id'])}>
-                    {$todo['done'] ? '✓' : '○'}
-                </button>
-            </li>, $todos)}
-        </ul>
-        <div className="todo-stats">
-            <span>{$completed} / {$total} completed</span>
+    return (
+        <div className="todo-app">
+            <h1>usePHP Todo (PSX)</h1>
+            <ul className="todo-list">
+                {array_map(fn($todo) => (
+                    <li className={$todo['done'] ? 'todo-item done' : 'todo-item'}>
+                        <span>{$todo['text']}</span>
+                        <button className="btn-toggle" onClick={fn() => $toggle($todo['id'])}>
+                            {$todo['done'] ? '✓' : '○'}
+                        </button>
+                    </li>
+                ), $todos)}
+            </ul>
+            <div className="todo-stats">
+                <span>{$completed} / {$total} completed</span>
+            </div>
         </div>
-    </div>;
+    );
 }, 'psx-todo-list', StorageType::Session);

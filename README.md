@@ -484,11 +484,13 @@ use function Polidog\UsePhp\Runtime\useState;
 return fc(function (array $props) {
     [$count, $setCount] = useState($props['initial'] ?? 0);
 
-    return <div className="counter">
-        <span>Count: {$count}</span>
-        <button onClick={fn() => $setCount($count + 1)}>+</button>
-        <button onClick={fn() => $setCount($count - 1)}>-</button>
-    </div>;
+    return (
+        <div className="counter">
+            <span>Count: {$count}</span>
+            <button onClick={fn() => $setCount($count + 1)}>+</button>
+            <button onClick={fn() => $setCount($count - 1)}>-</button>
+        </div>
+    );
 }, 'counter', StorageType::Session);
 ```
 
@@ -497,11 +499,14 @@ Lowers to (cached file inside `var/cache/psx/`):
 ```php
 return fc(function (array $props) {
     [$count, $setCount] = useState($props['initial'] ?? 0);
-    return H::div(className: 'counter', children: [
-        H::span(children: ['Count: ', $count]),
-        H::button(onClick: fn() => $setCount($count + 1), children: '+'),
-        H::button(onClick: fn() => $setCount($count - 1), children: '-'),
-    ]);
+
+    return (
+        H::div(className: 'counter', children: [
+            H::span(children: ['Count: ', $count]),
+            H::button(onClick: fn() => $setCount($count + 1), children: '+'),
+            H::button(onClick: fn() => $setCount($count - 1), children: '-'),
+        ])
+    );
 }, 'counter', StorageType::Session);
 ```
 
@@ -556,10 +561,12 @@ namespace App\Pages;
 use App\Components\Counter;
 use App\Components\Forms\Input as FormInput;
 
-return fn() => <div>
-    <Counter initial={5} />
-    <FormInput type="email" />
-</div>;
+return fn() => (
+    <div>
+        <Counter initial={5} />
+        <FormInput type="email" />
+    </div>
+);
 ```
 
 If a component is registered at runtime instead of being defined in a `.psx` file, declare it with a comment so the compiler doesn't fail validation:
