@@ -14,6 +14,7 @@ namespace Polidog\UsePhp\Psx;
  * Options:
  *   --check    Don't write files; exit non-zero if anything is out of date.
  *   --clean    Remove all generated .psx.php and the manifest.
+ *   --watch    Re-run compile when any .psx file changes (Ctrl+C to stop).
  *   --manifest=PATH   Manifest output path (default: psx-manifest.php in CWD).
  */
 final class CompileCommand
@@ -28,6 +29,7 @@ final class CompileCommand
         $manifestPath = $this->absPath($flags['manifest'] ?? $cwd . '/psx-manifest.php');
         $check = isset($flags['check']);
         $clean = isset($flags['clean']);
+        $watch = isset($flags['watch']);
 
         if ($paths === []) {
             $paths = [$cwd . '/components'];
@@ -37,97 +39,11 @@ final class CompileCommand
             return $this->doClean($paths, $manifestPath);
         }
 
-        $sourceFiles = $this->collectPsxFiles($paths);
-        if ($sourceFiles === []) {
-            $this->println("\033[33mNo .psx files found in: " . \implode(', ', $paths) . "\033[0m");
-            return 0;
+        if ($watch) {
+            return $this->runWatch($paths, $manifestPath);
         }
 
-        // Pass 1 — collect FQCNs and @psx-runtime declarations from each file.
-        $manifestEntries = [];
-        $runtimeDeclarations = [];
-        $sourceContents = [];
-
-        foreach ($sourceFiles as $sourceFile) {
-            $source = \file_get_contents($sourceFile);
-            if ($source === false) {
-                $this->println("\033[31mError: cannot read $sourceFile\033[0m");
-                return 1;
-            }
-            $sourceContents[$sourceFile] = $source;
-
-            $tokens = \token_get_all($source);
-            $ctx = NamespaceContext::parse($tokens);
-            $base = \pathinfo($sourceFile, \PATHINFO_FILENAME);
-            $fqcn = $ctx->namespace !== '' ? $ctx->namespace . '\\' . $base : $base;
-
-            if (isset($manifestEntries[$fqcn])) {
-                $this->println("\033[31mError: duplicate component FQCN '$fqcn'\033[0m");
-                $this->println('  defined in: ' . $manifestEntries[$fqcn]);
-                $this->println('  also in:    ' . $sourceFile . '.php');
-                return 1;
-            }
-            $manifestEntries[$fqcn] = $sourceFile . '.php';
-
-            foreach ($ctx->getRuntimeDeclarations() as $rd) {
-                $runtimeDeclarations[$rd] = true;
-            }
-        }
-
-        // Pass 2 — compile each file and validate component references.
-        $compiler = new Compiler();
-        $stale = [];
-        $knownFqcns = $manifestEntries + $runtimeDeclarations;
-
-        foreach ($sourceFiles as $sourceFile) {
-            $compiledPath = $sourceFile . '.php';
-            $source = $sourceContents[$sourceFile];
-
-            try {
-                $compiled = $compiler->compile($source);
-            } catch (\Throwable $e) {
-                $this->println("\033[31m$sourceFile: " . $e->getMessage() . "\033[0m");
-                return 1;
-            }
-
-            foreach ($compiler->getLastReferences() as $ref) {
-                if (!isset($knownFqcns[$ref])) {
-                    $this->println("\033[31m$sourceFile: unresolved component '$ref'\033[0m");
-                    $this->println("  Add a 'use' statement, define {$this->shortName($ref)}.psx, or declare `// @psx-runtime $ref`.");
-                    return 1;
-                }
-            }
-
-            $existing = \file_exists($compiledPath) ? \file_get_contents($compiledPath) : null;
-            if ($existing !== $compiled) {
-                $stale[] = $sourceFile;
-                if (!$check) {
-                    \file_put_contents($compiledPath, $compiled);
-                }
-            }
-        }
-
-        $manifestSource = $this->buildManifestSource($manifestEntries);
-        $existingManifest = \file_exists($manifestPath) ? \file_get_contents($manifestPath) : null;
-        if ($existingManifest !== $manifestSource) {
-            $stale[] = $manifestPath;
-            if (!$check) {
-                \file_put_contents($manifestPath, $manifestSource);
-            }
-        }
-
-        if ($check && $stale !== []) {
-            $this->println("\033[31mOut of date:\033[0m");
-            foreach ($stale as $f) {
-                $this->println("  $f");
-            }
-            return 1;
-        }
-
-        $count = \count($sourceFiles);
-        $this->println("\033[32mCompiled $count .psx file" . ($count === 1 ? '' : 's') . "\033[0m");
-        $this->println("Manifest: $manifestPath");
-        return 0;
+        return $this->doCompile($paths, $manifestPath, $check);
     }
 
     private function shortName(string $fqcn): string
@@ -190,6 +106,143 @@ final class CompileCommand
             return $path;
         }
         return $absDir . \DIRECTORY_SEPARATOR . $base;
+    }
+
+    /**
+     * Poll-based watch loop. Re-runs the compile pass whenever any .psx file's
+     * mtime changes. Exits via SIGINT (Ctrl+C).
+     *
+     * @param list<string> $paths
+     */
+    private function runWatch(array $paths, string $manifestPath): int
+    {
+        $this->println("\033[36mWatching for .psx changes (Ctrl+C to stop)…\033[0m");
+
+        $lastMtimes = [];
+        // @phpstan-ignore-next-line while.alwaysTrue — watch loop runs until SIGINT
+        while (true) {
+            $files = $this->collectPsxFiles($paths);
+            $changed = false;
+            $currentMtimes = [];
+
+            foreach ($files as $file) {
+                $mtime = @\filemtime($file);
+                if ($mtime === false) {
+                    continue;
+                }
+                $currentMtimes[$file] = $mtime;
+                if (!isset($lastMtimes[$file]) || $lastMtimes[$file] !== $mtime) {
+                    $changed = true;
+                }
+            }
+
+            if ($changed || \array_keys($lastMtimes) !== \array_keys($currentMtimes)) {
+                $this->println("\033[33m" . \date('H:i:s') . " — recompiling…\033[0m");
+                $this->doCompile($paths, $manifestPath, false);
+            }
+
+            $lastMtimes = $currentMtimes;
+            \usleep(500_000);
+        }
+    }
+
+    /**
+     * Single compile pass. Extracted from run() so --watch can invoke it.
+     * Returns 0 on success, 1 on failure.
+     *
+     * @param list<string> $paths
+     */
+    private function doCompile(array $paths, string $manifestPath, bool $check): int
+    {
+        $sourceFiles = $this->collectPsxFiles($paths);
+        if ($sourceFiles === []) {
+            $this->println("\033[33mNo .psx files found in: " . \implode(', ', $paths) . "\033[0m");
+            return 0;
+        }
+
+        $manifestEntries = [];
+        $runtimeDeclarations = [];
+        $sourceContents = [];
+
+        foreach ($sourceFiles as $sourceFile) {
+            $source = \file_get_contents($sourceFile);
+            if ($source === false) {
+                $this->println("\033[31mError: cannot read $sourceFile\033[0m");
+                return 1;
+            }
+            $sourceContents[$sourceFile] = $source;
+
+            $tokens = \token_get_all($source);
+            $ctx = NamespaceContext::parse($tokens);
+            $base = \pathinfo($sourceFile, \PATHINFO_FILENAME);
+            $fqcn = $ctx->namespace !== '' ? $ctx->namespace . '\\' . $base : $base;
+
+            if (isset($manifestEntries[$fqcn])) {
+                $this->println("\033[31mError: duplicate component FQCN '$fqcn'\033[0m");
+                $this->println('  defined in: ' . $manifestEntries[$fqcn]);
+                $this->println('  also in:    ' . $sourceFile . '.php');
+                return 1;
+            }
+            $manifestEntries[$fqcn] = $sourceFile . '.php';
+
+            foreach ($ctx->getRuntimeDeclarations() as $rd) {
+                $runtimeDeclarations[$rd] = true;
+            }
+        }
+
+        $compiler = new Compiler();
+        $stale = [];
+        $knownFqcns = $manifestEntries + $runtimeDeclarations;
+
+        foreach ($sourceFiles as $sourceFile) {
+            $compiledPath = $sourceFile . '.php';
+            $source = $sourceContents[$sourceFile];
+
+            try {
+                $compiled = $compiler->compile($source);
+            } catch (\Throwable $e) {
+                $this->println("\033[31m$sourceFile: " . $e->getMessage() . "\033[0m");
+                return 1;
+            }
+
+            foreach ($compiler->getLastReferences() as $ref) {
+                if (!isset($knownFqcns[$ref])) {
+                    $this->println("\033[31m$sourceFile: unresolved component '$ref'\033[0m");
+                    $this->println("  Add a 'use' statement, define {$this->shortName($ref)}.psx, or declare `// @psx-runtime $ref`.");
+                    return 1;
+                }
+            }
+
+            $existing = \file_exists($compiledPath) ? \file_get_contents($compiledPath) : null;
+            if ($existing !== $compiled) {
+                $stale[] = $sourceFile;
+                if (!$check) {
+                    \file_put_contents($compiledPath, $compiled);
+                }
+            }
+        }
+
+        $manifestSource = $this->buildManifestSource($manifestEntries);
+        $existingManifest = \file_exists($manifestPath) ? \file_get_contents($manifestPath) : null;
+        if ($existingManifest !== $manifestSource) {
+            $stale[] = $manifestPath;
+            if (!$check) {
+                \file_put_contents($manifestPath, $manifestSource);
+            }
+        }
+
+        if ($check && $stale !== []) {
+            $this->println("\033[31mOut of date:\033[0m");
+            foreach ($stale as $f) {
+                $this->println("  $f");
+            }
+            return 1;
+        }
+
+        $count = \count($sourceFiles);
+        $this->println("\033[32mCompiled $count .psx file" . ($count === 1 ? '' : 's') . "\033[0m");
+        $this->println("Manifest: $manifestPath");
+        return 0;
     }
 
     /**

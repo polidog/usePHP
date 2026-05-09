@@ -53,6 +53,11 @@ $router->get('/counter', function (): \Polidog\UsePhp\Runtime\Element {
     return \Polidog\UsePhp\Runtime\RenderContext::getApp()
         ->renderPsxComponent('App\\Components\\Psx\\Counter', ['initial' => 0]);
 });
+$router->get('/todo', function (): \Polidog\UsePhp\Runtime\Element {
+    \Polidog\UsePhp\Runtime\RenderContext::beginRender();
+    return \Polidog\UsePhp\Runtime\RenderContext::getApp()
+        ->renderPsxComponent('App\\Components\\Psx\\TodoList', []);
+});
 
 ob_start();
 $app->run();

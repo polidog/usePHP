@@ -8,7 +8,8 @@ A framework that delivers server-driven UI with **minimal JavaScript**, using a 
 - **Function Components (Recommended)** - Lightweight components using simple PHP callables
 - **Built-in Router** - Simple, swappable router with snapshot state preservation across pages
 - **Minimal JS (~40 lines)** - Smooth UX with partial updates, graceful fallback without JS
-- **Pure PHP** - No transpilation needed, PHP code runs directly on the server
+- **Pure PHP by default** - No transpilation needed for `H::xxx()` style components
+- **PSX (optional)** - TSX-like template syntax compiled by `usephp compile` for HTML-heavy UIs (see [PSX section](#psx-optional-tsx-like-syntax))
 - **Configurable State Storage** - Choose between session (persistent) or memory (per-request) storage
 - **Progressive Enhancement** - Works even with JavaScript disabled
 - **Framework Integration** - Works with Laravel, Symfony, and other frameworks
@@ -456,6 +457,115 @@ $App = fc(function(array $props): Element {
 }, 'app');
 ```
 
+## PSX (optional, TSX-like syntax)
+
+PSX is an opt-in alternative way to author components: you write HTML directly and `usephp compile` lowers it to the same `H::xxx()` calls shown above. The runtime is unchanged — PSX is purely a syntax layer.
+
+### When to use it
+
+- Components with deeply nested HTML where `H::div(children: [...])` becomes hard to read
+- Teams used to JSX/TSX who want familiar template syntax
+
+If your components are simple, sticking with `H::xxx()` is fine — PSX adds a build step, while plain PHP doesn't.
+
+### Syntax at a glance
+
+```php
+<?php
+// components/Counter.psx
+namespace App\Components;
+
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Storage\StorageType;
+
+use function Polidog\UsePhp\Runtime\fc;
+use function Polidog\UsePhp\Runtime\useState;
+
+return fc(function (array $props) {
+    [$count, $setCount] = useState($props['initial'] ?? 0);
+
+    return <div className="counter">
+        <span>Count: {$count}</span>
+        <button onClick={fn() => $setCount($count + 1)}>+</button>
+        <button onClick={fn() => $setCount($count - 1)}>-</button>
+    </div>;
+}, 'counter', StorageType::Session);
+```
+
+Lowers to (`Counter.psx.php`):
+
+```php
+return fc(function (array $props) {
+    [$count, $setCount] = useState($props['initial'] ?? 0);
+    return H::div(className: 'counter', children: [
+        H::span(children: ['Count: ', $count]),
+        H::button(onClick: fn() => $setCount($count + 1), children: '+'),
+        H::button(onClick: fn() => $setCount($count - 1), children: '-'),
+    ]);
+}, 'counter', StorageType::Session);
+```
+
+### Compile workflow
+
+```bash
+# One-shot compile of all .psx under components/
+./vendor/bin/usephp compile components/
+
+# Watch mode for the dev loop
+./vendor/bin/usephp compile components/ --watch
+
+# CI: fail if anything is out of date
+./vendor/bin/usephp compile components/ --check
+
+# Remove all generated .psx.php and the manifest
+./vendor/bin/usephp compile components/ --clean
+```
+
+`compile` produces `Counter.psx.php` next to each `.psx`, plus a `psx-manifest.php` (FQCN → compiled-path map). Both are intended to be ignored by version control:
+
+```gitignore
+*.psx.php
+psx-manifest.php
+```
+
+### Loading PSX components at runtime
+
+```php
+$app = new UsePHP();
+$app->loadComponentManifest(__DIR__ . '/psx-manifest.php');
+
+// Use a PSX component as a route handler
+$router->get('/', function () use ($app) {
+    \Polidog\UsePhp\Runtime\RenderContext::beginRender();
+    return $app->renderPsxComponent('App\\Components\\Counter', ['initial' => 0]);
+});
+```
+
+### Composing PSX components
+
+`<Counter />` (PascalCase) inside another `.psx` resolves through PHP's `use` statements to a fully qualified class name, just like a regular class import:
+
+```php
+<?php
+namespace App\Pages;
+
+use App\Components\Counter;
+use App\Components\Forms\Input as FormInput;
+
+return fn() => <div>
+    <Counter initial={5} />
+    <FormInput type="email" />
+</div>;
+```
+
+If a component is registered at runtime instead of being defined in a `.psx` file, declare it with a comment so the compiler doesn't fail validation:
+
+```php
+// @psx-runtime App\Legacy\WidgetCounter
+```
+
+For the full spec — Fragment syntax, attribute dispatch, manifest format, edge cases — see [docs/PSX.md](docs/PSX.md).
+
 ## Generated HTML
 
 ```php
@@ -478,8 +588,9 @@ Transforms to:
 ## CLI
 
 ```bash
-./vendor/bin/usephp publish  # Copy usephp.js to public/
-./vendor/bin/usephp help     # Show help
+./vendor/bin/usephp publish               # Copy usephp.js to public/
+./vendor/bin/usephp compile components/   # Compile .psx files (see PSX section)
+./vendor/bin/usephp help                  # Show help
 ```
 
 ## Requirements
