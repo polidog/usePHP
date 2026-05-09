@@ -34,6 +34,12 @@ final class UsePHP
     private ?RouterInterface $router = null;
     private ?RouteMatch $currentMatch = null;
 
+    /** @var array<string, string> FQCN => path to .psx.php file */
+    private array $psxManifest = [];
+
+    /** @var array<string, callable> FQCN => loaded callable */
+    private array $psxLoaded = [];
+
     public function __construct()
     {
         $this->registry = new ComponentRegistry();
@@ -48,6 +54,57 @@ final class UsePHP
     {
         $this->registry->register($className);
         return $this;
+    }
+
+    /**
+     * Load a PSX component manifest. The manifest is a PHP file that returns
+     * an array mapping FQCN to compiled .psx.php file paths.
+     */
+    public function loadComponentManifest(string $path): self
+    {
+        if (!\file_exists($path)) {
+            throw new \RuntimeException("PSX manifest not found: $path");
+        }
+        $manifest = require $path;
+        if (!\is_array($manifest)) {
+            throw new \RuntimeException("PSX manifest must return an array: $path");
+        }
+        foreach ($manifest as $fqcn => $filePath) {
+            $this->psxManifest[(string) $fqcn] = (string) $filePath;
+        }
+        return $this;
+    }
+
+    /**
+     * Register a callable component under an FQCN. Used as a bridge for
+     * variable-based fc() components defined outside .psx files.
+     */
+    public function registerComponent(string $fqcn, callable $component): self
+    {
+        $this->psxLoaded[$fqcn] = $component;
+        return $this;
+    }
+
+    /**
+     * Invoke a PSX component by FQCN. Compiled PSX tags <Counter />
+     * lower to a call to this method.
+     *
+     * @param array<string, mixed> $props
+     */
+    public function renderPsxComponent(string $fqcn, array $props = []): Element
+    {
+        if (!isset($this->psxLoaded[$fqcn])) {
+            if (!isset($this->psxManifest[$fqcn])) {
+                throw new \RuntimeException("PSX component not registered: $fqcn");
+            }
+            $callable = require $this->psxManifest[$fqcn];
+            if (!\is_callable($callable)) {
+                throw new \RuntimeException("PSX file did not return a callable: {$this->psxManifest[$fqcn]}");
+            }
+            $this->psxLoaded[$fqcn] = $callable;
+        }
+
+        return ($this->psxLoaded[$fqcn])($props);
     }
 
     /**
