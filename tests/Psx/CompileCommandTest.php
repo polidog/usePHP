@@ -14,7 +14,7 @@ class CompileCommandTest extends TestCase
     protected function setUp(): void
     {
         $this->workDir = \sys_get_temp_dir() . '/psx-cmd-test-' . \uniqid();
-        \mkdir($this->workDir . '/components', 0777, true);
+        \mkdir($this->workDir . '/components', 0o777, true);
     }
 
     protected function tearDown(): void
@@ -123,7 +123,7 @@ class CompileCommandTest extends TestCase
 
     public function testRejectsDuplicateFqcn(): void
     {
-        \mkdir($this->workDir . '/components/sub', 0777, true);
+        \mkdir($this->workDir . '/components/sub', 0o777, true);
         \file_put_contents(
             $this->workDir . '/components/A.psx',
             "<?php\nnamespace X;\nreturn fn() => <div>1</div>;\n"

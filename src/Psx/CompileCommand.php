@@ -63,8 +63,8 @@ final class CompileCommand
 
             if (isset($manifestEntries[$fqcn])) {
                 $this->println("\033[31mError: duplicate component FQCN '$fqcn'\033[0m");
-                $this->println("  defined in: " . $manifestEntries[$fqcn]);
-                $this->println("  also in:    " . $sourceFile . '.php');
+                $this->println('  defined in: ' . $manifestEntries[$fqcn]);
+                $this->println('  also in:    ' . $sourceFile . '.php');
                 return 1;
             }
             $manifestEntries[$fqcn] = $sourceFile . '.php';

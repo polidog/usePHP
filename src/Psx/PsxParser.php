@@ -122,7 +122,7 @@ final class PsxParser
                     return $children;
                 }
                 $this->flushTextBuffer($textBuffer, $children);
-                $sub = (new self($this->source, $this->pos, $this->namespaceContext))->parseElement();
+                $sub = new self($this->source, $this->pos, $this->namespaceContext)->parseElement();
                 $children[] = $sub['php'];
                 $this->pos = $sub['end'];
                 continue;
@@ -461,7 +461,7 @@ final class PsxParser
             return $expr;
         }
         $wrapped = '<?php ' . $expr;
-        $compiled = (new Compiler())->compile($wrapped);
+        $compiled = new Compiler()->compile($wrapped);
         return \substr($compiled, \strlen('<?php '));
     }
 

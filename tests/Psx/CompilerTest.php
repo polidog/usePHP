@@ -80,7 +80,7 @@ class CompilerTest extends TestCase
     {
         $source = "<?php\nreturn fn(\$items) => <ul>\n  {array_map(fn(\$t) => <li>{\$t}</li>, \$items)}\n</ul>;\n";
         $result = $this->compiler->compile($source);
-        self::assertStringContainsString("array_map(fn(\$t) => H::li(children: \$t), \$items)", $result);
+        self::assertStringContainsString('array_map(fn($t) => H::li(children: $t), $items)', $result);
     }
 
     public function testBooleanAttribute(): void
@@ -125,7 +125,7 @@ class CompilerTest extends TestCase
         try {
             \token_get_all($compiled, \TOKEN_PARSE);
         } catch (\ParseError $e) {
-            self::fail("Compiled PSX produced invalid PHP: " . $e->getMessage());
+            self::fail('Compiled PSX produced invalid PHP: ' . $e->getMessage());
         }
         self::assertTrue(true);
     }
