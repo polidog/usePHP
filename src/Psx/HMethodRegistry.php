@@ -62,15 +62,4 @@ final class HMethodRegistry
         return self::$cache[$tagName] = $names;
     }
 
-    /**
-     * True if the given attribute name can be passed as a named argument to H::$tagName().
-     */
-    public static function isKnownAttribute(string $tagName, string $attrName): bool
-    {
-        $params = self::getParams($tagName);
-        if ($params === null) {
-            return false;
-        }
-        return \in_array($attrName, $params, true);
-    }
 }

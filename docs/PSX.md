@@ -665,15 +665,19 @@ PSX コンパイラは `<Counter />` をコンパイル時に検証する際、�
 - `tests/Psx/NamespaceContextTest.php` — 名前解決 8 件
 - `tests/Psx/StackTraceRewriterTest.php` — トレース rewrite 5 件
 
-## 9. オープン課題(MVP後検討)
+## 9. オープン課題(Phase 5 以降)
 
-- ソースマップ対応(コンパイル後の `.psx.php` のエラー行を `.psx` の元行にマップ)
+実装済(Phase 1–4 でカバー):
+- ✅ ソースマップ相当(行保持 + StackTraceRewriter で `.psx.php` → `.psx` に書き換え)
+- ✅ Fragment 構文 `<>...</>`
+- ✅ watch モード(`usephp compile --watch`)
+
+未実装:
 - IDE プラグイン(JetBrains/VS Code)
-- PHPStan エクステンション(PSX タグの型推論)
-- Fragment 構文(`<>...</>`)
-- 複数コンポーネント / 1ファイル
-- watch モード
-- カスタム要素・名前空間付き要素(SVG, MathML)
+- PHPStan エクステンション(PSX タグの型推論。nikic AST が利用可能になったので実装可能)
+- 完全な JSON ソースマップ出力(現状はファイル名+行番号レベルで対応済)
+- 複数の公開コンポーネント / 1ファイル(意図的に保留 — 1ファイル1コンポーネントの明確さがメリット)
+- カスタム要素・名前空間付き要素(SVG, MathML — 一部は `__callStatic` 経由で動作するが、属性の SVG 名空間など未対応)
 - 生 HTML 注入用の脱出口(XSS リスクのため要設計)
 
 ## 10. 参考

@@ -200,9 +200,20 @@ final class PsxParser
 
     private function consumeFragmentClose(): void
     {
-        $this->expect('<');
-        $this->expect('/');
-        $this->expect('>');
+        if ($this->peek() !== '<' || ($this->source[$this->pos + 1] ?? '') !== '/') {
+            throw $this->error('Expected fragment close `</>`');
+        }
+        $this->pos += 2; // consume `</`
+        if ($this->peek() !== '>') {
+            // A named tag where a fragment close was expected.
+            $name = $this->readTagName();
+            throw $this->error(
+                $name !== ''
+                    ? "Expected fragment close `</>`, got `</$name>`"
+                    : 'Expected fragment close `</>`',
+            );
+        }
+        $this->pos++; // consume `>`
     }
 
     private function readTagName(): string
@@ -236,15 +247,35 @@ final class PsxParser
     private function readStringLiteral(): string
     {
         $quote = $this->source[$this->pos];
+        $openPos = $this->pos;
         $this->pos++; // consume opening quote
-        $start = $this->pos;
-        while ($this->pos < \strlen($this->source) && $this->source[$this->pos] !== $quote) {
-            // No escape handling for Phase 0.
+        $value = '';
+        while ($this->pos < \strlen($this->source)) {
+            $c = $this->source[$this->pos];
+            if ($c === '\\' && isset($this->source[$this->pos + 1])) {
+                // Pass the escape sequence through unchanged so authors can
+                // write `\"` inside a double-quoted attribute.
+                $next = $this->source[$this->pos + 1];
+                if ($next === $quote || $next === '\\') {
+                    $value .= $next;
+                } else {
+                    $value .= $c . $next;
+                }
+                $this->pos += 2;
+                continue;
+            }
+            if ($c === $quote) {
+                $this->pos++; // consume closing quote
+                return $value;
+            }
+            $value .= $c;
             $this->pos++;
         }
-        $value = \substr($this->source, $start, $this->pos - $start);
-        $this->pos++; // consume closing quote
-        return $value;
+        // Reached EOF without finding the closing quote — restore position to
+        // the opening quote so the error caret points at the start of the
+        // unterminated literal.
+        $this->pos = $openPos;
+        throw $this->error('Unterminated attribute string literal');
     }
 
     /**
@@ -291,10 +322,15 @@ final class PsxParser
 
     private function skipPhpString(string $quote): void
     {
+        $openPos = $this->pos;
         $this->pos++; // opening quote
         while ($this->pos < \strlen($this->source)) {
             $c = $this->source[$this->pos];
             if ($c === '\\') {
+                if (!isset($this->source[$this->pos + 1])) {
+                    $this->pos = $openPos;
+                    throw $this->error('Unterminated PHP string literal in brace expression');
+                }
                 $this->pos += 2;
                 continue;
             }
@@ -304,6 +340,8 @@ final class PsxParser
             }
             $this->pos++;
         }
+        $this->pos = $openPos;
+        throw $this->error('Unterminated PHP string literal in brace expression');
     }
 
     private function skipUntil(string $needle): void

@@ -21,7 +21,7 @@ use PhpParser\ParserFactory;
  */
 final class NamespaceContext
 {
-    public string $namespace = '';
+    private string $namespace = '';
 
     /** @var array<string, string> short name => FQCN */
     private array $useMap = [];
@@ -44,27 +44,54 @@ final class NamespaceContext
         $ctx = new self();
 
         $parser = new ParserFactory()->createForNewestSupportedVersion();
-        $ast = $parser->parse($source, new Collecting());
-        if ($ast !== null) {
-            $traverser = new NodeTraverser();
-            $traverser->addVisitor(new class ($ctx) extends NodeVisitorAbstract {
-                public function __construct(private readonly NamespaceContext $ctx) {}
+        $errors = new Collecting();
+        $ast = $parser->parse($source, $errors);
 
-                public function enterNode(Node $node): null
-                {
-                    if ($node instanceof Node\Stmt\Namespace_ && $node->name !== null) {
-                        $this->ctx->namespace = $node->name->toString();
-                    }
-                    if ($node instanceof Node\Stmt\Use_ && $node->type === Node\Stmt\Use_::TYPE_NORMAL) {
-                        foreach ($node->uses as $use) {
-                            $alias = $use->alias?->toString() ?? $use->name->getLast();
-                            $this->ctx->addUse($use->name->toString(), $alias);
-                        }
-                    }
-                    return null;
+        // PSX expressions are intentionally invalid PHP, so nikic always
+        // collects errors from the in-PSX regions. We tolerate those, but
+        // surface a clear failure if the AST couldn't even be partially
+        // constructed (which means namespace/use parsing was likely broken).
+        if ($ast === null) {
+            $messages = \array_map(
+                static fn(\PhpParser\Error $e): string => $e->getMessage(),
+                $errors->getErrors(),
+            );
+            throw new \RuntimeException(
+                'PSX namespace context: source could not be parsed at all: '
+                . \implode('; ', $messages),
+            );
+        }
+
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor(new class ($ctx) extends NodeVisitorAbstract {
+            public function __construct(private readonly NamespaceContext $ctx) {}
+
+            public function enterNode(Node $node): null
+            {
+                if ($node instanceof Node\Stmt\Namespace_ && $node->name !== null) {
+                    $this->ctx->setNamespace($node->name->toString());
                 }
-            });
-            $traverser->traverse($ast);
+                if ($node instanceof Node\Stmt\Use_ && $node->type === Node\Stmt\Use_::TYPE_NORMAL) {
+                    foreach ($node->uses as $use) {
+                        $alias = $use->alias?->toString() ?? $use->name->getLast();
+                        $this->ctx->addUse($use->name->toString(), $alias);
+                    }
+                }
+                return null;
+            }
+        });
+        $traverser->traverse($ast);
+
+        // If the source has a `namespace ...;` keyword but we couldn't extract
+        // a namespace, the declaration itself is malformed — fail loudly so
+        // the user fixes their .psx file rather than silently registering
+        // components under the wrong FQCN.
+        if ($ctx->namespace === '' && \preg_match('/\bnamespace\s+[A-Za-z_]/', $source) === 1) {
+            throw new \RuntimeException(
+                'PSX namespace context: source contains a `namespace` keyword '
+                . 'but no namespace could be extracted (check for syntax errors '
+                . 'in the namespace declaration).',
+            );
         }
 
         // @psx-runtime annotations are extracted directly from the source
@@ -109,6 +136,16 @@ final class NamespaceContext
     public function getRuntimeDeclarations(): array
     {
         return $this->runtimeDeclarations;
+    }
+
+    public function getNamespace(): string
+    {
+        return $this->namespace;
+    }
+
+    public function setNamespace(string $namespace): void
+    {
+        $this->namespace = $namespace;
     }
 
     public function addUse(string $fqcn, ?string $alias = null): void

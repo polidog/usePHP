@@ -81,8 +81,17 @@ final class CompileCommand
             if (!\is_dir($path)) {
                 continue;
             }
-            $iter = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($path));
+            // SKIP_DOTS only — do not pass FOLLOW_SYMLINKS so that a symlinked
+            // .psx (or a symlinked dir) doesn't risk an infinite loop.
+            $dirIter = new \RecursiveDirectoryIterator(
+                $path,
+                \RecursiveDirectoryIterator::SKIP_DOTS,
+            );
+            $iter = new \RecursiveIteratorIterator($dirIter);
             foreach ($iter as $file) {
+                if (\is_link($file->getPathname())) {
+                    continue;
+                }
                 if ($file->isFile() && \str_ends_with($file->getPathname(), '.psx')) {
                     $files[] = $this->absPath($file->getPathname());
                 }
@@ -119,6 +128,7 @@ final class CompileCommand
         $this->println("\033[36mWatching for .psx changes (Ctrl+C to stop)…\033[0m");
 
         $lastMtimes = [];
+        $warnedUnreadable = [];
         // @phpstan-ignore-next-line while.alwaysTrue — watch loop runs until SIGINT
         while (true) {
             $files = $this->collectPsxFiles($paths);
@@ -126,10 +136,15 @@ final class CompileCommand
             $currentMtimes = [];
 
             foreach ($files as $file) {
-                $mtime = @\filemtime($file);
+                $mtime = \filemtime($file);
                 if ($mtime === false) {
+                    if (!isset($warnedUnreadable[$file])) {
+                        $this->println("\033[33mWarning: cannot stat $file (skipped)\033[0m");
+                        $warnedUnreadable[$file] = true;
+                    }
                     continue;
                 }
+                unset($warnedUnreadable[$file]);
                 $currentMtimes[$file] = $mtime;
                 if (!isset($lastMtimes[$file]) || $lastMtimes[$file] !== $mtime) {
                     $changed = true;
@@ -138,7 +153,14 @@ final class CompileCommand
 
             if ($changed || \array_keys($lastMtimes) !== \array_keys($currentMtimes)) {
                 $this->println("\033[33m" . \date('H:i:s') . " — recompiling…\033[0m");
-                $this->doCompile($paths, $manifestPath, false);
+                $exitCode = $this->doCompile($paths, $manifestPath, false);
+                if ($exitCode !== 0) {
+                    // Hold the previous mtimes so the next save retries; the
+                    // user's edit hasn't been "consumed" until it actually
+                    // compiles.
+                    \usleep(500_000);
+                    continue;
+                }
             }
 
             $lastMtimes = $currentMtimes;
@@ -172,10 +194,11 @@ final class CompileCommand
             }
             $sourceContents[$sourceFile] = $source;
 
-            $tokens = \token_get_all($source);
-            $ctx = NamespaceContext::parse($tokens);
+            $ctx = NamespaceContext::fromSource($source);
             $base = \pathinfo($sourceFile, \PATHINFO_FILENAME);
-            $fqcn = $ctx->namespace !== '' ? $ctx->namespace . '\\' . $base : $base;
+            $fqcn = $ctx->getNamespace() !== ''
+                ? $ctx->getNamespace() . '\\' . $base
+                : $base;
 
             if (isset($manifestEntries[$fqcn])) {
                 $this->println("\033[31mError: duplicate component FQCN '$fqcn'\033[0m");
@@ -216,8 +239,9 @@ final class CompileCommand
             $existing = \file_exists($compiledPath) ? \file_get_contents($compiledPath) : null;
             if ($existing !== $compiled) {
                 $stale[] = $sourceFile;
-                if (!$check) {
-                    \file_put_contents($compiledPath, $compiled);
+                if (!$check && \file_put_contents($compiledPath, $compiled) === false) {
+                    $this->println("\033[31mError: failed to write $compiledPath (disk full or permissions?)\033[0m");
+                    return 1;
                 }
             }
         }
@@ -226,8 +250,9 @@ final class CompileCommand
         $existingManifest = \file_exists($manifestPath) ? \file_get_contents($manifestPath) : null;
         if ($existingManifest !== $manifestSource) {
             $stale[] = $manifestPath;
-            if (!$check) {
-                \file_put_contents($manifestPath, $manifestSource);
+            if (!$check && \file_put_contents($manifestPath, $manifestSource) === false) {
+                $this->println("\033[31mError: failed to write manifest $manifestPath\033[0m");
+                return 1;
             }
         }
 

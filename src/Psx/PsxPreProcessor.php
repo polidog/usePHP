@@ -98,12 +98,6 @@ final class PsxPreProcessor
         return self::PLACEHOLDER_NAMESPACE . "__psx_region_{$index}__()";
     }
 
-    public function placeholderRegex(int $index): string
-    {
-        // Literal-text match for the placeholder, escaped for use in a regex.
-        return '/' . \preg_quote($this->placeholder($index), '/') . '/';
-    }
-
     /**
      * @param array<int, array{0:int,1:string,2:int}|string> $tokens
      */

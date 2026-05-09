@@ -12,7 +12,7 @@ class NamespaceContextTest extends TestCase
     public function testParsesNamespace(): void
     {
         $ctx = $this->parse("<?php\nnamespace App\\Pages;\n");
-        self::assertSame('App\\Pages', $ctx->namespace);
+        self::assertSame('App\\Pages', $ctx->getNamespace());
     }
 
     public function testParsesUseStatement(): void

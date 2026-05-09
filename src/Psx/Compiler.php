@@ -73,11 +73,21 @@ final class Compiler
      * Append trailing newlines to a lowered PSX expression so the compiled
      * output has the same line count as the original PSX region. Without this,
      * a multi-line PSX block would compress lines and shift code below.
+     *
+     * Invariant: PsxParser only inserts newlines that exist in the source, so
+     * the lowered code's newline count is always ≤ the source span's newline
+     * count. If we ever observe more, that's a compiler bug — assert in dev,
+     * tolerate in prod (returning the lowered string unchanged means lines
+     * after the block shift, but rendering still works).
      */
     private function padToOriginalLineCount(string $regionSource, string $lowered): string
     {
         $originalNewlines = \substr_count($regionSource, "\n");
         $loweredNewlines = \substr_count($lowered, "\n");
+        \assert(
+            $loweredNewlines <= $originalNewlines,
+            "PSX compiler emitted more newlines ($loweredNewlines) than the source span had ($originalNewlines).",
+        );
         if ($loweredNewlines >= $originalNewlines) {
             return $lowered;
         }

@@ -237,6 +237,61 @@ class CompilerTest extends TestCase
         }
     }
 
+    public function testBraceExpressionIgnoresClosingBraceInLineComment(): void
+    {
+        // The `}` inside the // comment must NOT close the brace expression.
+        $result = $this->compileExpression("<div>{ /* keep */ \$x // hi }\n}</div>");
+        self::assertStringContainsString('H::div(', $result);
+        self::assertStringContainsString('$x', $result);
+    }
+
+    public function testBraceExpressionIgnoresClosingBraceInBlockComment(): void
+    {
+        $result = $this->compileExpression('<div>{ /* } closing brace inside comment */ $x }</div>');
+        self::assertStringContainsString('H::div(', $result);
+        self::assertStringContainsString('$x', $result);
+    }
+
+    public function testBraceExpressionIgnoresClosingBraceInDoubleQuotedString(): void
+    {
+        $result = $this->compileExpression('<div>{($s = "}"); $s }</div>');
+        self::assertStringContainsString('H::div(', $result);
+        self::assertStringContainsString('"}"', $result);
+    }
+
+    public function testUnclosedAttributeStringRaisesParseError(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Unterminated attribute string literal');
+        $this->compileExpression('<div className="missing-close>x</div>');
+    }
+
+    public function testUnclosedPhpStringInBraceRaisesParseError(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Unterminated PHP string literal');
+        $this->compileExpression('<div>{ "unterminated }</div>');
+    }
+
+    public function testCustomElementWithDataAttrUsesCallStaticDispatch(): void
+    {
+        $result = $this->compileExpression('<my-widget data-x="1" />');
+        // Custom HTML element: not in H's named methods, so __callStatic.
+        self::assertStringContainsString("H::__callStatic('my-widget',", $result);
+        self::assertStringContainsString("'data-x' => '1'", $result);
+    }
+
+    public function testTwoLevelNestedPsxInsideArrayMap(): void
+    {
+        $source = "<?php\nreturn fn(\$groups) => <ul>"
+            . '{array_map(fn($g) => array_map(fn($i) => <li>{$i}</li>, $g), $groups)}'
+            . "</ul>;\n";
+        $result = $this->compiler->compile($source);
+        // The inner H::li(...) call should appear, demonstrating that nested
+        // brace expressions still see PSX tags compiled.
+        self::assertStringContainsString('H::li(children: $i)', $result);
+    }
+
     public function testCompiledHasExpectedStructure(): void
     {
         $sourcePath = \dirname(__DIR__, 2) . '/examples/components/psx/Counter.psx';

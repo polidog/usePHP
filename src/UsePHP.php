@@ -91,7 +91,15 @@ final class UsePHP
      * Combined with line-preserving compilation, errors look like they came
      * from the .psx source.
      *
-     * Returns the previous exception handler (if any) so callers can restore.
+     * NOTE: this REPLACES the active exception handler (set_exception_handler
+     * semantics). If you have an existing reporter such as Sentry/Bugsnag/
+     * Whoops installed, calling this method silently disables it. Either:
+     *  - call this BEFORE installing your reporter so the reporter wins, or
+     *  - capture the return value and chain manually inside your reporter, or
+     *  - use `StackTraceRewriter::formatException($e)` directly inside your
+     *    own handler.
+     *
+     * Returns the previous exception handler (if any).
      */
     public function installPsxErrorHandler(): ?callable
     {
@@ -129,7 +137,17 @@ final class UsePHP
                     . 'Run `vendor/bin/usephp compile` to regenerate.'
                 );
             }
-            $callable = require $compiledPath;
+            try {
+                $callable = require $compiledPath;
+            } catch (\ParseError $e) {
+                throw new \RuntimeException(
+                    "Compiled PSX file is invalid PHP: $compiledPath. "
+                    . 'Run `vendor/bin/usephp compile` to regenerate. ('
+                    . $e->getMessage() . ')',
+                    0,
+                    $e,
+                );
+            }
             if (!\is_callable($callable)) {
                 throw new \RuntimeException("PSX file did not return a callable: $compiledPath");
             }
