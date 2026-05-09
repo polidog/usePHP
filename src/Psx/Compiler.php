@@ -7,24 +7,22 @@ namespace Polidog\UsePhp\Psx;
 /**
  * PSX (TSX-like syntax) compiler.
  *
- * Transforms .psx source into equivalent PHP that calls H::xxx() / H::__callStatic()
- * / RenderContext::getApp()->renderPsxComponent(...) and emits H::Fragment(...) for
- * `<>...</>` syntax.
+ * Pipeline:
+ * 1. PsxPreProcessor scans tokens to locate PSX regions and replaces each
+ *    with a unique placeholder function call, producing valid PHP source
+ *    (parseable by nikic/php-parser) that has the same line layout as
+ *    the original .psx.
+ * 2. NamespaceContext::fromSource parses the pre-processed source through
+ *    nikic to extract the namespace + use map.
+ * 3. PsxParser is run on each captured PSX region using that NamespaceContext
+ *    so component tag names (PascalCase) resolve to FQCNs via PHP's `use`
+ *    statements.
+ * 4. The lowered PHP for each region is substituted back into the
+ *    pre-processed source, replacing the placeholder.
  *
- * Strategy:
- * 1. Tokenize PHP code with token_get_all().
- * 2. Build a NamespaceContext from `namespace` / `use` declarations so component
- *    tags can be resolved to FQCNs.
- * 3. Walk tokens tracking expression-start context.
- * 4. When `<` (or T_IS_NOT_EQUAL `<>` for Fragment) appears at an expression-start
- *    position with a valid lookahead, hand off to PsxParser for one PSX expression.
- * 5. Reassemble the output: emit lowered PHP for PSX regions, copy original PHP
- *    elsewhere.
- *
- * Not yet implemented (see docs/PSX.md §8):
- * - Source maps (errors point to .psx.php, not the original .psx)
- * - PHPStan extension / IDE plugins
- * - Watch mode
+ * Side-stream: per-tag line preservation lives inside PsxParser (each child
+ * is prefixed with newlines matching the source between siblings) so the
+ * compiled output's lines remain aligned with the original .psx source.
  */
 final class Compiler
 {
@@ -38,59 +36,25 @@ final class Compiler
      */
     public function compile(string $source, ?NamespaceContext $context = null): string
     {
-        $tokens = \token_get_all($source);
-        $namespaceContext = $context ?? NamespaceContext::parse($tokens);
         $this->lastReferences = [];
-        $output = '';
-        $expectExpression = true;
 
-        $i = 0;
-        $count = \count($tokens);
+        $preProcessor = new PsxPreProcessor();
+        [$processed, $regions] = $preProcessor->process($source);
 
-        while ($i < $count) {
-            $token = $tokens[$i];
+        // Reuse the outer context when invoked recursively (from inside a `{...}`
+        // brace expression), otherwise derive it from the pre-processed source.
+        $namespaceContext = $context ?? NamespaceContext::fromSource($processed);
 
-            if (\is_array($token)) {
-                [$id, $text] = $token;
-
-                // PHP tokenizes `<>` as T_IS_NOT_EQUAL. In expression context this
-                // is a Fragment opener — switch to PSX parsing.
-                if ($id === \T_IS_NOT_EQUAL && $expectExpression && $text === '<>') {
-                    $offset = $this->tokenOffset($tokens, $i);
-                    $parser = new PsxParser($source, $offset, $namespaceContext);
-                    $result = $parser->parseElement();
-                    $output .= $this->padNewlines($source, $offset, $result['end'], $result['php']);
-                    $i = $this->advanceTokensBeyond($tokens, $i, $result['end']);
-                    $expectExpression = false;
-                    continue;
-                }
-
-                $output .= $text;
-                $expectExpression = $this->updateExpressionContext($id, $expectExpression);
-                $i++;
-                continue;
-            }
-
-            // Single-character token (string).
-            if ($token === '<' && $expectExpression) {
-                // Look ahead to decide if this is a PSX tag start.
-                $next = $tokens[$i + 1] ?? null;
-                if ($this->isPsxTagStart($next)) {
-                    $offset = $this->tokenOffset($tokens, $i);
-                    $parser = new PsxParser($source, $offset, $namespaceContext);
-                    $result = $parser->parseElement();
-                    $output .= $this->padNewlines($source, $offset, $result['end'], $result['php']);
-
-                    // Skip tokens consumed by the PSX parser.
-                    $i = $this->advanceTokensBeyond($tokens, $i, $result['end']);
-                    $expectExpression = false;
-                    continue;
-                }
-            }
-
-            $output .= $token;
-            $expectExpression = $this->updateExpressionContextChar($token, $expectExpression);
-            $i++;
+        $output = $processed;
+        foreach ($regions as $idx => $region) {
+            $parser = new PsxParser($region['source'], 0, $namespaceContext);
+            $result = $parser->parseElement();
+            $lowered = $this->padToOriginalLineCount($region['source'], $result['php']);
+            $output = \str_replace(
+                $preProcessor->placeholder($idx),
+                $lowered,
+                $output,
+            );
         }
 
         $this->lastReferences = $namespaceContext->getResolvedReferences();
@@ -106,101 +70,17 @@ final class Compiler
     }
 
     /**
-     * Append trailing newlines to the emitted PSX code so that the .psx.php
-     * line numbers stay aligned with the original .psx file. Without this,
-     * a multi-line PSX block compresses to a single line and any code below
-     * shifts upward, making PHP error line numbers misleading.
+     * Append trailing newlines to a lowered PSX expression so the compiled
+     * output has the same line count as the original PSX region. Without this,
+     * a multi-line PSX block would compress lines and shift code below.
      */
-    private function padNewlines(string $source, int $offset, int $end, string $emitted): string
+    private function padToOriginalLineCount(string $regionSource, string $lowered): string
     {
-        $originalSpan = \substr($source, $offset, $end - $offset);
-        $originalNewlines = \substr_count($originalSpan, "\n");
-        $emittedNewlines = \substr_count($emitted, "\n");
-        if ($emittedNewlines >= $originalNewlines) {
-            return $emitted;
+        $originalNewlines = \substr_count($regionSource, "\n");
+        $loweredNewlines = \substr_count($lowered, "\n");
+        if ($loweredNewlines >= $originalNewlines) {
+            return $lowered;
         }
-        return $emitted . \str_repeat("\n", $originalNewlines - $emittedNewlines);
-    }
-
-    /**
-     * @param array<int, array{0:int,1:string,2:int}|string> $tokens
-     */
-    private function tokenOffset(array $tokens, int $index): int
-    {
-        // Compute byte offset of token at $index by summing prior token lengths.
-        $offset = 0;
-        for ($j = 0; $j < $index; $j++) {
-            $t = $tokens[$j];
-            $offset += \strlen(\is_array($t) ? $t[1] : $t);
-        }
-        return $offset;
-    }
-
-    /**
-     * @param array<int, array{0:int,1:string,2:int}|string> $tokens
-     */
-    private function advanceTokensBeyond(array $tokens, int $startIndex, int $byteEnd): int
-    {
-        $offset = $this->tokenOffset($tokens, $startIndex);
-        $i = $startIndex;
-        $count = \count($tokens);
-        while ($i < $count && $offset < $byteEnd) {
-            $t = $tokens[$i];
-            $offset += \strlen(\is_array($t) ? $t[1] : $t);
-            $i++;
-        }
-        return $i;
-    }
-
-    /**
-     * @param array{0:int,1:string,2:int}|string|null $next
-     */
-    private function isPsxTagStart(mixed $next): bool
-    {
-        if ($next === null) {
-            return false;
-        }
-        if (\is_array($next)) {
-            return $next[0] === \T_STRING;
-        }
-        // Fragment <> or closing </ would also start with these single chars.
-        return $next === '/' || $next === '>';
-    }
-
-    private function updateExpressionContext(int $tokenId, bool $current): bool
-    {
-        // Tokens after which an expression is expected.
-        $expressionStartingTokens = [
-            \T_RETURN,
-            \T_ECHO,
-            \T_PRINT,
-            \T_DOUBLE_ARROW,
-            \T_OBJECT_OPERATOR,
-            \T_NULLSAFE_OBJECT_OPERATOR,
-            \T_OPEN_TAG,
-            \T_OPEN_TAG_WITH_ECHO,
-            \T_FN,
-        ];
-
-        if (\in_array($tokenId, $expressionStartingTokens, true)) {
-            return true;
-        }
-
-        // Whitespace/comments don't change context.
-        if (\in_array($tokenId, [\T_WHITESPACE, \T_COMMENT, \T_DOC_COMMENT], true)) {
-            return $current;
-        }
-
-        // Most other tokens (identifiers, literals, etc.) end an expression-start position.
-        return false;
-    }
-
-    private function updateExpressionContextChar(string $char, bool $current): bool
-    {
-        return match ($char) {
-            '=', ',', '(', '[', '{', ';', '?', ':', '!', '&', '|', '^', '+', '-', '*', '/', '%', '.' => true,
-            ')', ']', '}' => false,
-            default => $current,
-        };
+        return $lowered . \str_repeat("\n", $originalNewlines - $loweredNewlines);
     }
 }

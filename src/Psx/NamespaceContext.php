@@ -4,6 +4,12 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Psx;
 
+use PhpParser\ErrorHandler\Collecting;
+use PhpParser\Node;
+use PhpParser\NodeTraverser;
+use PhpParser\NodeVisitorAbstract;
+use PhpParser\ParserFactory;
+
 /**
  * Tracks the current PHP namespace and use map for a .psx file so PSX
  * component tags (PascalCase) can be resolved to fully qualified class names.
@@ -27,43 +33,74 @@ final class NamespaceContext
     private array $resolvedReferences = [];
 
     /**
+     * Build a NamespaceContext from a (possibly PSX-laden) source string.
+     *
+     * The PSX regions don't parse as valid PHP so we use nikic's collecting
+     * error handler — namespace/use declarations come before any PSX so the
+     * partial AST has everything we need.
+     */
+    public static function fromSource(string $source): self
+    {
+        $ctx = new self();
+
+        $parser = new ParserFactory()->createForNewestSupportedVersion();
+        $ast = $parser->parse($source, new Collecting());
+        if ($ast !== null) {
+            $traverser = new NodeTraverser();
+            $traverser->addVisitor(new class ($ctx) extends NodeVisitorAbstract {
+                public function __construct(private readonly NamespaceContext $ctx) {}
+
+                public function enterNode(Node $node): null
+                {
+                    if ($node instanceof Node\Stmt\Namespace_ && $node->name !== null) {
+                        $this->ctx->namespace = $node->name->toString();
+                    }
+                    if ($node instanceof Node\Stmt\Use_ && $node->type === Node\Stmt\Use_::TYPE_NORMAL) {
+                        foreach ($node->uses as $use) {
+                            $alias = $use->alias?->toString() ?? $use->name->getLast();
+                            $this->ctx->addUse($use->name->toString(), $alias);
+                        }
+                    }
+                    return null;
+                }
+            });
+            $traverser->traverse($ast);
+        }
+
+        // @psx-runtime annotations are extracted directly from the source
+        // because nikic discards comments outside attached docblocks for our
+        // purposes here.
+        if (\preg_match_all(
+            '/(?:\/\/|#)\s*@psx-runtime\s+([A-Za-z_][A-Za-z0-9_\\\\]*)|@psx-runtime\s+([A-Za-z_][A-Za-z0-9_\\\\]*)\s*\*\//',
+            $source,
+            $matches
+        ) > 0) {
+            foreach ($matches[1] as $i => $line) {
+                $fqcn = $line !== '' ? $line : ($matches[2][$i] ?? '');
+                if ($fqcn !== '') {
+                    $ctx->runtimeDeclarations[] = \ltrim($fqcn, '\\');
+                }
+            }
+        }
+
+        return $ctx;
+    }
+
+    /**
+     * Legacy entry point kept for backward compatibility with the previous
+     * token-array-based API. Internally rebuilds the source string from the
+     * tokens and delegates to fromSource(). Most callers should switch to
+     * fromSource() directly.
+     *
      * @param array<int, array{0:int,1:string,2:int}|string> $tokens
      */
     public static function parse(array $tokens): self
     {
-        $ctx = new self();
-        $count = \count($tokens);
-        $i = 0;
-
-        while ($i < $count) {
-            $tok = $tokens[$i];
-
-            if (\is_array($tok) && $tok[0] === \T_NAMESPACE) {
-                $i = $ctx->consumeNamespace($tokens, $i + 1);
-                continue;
-            }
-
-            if (\is_array($tok) && $tok[0] === \T_USE) {
-                if ($ctx->isTopLevelUse($tokens, $i)) {
-                    $i = $ctx->consumeUse($tokens, $i + 1);
-                    continue;
-                }
-            }
-
-            // Recognise `// @psx-runtime FQCN` and `# @psx-runtime FQCN` comments
-            // and `/** @psx-runtime FQCN */` doc comments.
-            if (\is_array($tok) && ($tok[0] === \T_COMMENT || $tok[0] === \T_DOC_COMMENT)) {
-                if (\preg_match_all('/@psx-runtime\s+([A-Za-z_][A-Za-z0-9_\\\\]*)/', $tok[1], $matches) > 0) {
-                    foreach ($matches[1] as $fqcn) {
-                        $ctx->runtimeDeclarations[] = \ltrim($fqcn, '\\');
-                    }
-                }
-            }
-
-            $i++;
+        $source = '';
+        foreach ($tokens as $tok) {
+            $source .= \is_array($tok) ? $tok[1] : $tok;
         }
-
-        return $ctx;
+        return self::fromSource($source);
     }
 
     /**
@@ -102,144 +139,6 @@ final class NamespaceContext
     public function getResolvedReferences(): array
     {
         return $this->resolvedReferences;
-    }
-
-    /**
-     * @param array<int, array{0:int,1:string,2:int}|string> $tokens
-     */
-    private function consumeNamespace(array $tokens, int $i): int
-    {
-        $name = '';
-        $count = \count($tokens);
-        while ($i < $count) {
-            $tok = $tokens[$i];
-            if (\is_array($tok)) {
-                if ($tok[0] === \T_STRING || $tok[0] === \T_NS_SEPARATOR || $tok[0] === \T_NAME_QUALIFIED || $tok[0] === \T_NAME_FULLY_QUALIFIED) {
-                    $name .= $tok[1];
-                    $i++;
-                    continue;
-                }
-                if (\in_array($tok[0], [\T_WHITESPACE, \T_COMMENT, \T_DOC_COMMENT], true)) {
-                    $i++;
-                    continue;
-                }
-                break;
-            }
-            // Single-char: ; or { ends the namespace declaration.
-            if ($tok === ';' || $tok === '{') {
-                $i++;
-                break;
-            }
-            $i++;
-        }
-        $this->namespace = \trim($name, '\\');
-        return $i;
-    }
-
-    /**
-     * @param array<int, array{0:int,1:string,2:int}|string> $tokens
-     */
-    private function consumeUse(array $tokens, int $i): int
-    {
-        $name = '';
-        $alias = null;
-        $count = \count($tokens);
-        $expectingAlias = false;
-
-        while ($i < $count) {
-            $tok = $tokens[$i];
-
-            if (\is_array($tok)) {
-                if ($tok[0] === \T_AS) {
-                    $expectingAlias = true;
-                    $i++;
-                    continue;
-                }
-                if ($tok[0] === \T_FUNCTION || $tok[0] === \T_CONST) {
-                    // `use function`/`use const` — not a class import. Skip the rest.
-                    return $this->skipToSemicolon($tokens, $i);
-                }
-                if ($tok[0] === \T_STRING || $tok[0] === \T_NS_SEPARATOR || $tok[0] === \T_NAME_QUALIFIED || $tok[0] === \T_NAME_FULLY_QUALIFIED) {
-                    if ($expectingAlias) {
-                        $alias = $tok[1];
-                    } else {
-                        $name .= $tok[1];
-                    }
-                    $i++;
-                    continue;
-                }
-                if (\in_array($tok[0], [\T_WHITESPACE, \T_COMMENT, \T_DOC_COMMENT], true)) {
-                    $i++;
-                    continue;
-                }
-            } else {
-                if ($tok === ',') {
-                    if ($name !== '') {
-                        $this->addUse($name, $alias);
-                    }
-                    $name = '';
-                    $alias = null;
-                    $expectingAlias = false;
-                    $i++;
-                    continue;
-                }
-                if ($tok === ';') {
-                    if ($name !== '') {
-                        $this->addUse($name, $alias);
-                    }
-                    return $i + 1;
-                }
-                if ($tok === '{' || $tok === '}') {
-                    // Grouped use { ... } — for Phase 1 minimal we skip grouped form.
-                    return $this->skipToSemicolon($tokens, $i);
-                }
-            }
-            $i++;
-        }
-        return $i;
-    }
-
-    /**
-     * @param array<int, array{0:int,1:string,2:int}|string> $tokens
-     */
-    private function skipToSemicolon(array $tokens, int $i): int
-    {
-        $count = \count($tokens);
-        while ($i < $count) {
-            $tok = $tokens[$i];
-            if ($tok === ';') {
-                return $i + 1;
-            }
-            $i++;
-        }
-        return $i;
-    }
-
-    /**
-     * Detect whether a T_USE token is a top-level statement (vs inside a class).
-     *
-     * @param array<int, array{0:int,1:string,2:int}|string> $tokens
-     */
-    private function isTopLevelUse(array $tokens, int $i): bool
-    {
-        // Walk back to the previous non-whitespace token. If it's `;`, `{` (after namespace),
-        // T_OPEN_TAG, or T_NAMESPACE end, we are likely top-level. If it's `}` of a class
-        // body or after T_CLASS, we are inside a class — but use-trait is what we'd skip.
-        // Heuristic: count braces from start up to $i. If brace depth is 0, top-level.
-        $depth = 0;
-        for ($j = 0; $j < $i; $j++) {
-            $t = $tokens[$j];
-            if (\is_string($t)) {
-                if ($t === '{') {
-                    $depth++;
-                } elseif ($t === '}') {
-                    $depth--;
-                }
-            } elseif ($t[0] === \T_CURLY_OPEN) {
-                $depth++;
-            }
-        }
-        return $depth === 0;
     }
 
     private static function shortName(string $fqcn): string

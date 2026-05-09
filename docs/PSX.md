@@ -648,10 +648,16 @@ PSX コンパイラは `<Counter />` をコンパイル時に検証する際、�
 - スタックトレース rewrite (`StackTraceRewriter`): `.psx.php` パスを `.psx` に置換、`UsePHP::installPsxErrorHandler()` でグローバルハンドラ登録
 - Per-tag 行保持: 各 PSX 子要素にソース行から計算した `\n` プレフィックスを付与し、`H::xxx()` 呼び出しが元の `<tag>` と同じ行に出力される。多階層ネストでも実証済(`<span>{$undefined}</span>` がソース行 10 → コンパイル後行 10 のエラー)。
 
-### Phase 4 候補 — 残タスク
-- IDE プラグイン / PHPStan エクステンション(PSX タグの型推論)
+### ✅ Phase 4: nikic/php-parser ベースに移行 — 完了
+- `nikic/php-parser ^5.7` を `composer require` で依存追加
+- `NamespaceContext` の token-walking ロジックを廃止し、nikic の AST visitor で namespace + use を抽出(error-recovery モードで PSX 入りソースから部分 AST を取得)
+- `PsxPreProcessor` 新設: PSX 領域を `\Polidog\UsePhp\Psx\Internal\__psx_region_N__()` プレースホルダ関数呼び出しに置換し、結果は valid な PHP として nikic でフルパース可能
+- `Compiler` を再構築: pre-processor → nikic ベース NamespaceContext → 各領域の PsxParser 呼び出し → 出力にプレースホルダ置換戻し
+- 行数保持ロジックを Compiler 側に統合(プレースホルダ置換時に元 PSX と lowered の改行数差分を補完)
+
+### Phase 5 候補 — 残タスク
+- IDE プラグイン / PHPStan エクステンション(PSX タグの型推論、AST 経由で実装可能になった)
 - 複数の公開コンポーネント/1ファイル(現状の制約は意図的に維持。1 file = 1 component の明確さがメリット)
-- nikic/php-parser ベースの再実装検討(現状ハンドコードで支障なし)
 
 ### テストカバレッジ
 207 件全パス。PSX 関連 46 件:
@@ -678,6 +684,14 @@ PSX コンパイラは `<Counter />` をコンパイル時に検証する際、�
 - [nikic/php-parser](https://github.com/nikic/PHP-Parser)
 
 ## 11. 改訂履歴
+
+### 2026-05-09(Phase 4: nikic/php-parser 移行)
+- `nikic/php-parser ^5.7` を依存に追加
+- `NamespaceContext` を nikic の AST visitor 実装に置換(error-recovery モード)
+- `PsxPreProcessor` 新設、PSX 領域をプレースホルダ関数呼び出しに置換 → valid PHP として nikic フルパース可能
+- `Compiler` を pre-processor + nikic + 置換戻しのパイプラインに再構築
+- 旧 token-walking ベースの実装は削除、行保持ロジックは Compiler に統合
+- 207 tests pass(変更なし)
 
 ### 2026-05-09(Phase 3: 行レベル DX 改善)
 - `StackTraceRewriter` 追加: `.psx.php` パスを `.psx` に書き換え、Throwable を整形
