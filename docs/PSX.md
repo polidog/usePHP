@@ -49,14 +49,13 @@ return <div className="counter">
 - 未解決コンポーネントのコンパイル時エラー検出(`@psx-runtime` 注釈で抑制可能)
 - 既存の変数ベース `fc()` コンポーネントとの coexistence(`UsePHP::registerComponent()` ブリッジ)
 - Fragment 構文 `<>...</>`(`array_map` 等で必須なため MVP に含める)
-- CLI: `usephp compile` / `usephp compile --check` / `usephp compile --clean`
+- CLI: `usephp compile` / `usephp compile --check` / `usephp compile --clean` / `usephp compile --watch`
 
 ### 含まないもの(将来検討)
 
-- ソースマップ(エラー行の元 `.psx` への対応付け)
+- 完全なソースマップ(エラー位置はファイル名+行番号レベルで Phase 2/3 完了済、ソースマップ JSON 出力は未実装)
 - IDE プラグイン / PHPStan エクステンション
 - 複数の**公開**コンポーネント / 1ファイル(private ヘルパーは MVP でも可)
-- watch モード
 - HMR
 - カスタム属性プロセッサ
 

@@ -96,7 +96,17 @@ final class UsePHP
     public function installPsxErrorHandler(): ?callable
     {
         return \set_exception_handler(static function (\Throwable $e): void {
-            \fwrite(\STDERR, \Polidog\UsePhp\Psx\StackTraceRewriter::formatException($e) . "\n");
+            $message = \Polidog\UsePhp\Psx\StackTraceRewriter::formatException($e) . "\n";
+            // STDERR is only defined in CLI/phpdbg; opening php://stderr works
+            // in any SAPI (and falls back to error_log on the rare case the
+            // stream can't be opened — e.g., bizarre stream-wrapper config).
+            $stderr = \fopen('php://stderr', 'wb');
+            if ($stderr !== false) {
+                \fwrite($stderr, $message);
+                \fclose($stderr);
+                return;
+            }
+            \error_log($message);
         });
     }
 
@@ -112,9 +122,16 @@ final class UsePHP
             if (!isset($this->psxManifest[$fqcn])) {
                 throw new \RuntimeException("PSX component not registered: $fqcn");
             }
-            $callable = require $this->psxManifest[$fqcn];
+            $compiledPath = $this->psxManifest[$fqcn];
+            if (!\is_file($compiledPath) || !\is_readable($compiledPath)) {
+                throw new \RuntimeException(
+                    "Compiled PSX file not found for $fqcn: $compiledPath. "
+                    . 'Run `vendor/bin/usephp compile` to regenerate.'
+                );
+            }
+            $callable = require $compiledPath;
             if (!\is_callable($callable)) {
-                throw new \RuntimeException("PSX file did not return a callable: {$this->psxManifest[$fqcn]}");
+                throw new \RuntimeException("PSX file did not return a callable: $compiledPath");
             }
             $this->psxLoaded[$fqcn] = $callable;
         }

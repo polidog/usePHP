@@ -13,10 +13,10 @@ namespace Polidog\UsePhp\Psx;
  * — a top-level function call. The Compiler later substitutes each occurrence
  * with the lowered PSX expression.
  *
- * Each placeholder is padded with `\n` characters so the pre-processed source
- * has the same number of newlines as the original; this keeps line numbers
- * stable across the rewrite and feeds into NamespaceContext / nikic with
- * accurate position info.
+ * Line-count preservation is NOT done here: this stage emits the placeholder
+ * with no padding. The Compiler tops up newlines once it knows how many lines
+ * the lowered code actually consumes, so line numbers in the final output
+ * match the original .psx source.
  */
 final class PsxPreProcessor
 {
@@ -44,7 +44,7 @@ final class PsxPreProcessor
                 [$id, $text] = $token;
 
                 if ($id === \T_IS_NOT_EQUAL && $expectExpression && $text === '<>') {
-                    $output .= $this->capture($source, $tokens, $i, $regions, fragment: true);
+                    $output .= $this->capture($source, $tokens, $i, $regions);
                     $i = $this->advanceTokensBeyond($tokens, $i, $regions[\count($regions) - 1]['end']);
                     $expectExpression = false;
                     continue;
@@ -57,7 +57,7 @@ final class PsxPreProcessor
             }
 
             if ($token === '<' && $expectExpression && $this->isPsxTagStart($tokens[$i + 1] ?? null)) {
-                $output .= $this->capture($source, $tokens, $i, $regions, fragment: false);
+                $output .= $this->capture($source, $tokens, $i, $regions);
                 $i = $this->advanceTokensBeyond($tokens, $i, $regions[\count($regions) - 1]['end']);
                 $expectExpression = false;
                 continue;
@@ -75,7 +75,7 @@ final class PsxPreProcessor
      * @param array<int, array{0:int,1:string,2:int}|string> $tokens
      * @param list<array{source: string, start: int, end: int}> $regions
      */
-    private function capture(string $source, array $tokens, int $i, array &$regions, bool $fragment): string
+    private function capture(string $source, array $tokens, int $i, array &$regions): string
     {
         $offset = $this->tokenOffset($tokens, $i);
         // Run PsxParser purely for its end-of-region detection. The string it
@@ -100,7 +100,7 @@ final class PsxPreProcessor
 
     public function placeholderRegex(int $index): string
     {
-        // Anchored exact match for the placeholder text.
+        // Literal-text match for the placeholder, escaped for use in a regex.
         return '/' . \preg_quote($this->placeholder($index), '/') . '/';
     }
 
