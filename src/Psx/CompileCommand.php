@@ -8,17 +8,23 @@ namespace Polidog\UsePhp\Psx;
  * Implements `usephp compile [options] [paths...]`.
  *
  * - Walks each given path (file or directory) for .psx files.
- * - Compiles each into a sibling .psx.php.
- * - Aggregates a manifest (FQCN -> path) at the configured location.
+ * - Compiles each into the cache directory, naming the file by the
+ *   sha1 of the source's absolute path so source trees stay clean
+ *   (no `.psx.php` files alongside `.psx`).
+ * - Aggregates a manifest (FQCN -> compiled cache path) at
+ *   `<cacheDir>/manifest.php`.
  *
  * Options:
- *   --check    Don't write files; exit non-zero if anything is out of date.
- *   --clean    Remove all generated .psx.php and the manifest.
- *   --watch    Re-run compile when any .psx file changes (Ctrl+C to stop).
- *   --manifest=PATH   Manifest output path (default: psx-manifest.php in CWD).
+ *   --check          Don't write files; exit non-zero if anything is out of date.
+ *   --clean          Remove the cache directory's contents.
+ *   --watch          Re-run compile when any .psx file changes (Ctrl+C to stop).
+ *   --cache=PATH     Cache directory (default: <cwd>/var/cache/psx).
  */
 final class CompileCommand
 {
+    public const DEFAULT_CACHE_SUBDIR = 'var/cache/psx';
+    public const MANIFEST_FILENAME = 'manifest.php';
+
     /**
      * @param list<string> $argv Argument list (after `compile` subcommand).
      */
@@ -26,7 +32,8 @@ final class CompileCommand
     {
         [$flags, $paths] = $this->splitArgs($argv);
 
-        $manifestPath = $this->absPath($flags['manifest'] ?? $cwd . '/psx-manifest.php');
+        $cacheDir = $this->absPath($flags['cache'] ?? $cwd . '/' . self::DEFAULT_CACHE_SUBDIR);
+        $manifestPath = $cacheDir . \DIRECTORY_SEPARATOR . self::MANIFEST_FILENAME;
         $check = isset($flags['check']);
         $clean = isset($flags['clean']);
         $watch = isset($flags['watch']);
@@ -36,14 +43,38 @@ final class CompileCommand
         }
 
         if ($clean) {
-            return $this->doClean($paths, $manifestPath);
+            return $this->doClean($cacheDir);
+        }
+
+        if (!$this->ensureCacheDir($cacheDir)) {
+            $this->println("\033[31mError: cannot create cache directory $cacheDir\033[0m");
+            return 1;
         }
 
         if ($watch) {
-            return $this->runWatch($paths, $manifestPath);
+            return $this->runWatch($paths, $cacheDir, $manifestPath);
         }
 
-        return $this->doCompile($paths, $manifestPath, $check);
+        return $this->doCompile($paths, $cacheDir, $manifestPath, $check);
+    }
+
+    /**
+     * Compute the cache file path for a given .psx source file. Used by
+     * both the compiler and any external runtime (e.g., AppRouter) so
+     * the convention stays consistent.
+     */
+    public static function cachePathFor(string $cacheDir, string $sourcePath): string
+    {
+        $abs = \realpath($sourcePath);
+        if ($abs === false) {
+            // Source might not exist yet (e.g., a freshly created file
+            // about to be compiled); fall back to a normalised abspath.
+            $abs = $sourcePath;
+        }
+        return \rtrim($cacheDir, \DIRECTORY_SEPARATOR)
+            . \DIRECTORY_SEPARATOR
+            . \sha1($abs)
+            . '.php';
     }
 
     private function shortName(string $fqcn): string
@@ -103,8 +134,8 @@ final class CompileCommand
 
     /**
      * Normalise a path to an absolute one. We avoid realpath() on the leaf
-     * because the compiled .psx.php sibling may not exist yet; instead we
-     * resolve the directory and recombine.
+     * because the target file (e.g. cache file or new manifest) may not
+     * exist yet; instead we resolve the directory and recombine.
      */
     private function absPath(string $path): string
     {
@@ -117,13 +148,21 @@ final class CompileCommand
         return $absDir . \DIRECTORY_SEPARATOR . $base;
     }
 
+    private function ensureCacheDir(string $cacheDir): bool
+    {
+        if (\is_dir($cacheDir)) {
+            return true;
+        }
+        return \mkdir($cacheDir, 0o755, true) || \is_dir($cacheDir);
+    }
+
     /**
      * Poll-based watch loop. Re-runs the compile pass whenever any .psx file's
      * mtime changes. Exits via SIGINT (Ctrl+C).
      *
      * @param list<string> $paths
      */
-    private function runWatch(array $paths, string $manifestPath): int
+    private function runWatch(array $paths, string $cacheDir, string $manifestPath): int
     {
         $this->println("\033[36mWatching for .psx changes (Ctrl+C to stop)…\033[0m");
 
@@ -153,11 +192,8 @@ final class CompileCommand
 
             if ($changed || \array_keys($lastMtimes) !== \array_keys($currentMtimes)) {
                 $this->println("\033[33m" . \date('H:i:s') . " — recompiling…\033[0m");
-                $exitCode = $this->doCompile($paths, $manifestPath, false);
+                $exitCode = $this->doCompile($paths, $cacheDir, $manifestPath, false);
                 if ($exitCode !== 0) {
-                    // Hold the previous mtimes so the next save retries; the
-                    // user's edit hasn't been "consumed" until it actually
-                    // compiles.
                     \usleep(500_000);
                     continue;
                 }
@@ -174,7 +210,7 @@ final class CompileCommand
      *
      * @param list<string> $paths
      */
-    private function doCompile(array $paths, string $manifestPath, bool $check): int
+    private function doCompile(array $paths, string $cacheDir, string $manifestPath, bool $check): int
     {
         $sourceFiles = $this->collectPsxFiles($paths);
         if ($sourceFiles === []) {
@@ -200,13 +236,15 @@ final class CompileCommand
                 ? $ctx->getNamespace() . '\\' . $base
                 : $base;
 
+            $compiledPath = self::cachePathFor($cacheDir, $sourceFile);
+
             if (isset($manifestEntries[$fqcn])) {
                 $this->println("\033[31mError: duplicate component FQCN '$fqcn'\033[0m");
                 $this->println('  defined in: ' . $manifestEntries[$fqcn]);
-                $this->println('  also in:    ' . $sourceFile . '.php');
+                $this->println('  also in:    ' . $compiledPath);
                 return 1;
             }
-            $manifestEntries[$fqcn] = $sourceFile . '.php';
+            $manifestEntries[$fqcn] = $compiledPath;
 
             foreach ($ctx->getRuntimeDeclarations() as $rd) {
                 $runtimeDeclarations[$rd] = true;
@@ -218,7 +256,7 @@ final class CompileCommand
         $knownFqcns = $manifestEntries + $runtimeDeclarations;
 
         foreach ($sourceFiles as $sourceFile) {
-            $compiledPath = $sourceFile . '.php';
+            $compiledPath = self::cachePathFor($cacheDir, $sourceFile);
             $source = $sourceContents[$sourceFile];
 
             try {
@@ -265,27 +303,34 @@ final class CompileCommand
         }
 
         $count = \count($sourceFiles);
-        $this->println("\033[32mCompiled $count .psx file" . ($count === 1 ? '' : 's') . "\033[0m");
+        $this->println("\033[32mCompiled $count .psx file" . ($count === 1 ? '' : 's') . " → $cacheDir\033[0m");
         $this->println("Manifest: $manifestPath");
         return 0;
     }
 
-    /**
-     * @param list<string> $paths
-     */
-    private function doClean(array $paths, string $manifestPath): int
+    private function doClean(string $cacheDir): int
     {
+        if (!\is_dir($cacheDir)) {
+            $this->println("\033[33mCache dir does not exist: $cacheDir\033[0m");
+            return 0;
+        }
+
         $removed = 0;
-        foreach ($this->collectPsxFiles($paths) as $sourceFile) {
-            $compiledPath = $sourceFile . '.php';
-            if (\file_exists($compiledPath) && @\unlink($compiledPath)) {
+        $iter = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($cacheDir, \RecursiveDirectoryIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::CHILD_FIRST,
+        );
+        foreach ($iter as $entry) {
+            $path = $entry->getPathname();
+            if ($entry->isDir()) {
+                @\rmdir($path);
+            } elseif (@\unlink($path)) {
                 $removed++;
+            } else {
+                $this->println("\033[33mWarning: could not remove $path\033[0m");
             }
         }
-        if (\file_exists($manifestPath) && @\unlink($manifestPath)) {
-            $removed++;
-        }
-        $this->println("\033[32mRemoved $removed file(s)\033[0m");
+        $this->println("\033[32mRemoved $removed file(s) from $cacheDir\033[0m");
         return 0;
     }
 

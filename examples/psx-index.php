@@ -23,13 +23,14 @@ if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
 }
 
 $psxDir = __DIR__ . '/components/psx';
-$manifestPath = $psxDir . '/psx-manifest.php';
+$cacheDir = __DIR__ . '/../var/cache/psx';
+$manifestPath = $cacheDir . '/' . CompileCommand::MANIFEST_FILENAME;
 
 // Dev mode: re-compile if any .psx file is newer than the manifest.
 if (psxNeedsCompile($psxDir, $manifestPath)) {
     ob_start();
     $cmd = new CompileCommand();
-    $exitCode = $cmd->run([$psxDir, '--manifest=' . $manifestPath], $psxDir);
+    $exitCode = $cmd->run([$psxDir, '--cache=' . $cacheDir], $psxDir);
     ob_end_clean();
     if ($exitCode !== 0) {
         http_response_code(500);
