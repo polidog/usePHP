@@ -8,7 +8,8 @@ React Hooks風の書き心地で、**最小限のJavaScript**でサーバード�
 - **関数コンポーネント（推奨）** - シンプルなPHP callableを使った軽量コンポーネント
 - **組み込みルーター** - シンプルで差し替え可能なルーター、ページ間でスナップショット状態を保持
 - **最小限のJS (~40行)** - 部分更新でスムーズなUX、JSなしでもフォールバック動作
-- **PHPがそのまま動く** - トランスパイル不要、PHPコードがサーバーで実行
+- **デフォルトはピュアPHP** - `H::xxx()`形式のコンポーネントはトランスパイル不要
+- **PSX（オプション）** - HTML中心のUI向けに`usephp compile`でコンパイルされるTSX風テンプレート構文（[PSXセクション](#psxオプションtsx風構文)を参照）
 - **設定可能な状態ストレージ** - セッション（永続）またはメモリ（リクエスト単位）を選択可能
 - **プログレッシブエンハンスメント** - JavaScriptが無効でも動作
 - **フレームワーク統合** - Laravel、Symfony等のフレームワークと併用可能
@@ -456,6 +457,119 @@ $App = fc(function(array $props): Element {
 }, 'app');
 ```
 
+## PSX（オプション、TSX風構文）
+
+PSXはコンポーネントを記述するためのオプトインの代替構文です。HTMLを直接書き、`usephp compile`で前述の`H::xxx()`呼び出しに変換します。ランタイムは変わりません — PSXは純粋に構文レイヤーです。
+
+### いつ使うか
+
+- `H::div(children: [...])`で読みづらくなる、深くネストしたHTMLを持つコンポーネント
+- JSX/TSXに慣れていて、馴染みのあるテンプレート構文を使いたいチーム
+
+コンポーネントがシンプルなら`H::xxx()`のままで十分です — PSXはビルドステップが増えますが、素のPHPなら不要です。
+
+### 構文の概要
+
+```php
+<?php
+// components/Counter.psx
+namespace App\Components;
+
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Storage\StorageType;
+
+use function Polidog\UsePhp\Runtime\fc;
+use function Polidog\UsePhp\Runtime\useState;
+
+return fc(function (array $props) {
+    [$count, $setCount] = useState($props['initial'] ?? 0);
+
+    return <div className="counter">
+        <span>Count: {$count}</span>
+        <button onClick={fn() => $setCount($count + 1)}>+</button>
+        <button onClick={fn() => $setCount($count - 1)}>-</button>
+    </div>;
+}, 'counter', StorageType::Session);
+```
+
+以下のように展開されます（`var/cache/psx/`配下にキャッシュされます）：
+
+```php
+return fc(function (array $props) {
+    [$count, $setCount] = useState($props['initial'] ?? 0);
+    return H::div(className: 'counter', children: [
+        H::span(children: ['Count: ', $count]),
+        H::button(onClick: fn() => $setCount($count + 1), children: '+'),
+        H::button(onClick: fn() => $setCount($count - 1), children: '-'),
+    ]);
+}, 'counter', StorageType::Session);
+```
+
+### コンパイルワークフロー
+
+```bash
+# components/配下の.psxを一括コンパイル
+./vendor/bin/usephp compile components/
+
+# 開発時のwatchモード
+./vendor/bin/usephp compile components/ --watch
+
+# CI: 古い状態なら失敗させる
+./vendor/bin/usephp compile components/ --check
+
+# キャッシュディレクトリを削除
+./vendor/bin/usephp compile components/ --clean
+
+# キャッシュディレクトリをカスタム指定
+./vendor/bin/usephp compile components/ --cache=build/psx
+```
+
+`compile`は出力を`var/cache/psx/`へ書き出します（`--cache=PATH`で変更可能）。各`.psx`ソースファイルから、そのディレクトリにsha1ハッシュを名前にした`.php`コンパニオンファイルが生成され、加えて単一の`manifest.php`（FQCN→コンパイル後のパスのマップ）が出力されます。プロジェクトにコミットするのは`.psx`ソースファイルのみで、キャッシュディレクトリは無視するのが推奨です：
+
+```gitignore
+/var/cache/psx/
+```
+
+### ランタイムでのPSXコンポーネントの読み込み
+
+```php
+use Polidog\UsePhp\Psx\CompileCommand;
+
+$app = new UsePHP();
+$app->loadComponentManifest(__DIR__ . '/../var/cache/psx/' . CompileCommand::MANIFEST_FILENAME);
+
+// PSXコンポーネントをルートハンドラーとして使用
+$router->get('/', function () use ($app) {
+    \Polidog\UsePhp\Runtime\RenderContext::beginRender();
+    return $app->renderPsxComponent('App\\Components\\Counter', ['initial' => 0]);
+});
+```
+
+### PSXコンポーネントの合成
+
+別の`.psx`内で使われる`<Counter />`（PascalCase）は、通常のクラスインポートと同じくPHPの`use`文経由で完全修飾クラス名に解決されます：
+
+```php
+<?php
+namespace App\Pages;
+
+use App\Components\Counter;
+use App\Components\Forms\Input as FormInput;
+
+return fn() => <div>
+    <Counter initial={5} />
+    <FormInput type="email" />
+</div>;
+```
+
+`.psx`ファイルで定義せず、ランタイムで登録されるコンポーネントを使う場合は、コンパイラのバリデーションを通すためにコメントで宣言します：
+
+```php
+// @psx-runtime App\Legacy\WidgetCounter
+```
+
+完全な仕様（Fragment構文、属性のディスパッチ、manifest形式、エッジケース）は[docs/PSX.md](docs/PSX.md)を参照してください。
+
 ## 生成されるHTML
 
 ```php
@@ -478,8 +592,9 @@ H::button(onClick: fn() => $setCount($count + 1), children: '+')
 ## CLI
 
 ```bash
-./vendor/bin/usephp publish  # usephp.jsをpublic/にコピー
-./vendor/bin/usephp help     # ヘルプ表示
+./vendor/bin/usephp publish               # usephp.jsをpublic/にコピー
+./vendor/bin/usephp compile components/   # .psxファイルをコンパイル（PSXセクション参照）
+./vendor/bin/usephp help                  # ヘルプ表示
 ```
 
 ## 要件
