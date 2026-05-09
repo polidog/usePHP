@@ -27,10 +27,12 @@ H::div(
 
 ```php
 // PSX(.psx)
-return <div className="counter">
-    <span>Count: {$count}</span>
-    <button onClick={fn() => $setCount($count + 1)}>+</button>
-</div>;
+return (
+    <div className="counter">
+        <span>Count: {$count}</span>
+        <button onClick={fn() => $setCount($count + 1)}>+</button>
+    </div>
+);
 ```
 
 ## 2. スコープ(MVP)
@@ -97,17 +99,21 @@ use Polidog\UsePhp\Html\H;
 use function Polidog\UsePhp\Runtime\{fc, useState};
 
 // private ヘルパー(マニフェスト非登録)
-$todoItem = fn(array $todo) => <li className={$todo['done'] ? 'done' : ''}>
-    <span>{$todo['text']}</span>
-</li>;
+$todoItem = fn(array $todo) => (
+    <li className={$todo['done'] ? 'done' : ''}>
+        <span>{$todo['text']}</span>
+    </li>
+);
 
 // 公開コンポーネント
 return fc(function(array $props) use ($todoItem) {
     [$todos, $setTodos] = useState($props['initial'] ?? []);
 
-    return <ul>
-        {array_map($todoItem, $todos)}
-    </ul>;
+    return (
+        <ul>
+            {array_map($todoItem, $todos)}
+        </ul>
+    );
 }, 'todo-list');
 ```
 
@@ -270,10 +276,12 @@ namespace App\Pages;
 use App\Components\Counter;
 use App\Mobile\Counter as MobileCounter;
 
-return <div>
-    <Counter />          // App\Components\Counter
-    <MobileCounter />    // App\Mobile\Counter
-</div>;
+return (
+    <div>
+        <Counter />          // App\Components\Counter
+        <MobileCounter />    // App\Mobile\Counter
+    </div>
+);
 ```
 
 ### 4.5 Fragment(`<>...</>`)
@@ -281,16 +289,20 @@ return <div>
 ルートに複数要素を返したいとき、または `array_map` で複数子要素を返したいときに使用。コンパイル後は配列として扱われる。
 
 ```php
-return <>
-    <li>One</li>
-    <li>Two</li>
-</>;
+return (
+    <>
+        <li>One</li>
+        <li>Two</li>
+    </>
+);
 // → H::Fragment([H::li(children: 'One'), H::li(children: 'Two')])
 
-{array_map(fn($t) => <>
-    <dt>{$t['term']}</dt>
-    <dd>{$t['def']}</dd>
-</>, $items)}
+{array_map(fn($t) => (
+    <>
+        <dt>{$t['term']}</dt>
+        <dd>{$t['def']}</dd>
+    </>
+), $items)}
 // → array_map(fn($t) => H::Fragment([...]), $items)
 // Renderer が type='Fragment' の Element を unwrap し、children を直接出力する。
 ```
@@ -546,13 +558,15 @@ use function Polidog\UsePhp\Runtime\{fc, useState};
 
 return fc(function(array $props) {
     [$count, $setCount] = useState($props['initial'] ?? 0);
-    return <button onClick={fn() => $setCount($count + 1)}>
-        Count: {$count}
-    </button>;
+    return (
+        <button onClick={fn() => $setCount($count + 1)}>
+            Count: {$count}
+        </button>
+    );
 }, 'counter', StorageType::Session);  // ← StorageType はここで指定
 ```
 
-ステートレスな pure コンポーネントは `fc()` ラップ不要(直接 `return fn(array $props) => <div>...</div>;`)。
+ステートレスな pure コンポーネントは `fc()` ラップ不要(直接 `return fn(array $props) => (<div>...</div>);`)。
 
 コンパイラは `return` 文の右辺がどんな callable かを区別しない。ただ「ファイルを require すると callable が返ってくる」前提でコードを生成する。
 
@@ -575,9 +589,11 @@ $app->loadComponentManifest(__DIR__ . '/../psx-manifest.php');
 namespace App\Pages;
 use App\Legacy\Counter;     // FQCN だけ宣言(実体は登録済み)
 
-return <div>
-    <Counter />              // 登録済み callable が呼ばれる
-</div>;
+return (
+    <div>
+        <Counter />              // 登録済み callable が呼ばれる
+    </div>
+);
 ```
 
 PSX コンパイラは `<Counter />` をコンパイル時に検証する際、マニフェストか「動的登録予告リスト」のどちらかにあれば OK とする。動的登録予告は注釈で行う:

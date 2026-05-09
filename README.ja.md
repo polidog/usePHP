@@ -484,11 +484,13 @@ use function Polidog\UsePhp\Runtime\useState;
 return fc(function (array $props) {
     [$count, $setCount] = useState($props['initial'] ?? 0);
 
-    return <div className="counter">
-        <span>Count: {$count}</span>
-        <button onClick={fn() => $setCount($count + 1)}>+</button>
-        <button onClick={fn() => $setCount($count - 1)}>-</button>
-    </div>;
+    return (
+        <div className="counter">
+            <span>Count: {$count}</span>
+            <button onClick={fn() => $setCount($count + 1)}>+</button>
+            <button onClick={fn() => $setCount($count - 1)}>-</button>
+        </div>
+    );
 }, 'counter', StorageType::Session);
 ```
 
@@ -497,11 +499,14 @@ return fc(function (array $props) {
 ```php
 return fc(function (array $props) {
     [$count, $setCount] = useState($props['initial'] ?? 0);
-    return H::div(className: 'counter', children: [
-        H::span(children: ['Count: ', $count]),
-        H::button(onClick: fn() => $setCount($count + 1), children: '+'),
-        H::button(onClick: fn() => $setCount($count - 1), children: '-'),
-    ]);
+
+    return (
+        H::div(className: 'counter', children: [
+            H::span(children: ['Count: ', $count]),
+            H::button(onClick: fn() => $setCount($count + 1), children: '+'),
+            H::button(onClick: fn() => $setCount($count - 1), children: '-'),
+        ])
+    );
 }, 'counter', StorageType::Session);
 ```
 
@@ -556,10 +561,12 @@ namespace App\Pages;
 use App\Components\Counter;
 use App\Components\Forms\Input as FormInput;
 
-return fn() => <div>
-    <Counter initial={5} />
-    <FormInput type="email" />
-</div>;
+return fn() => (
+    <div>
+        <Counter initial={5} />
+        <FormInput type="email" />
+    </div>
+);
 ```
 
 `.psx`ファイルで定義せず、ランタイムで登録されるコンポーネントを使う場合は、コンパイラのバリデーションを通すためにコメントで宣言します：
