@@ -1,6 +1,6 @@
 # PSX — TSX-like Template Syntax for usePHP
 
-> Status: Design draft (MVP scope) — revised after independent review
+> Status: Phase 0 + Phase 1 implemented — see §11 改訂履歴
 > Last updated: 2026-05-09
 
 ## 1. 目的とモチベーション
@@ -614,42 +614,38 @@ PSX コンパイラは `<Counter />` をコンパイル時に検証する際、�
 
 ## 8. 実装フェーズ
 
-### Phase 0: プロトタイプ検証(1週間)
-- 最小構成でラウンドトリップを通す: 単一 `Counter.psx` を hand-coded コンパイラで `H::xxx()` に変換、ブラウザで動作確認
-- nikic/php-parser の AST 拡張ポイントを実地で確認
-- `<` 曖昧性の境界ケース集を収集
+### ✅ Phase 0: プロトタイプ検証 — 完了
+ハンドコード(token_get_all + 再帰下降パーサ)で Counter.psx → ブラウザ動作まで通した。`src/Psx/Compiler.php`, `src/Psx/PsxParser.php` 参照。
 
-### Phase 1: コアコンパイラ(2〜3週間)
-- レキサ(PSX トークン認識、`<` 曖昧性解決)
-- パーサ(PSX AST 構築、属性・式埋め込み・Fragment)
-- 名前解決(namespace + use)
-- コードジェネレータ(`H::xxx()` / `H::__callStatic()` / `renderPsxComponent()` への変換)
-- private ヘルパーの認識(クロージャはそのまま転写)
-- 任意属性 (`data-*`/`aria-*`) の `__callStatic` 経路への振り分け
+### ✅ Phase 1: コアコンパイラ + CLI + ランタイム — 完了
+当初分割していた Phase 1〜3 を一括実装:
+- レキサ拡張: `<` 曖昧性解決(expression-context flag)、Fragment `<>` (T_IS_NOT_EQUAL ハンドリング)
+- パーサ: 属性・式埋め込み・自己終了タグ・コンポーネントタグ、`{...}` 内 PSX の再帰コンパイル
+- 名前解決: PHP namespace + use(エイリアス対応)→ FQCN
+- コードジェネレータ: 属性が H メソッドのシグネチャ内なら `H::xxx(named: args)`、それ以外は `H::__callStatic('div', [...])`
+- CLI: `usephp compile` / `--check` / `--clean` / `--manifest=PATH`
+- マニフェスト自動生成 + 重複FQCN検出 + コンパイル時の未解決参照エラー
+- `@psx-runtime FQCN` 注釈で escape hatch
+- ランタイム: `UsePHP::loadComponentManifest()` / `renderPsxComponent()` / `registerComponent()`
 
-### Phase 2: CLI とマニフェスト(1週間)
-- `usephp compile` コマンド実装
-- マニフェスト生成
-- `--check` / `--clean` オプション
-- `@psx-runtime` 注釈による未解決例外の suppress
+成果物:
+- 新規 `src/Psx/{Compiler, PsxParser, NamespaceContext, HMethodRegistry, CompileCommand}.php`
+- `bin/usephp` に `compile` サブコマンド追加
+- E2E: `examples/components/psx/{Counter,Card,Page}.psx` で 3 階層構成を実機動作確認
 
-### Phase 3: ランタイム(1週間)
-- `UsePHP::loadComponentManifest()`
-- `UsePHP::renderPsxComponent()` の遅延ロード機構
-- `UsePHP::registerComponent()` ブリッジ
+### Phase 2(検討中)— 残タスク
+- Private ヘルパーコンポーネントの正式サポート(設計書 §3 で言及済、実装は未)
+- ソースマップ(`.psx.php` のエラー行 → `.psx` の元行)
+- IDE プラグイン / PHPStan エクステンション
+- 複数の公開コンポーネント/1ファイル
+- watch モード / HMR
+- nikic/php-parser ベースの再実装検討(現状ハンドコードで支障なし)
 
-### Phase 4: 例とテスト(1〜2週間)
-- 既存の `examples/components/` を `.psx` 版に書き直し
-- ユニットテスト(コンパイラのスナップショットテスト)
-- E2Eテスト(コンパイル → 実行 → HTML出力検証)
-- 既存 PHPUnit テストが PSX コンポーネントでも通ることを確認
-
-### Phase 5: ドキュメント(数日)
-- README に PSX セクション追加
-- マイグレーションガイド(`H::xxx()` → PSX)
-- トラブルシューティング(エラー行が `.psx.php` を指す件など)
-
-**MVP合計見積もり: 6〜8週間**(1人ベース、フルタイム想定)
+### テストカバレッジ
+198 件全パス。新規 PSX 関連 37 件:
+- `tests/Psx/CompilerTest.php` — 構文ケース 22 件
+- `tests/Psx/CompileCommandTest.php` — CLI 動作 7 件
+- `tests/Psx/NamespaceContextTest.php` — 名前解決 8 件
 
 ## 9. オープン課題(MVP後検討)
 
@@ -669,6 +665,13 @@ PSX コンパイラは `<Counter />` をコンパイル時に検証する際、�
 - [nikic/php-parser](https://github.com/nikic/PHP-Parser)
 
 ## 11. 改訂履歴
+
+### 2026-05-09(Phase 0 + Phase 1 実装完了)
+- Phase 0 プロトタイプを `src/Psx/{Compiler, PsxParser}.php` で実装、Counter.psx → ブラウザ動作確認
+- Phase 1 でコンパイラ/CLI/ランタイムを当初の3フェーズ分まとめて実装
+- マルチコンポーネント例(Page → Card → Counter)で FQCN 解決とマニフェスト生成を E2E 検証
+- 198 テスト pass(PSX 関連 +37 件)
+- §8 実装フェーズを完了報告に更新
 
 ### 2026-05-09(独立レビューを反映)
 - **追加: 任意属性 (`data-*`/`aria-*`) の処理**(§4.2) — `H::div` 固定シグネチャ問題を解決するため `H::__callStatic()` 経路を追加
