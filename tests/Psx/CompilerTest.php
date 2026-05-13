@@ -6,6 +6,10 @@ namespace Polidog\UsePhp\Tests\Psx;
 
 use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Psx\Compiler;
+use Polidog\UsePhp\Psx\NamespaceContext;
+use Polidog\UsePhp\Psx\PsxParserFactoryInterface;
+use Polidog\UsePhp\Psx\PsxParserInterface;
+use Polidog\UsePhp\Psx\PsxPreProcessorInterface;
 
 class CompilerTest extends TestCase
 {
@@ -301,6 +305,76 @@ class CompilerTest extends TestCase
         self::assertStringContainsString("H::span(children: ['Count: ', \$count])", $compiled);
         self::assertStringContainsString('onClick: fn() => $setCount($count + 1)', $compiled);
         self::assertStringContainsString('StorageType::Snapshot', $compiled);
+    }
+
+    public function testInjectedPreProcessorIsUsed(): void
+    {
+        $spy = new class implements PsxPreProcessorInterface {
+            public int $processCalls = 0;
+            public int $placeholderCalls = 0;
+
+            public function process(string $source): array
+            {
+                $this->processCalls++;
+                // Replace the PSX region with a placeholder, leaving the rest
+                // intact so nikic can parse the result.
+                $replaced = \str_replace(
+                    '<div>hi</div>',
+                    '__psx_placeholder_0__()',
+                    $source,
+                );
+
+                return [
+                    $replaced,
+                    [['source' => '<div>hi</div>', 'start' => 0, 'end' => 0]],
+                ];
+            }
+
+            public function placeholder(int $index): string
+            {
+                $this->placeholderCalls++;
+                return '__psx_placeholder_' . $index . '__()';
+            }
+        };
+
+        $compiler = new Compiler($spy);
+        $compiler->compile("<?php\nreturn <div>hi</div>;\n");
+
+        self::assertSame(1, $spy->processCalls);
+        self::assertSame(1, $spy->placeholderCalls, 'Compiler must route placeholder lookups through the injected pre-processor.');
+    }
+
+    public function testInjectedParserFactoryIsUsed(): void
+    {
+        $factory = new class implements PsxParserFactoryInterface {
+            /** @var list<array{source: string, start: int, namespaceContext: ?NamespaceContext}> */
+            public array $calls = [];
+
+            public function create(string $source, int $start, ?NamespaceContext $namespaceContext = null): PsxParserInterface
+            {
+                $this->calls[] = [
+                    'source' => $source,
+                    'start' => $start,
+                    'namespaceContext' => $namespaceContext,
+                ];
+
+                return new class ($source) implements PsxParserInterface {
+                    public function __construct(private readonly string $source) {}
+
+                    public function parseElement(): array
+                    {
+                        return ['php' => '/* stub */ null', 'end' => \strlen($this->source)];
+                    }
+                };
+            }
+        };
+
+        $compiler = new Compiler(parserFactory: $factory);
+        $compiler->compile("<?php\nreturn <div>a</div> . <span>b</span>;\n");
+
+        self::assertCount(2, $factory->calls, 'Each PSX region must go through the injected factory.');
+        self::assertStringContainsString('<div>a</div>', $factory->calls[0]['source']);
+        self::assertStringContainsString('<span>b</span>', $factory->calls[1]['source']);
     }
 
     private function compileExpression(string $psxFragment): string

@@ -30,6 +30,18 @@ final class Compiler implements CompilerInterface
     private array $lastReferences = [];
 
     /**
+     * @param PsxPreProcessorInterface    $preProcessor  Replaces PSX regions in source
+     *        with placeholder calls so the result parses as valid PHP.
+     * @param PsxParserFactoryInterface   $parserFactory Builds the per-region parser.
+     *        A factory is used because each region needs a fresh parser bound to
+     *        its own (source, start, namespaceContext) tuple.
+     */
+    public function __construct(
+        private readonly PsxPreProcessorInterface $preProcessor = new PsxPreProcessor(),
+        private readonly PsxParserFactoryInterface $parserFactory = new PsxParserFactory(),
+    ) {}
+
+    /**
      * @param NamespaceContext|null $context Optional pre-existing context (used when
      *        recursively compiling brace expressions inside an outer .psx file so
      *        namespace + use resolution is preserved).
@@ -38,8 +50,7 @@ final class Compiler implements CompilerInterface
     {
         $this->lastReferences = [];
 
-        $preProcessor = new PsxPreProcessor();
-        [$processed, $regions] = $preProcessor->process($source);
+        [$processed, $regions] = $this->preProcessor->process($source);
 
         // Reuse the outer context when invoked recursively (from inside a `{...}`
         // brace expression), otherwise derive it from the pre-processed source.
@@ -47,11 +58,11 @@ final class Compiler implements CompilerInterface
 
         $output = $processed;
         foreach ($regions as $idx => $region) {
-            $parser = new PsxParser($region['source'], 0, $namespaceContext);
+            $parser = $this->parserFactory->create($region['source'], 0, $namespaceContext);
             $result = $parser->parseElement();
             $lowered = $this->padToOriginalLineCount($region['source'], $result['php']);
             $output = \str_replace(
-                $preProcessor->placeholder($idx),
+                $this->preProcessor->placeholder($idx),
                 $lowered,
                 $output,
             );
