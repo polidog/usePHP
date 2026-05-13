@@ -6,6 +6,9 @@ namespace Polidog\UsePhp\Tests\Psx;
 
 use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Psx\Compiler;
+use Polidog\UsePhp\Psx\NamespaceContext;
+use Polidog\UsePhp\Psx\PsxParserFactoryInterface;
+use Polidog\UsePhp\Psx\PsxParserInterface;
 use Polidog\UsePhp\Psx\PsxPreProcessorInterface;
 
 class CompilerTest extends TestCase
@@ -339,6 +342,39 @@ class CompilerTest extends TestCase
 
         self::assertSame(1, $spy->processCalls);
         self::assertSame(1, $spy->placeholderCalls, 'Compiler must route placeholder lookups through the injected pre-processor.');
+    }
+
+    public function testInjectedParserFactoryIsUsed(): void
+    {
+        $factory = new class implements PsxParserFactoryInterface {
+            /** @var list<array{source: string, start: int, namespaceContext: ?NamespaceContext}> */
+            public array $calls = [];
+
+            public function create(string $source, int $start, ?NamespaceContext $namespaceContext = null): PsxParserInterface
+            {
+                $this->calls[] = [
+                    'source' => $source,
+                    'start' => $start,
+                    'namespaceContext' => $namespaceContext,
+                ];
+
+                return new class ($source) implements PsxParserInterface {
+                    public function __construct(private readonly string $source) {}
+
+                    public function parseElement(): array
+                    {
+                        return ['php' => '/* stub */ null', 'end' => \strlen($this->source)];
+                    }
+                };
+            }
+        };
+
+        $compiler = new Compiler(parserFactory: $factory);
+        $compiler->compile("<?php\nreturn <div>a</div> . <span>b</span>;\n");
+
+        self::assertCount(2, $factory->calls, 'Each PSX region must go through the injected factory.');
+        self::assertStringContainsString('<div>a</div>', $factory->calls[0]['source']);
+        self::assertStringContainsString('<span>b</span>', $factory->calls[1]['source']);
     }
 
     private function compileExpression(string $psxFragment): string

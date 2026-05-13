@@ -30,12 +30,15 @@ final class Compiler implements CompilerInterface
     private array $lastReferences = [];
 
     /**
-     * @param PsxPreProcessorInterface $preProcessor Replaces PSX regions in source
-     *        with placeholder calls so the result parses as valid PHP. Injected so
-     *        tests (and any future variant pre-processor) can swap the implementation.
+     * @param PsxPreProcessorInterface    $preProcessor  Replaces PSX regions in source
+     *        with placeholder calls so the result parses as valid PHP.
+     * @param PsxParserFactoryInterface   $parserFactory Builds the per-region parser.
+     *        A factory is used because each region needs a fresh parser bound to
+     *        its own (source, start, namespaceContext) tuple.
      */
     public function __construct(
         private readonly PsxPreProcessorInterface $preProcessor = new PsxPreProcessor(),
+        private readonly PsxParserFactoryInterface $parserFactory = new PsxParserFactory(),
     ) {}
 
     /**
@@ -55,7 +58,7 @@ final class Compiler implements CompilerInterface
 
         $output = $processed;
         foreach ($regions as $idx => $region) {
-            $parser = new PsxParser($region['source'], 0, $namespaceContext);
+            $parser = $this->parserFactory->create($region['source'], 0, $namespaceContext);
             $result = $parser->parseElement();
             $lowered = $this->padToOriginalLineCount($region['source'], $result['php']);
             $output = \str_replace(
