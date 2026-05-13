@@ -36,8 +36,7 @@ final class Compiler implements CompilerInterface
      */
     public function __construct(
         private readonly PsxPreProcessorInterface $preProcessor = new PsxPreProcessor(),
-    ) {
-    }
+    ) {}
 
     /**
      * @param NamespaceContext|null $context Optional pre-existing context (used when
