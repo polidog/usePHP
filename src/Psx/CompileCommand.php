@@ -15,6 +15,9 @@ namespace Polidog\UsePhp\Psx;
  *   `<cacheDir>/manifest.php`. Only PascalCase-named files are entered
  *   in the manifest; lowercase-named files (e.g., App Router's
  *   `page.psx`, `layout.psx`) are compiled but loaded directly by path.
+ * - Skips recompiling a file when its source hash (mixed with
+ *   {@see self::CACHE_VERSION}) matches the sidecar `*.meta` file and
+ *   every previously resolved component reference still resolves.
  *
  * Options:
  *   --check          Don't write files; exit non-zero if anything is out of date.
@@ -26,6 +29,13 @@ final class CompileCommand
 {
     public const DEFAULT_CACHE_SUBDIR = 'var/cache/psx';
     public const MANIFEST_FILENAME = 'manifest.php';
+
+    /**
+     * Bumped whenever the compiler's output format changes in a way that
+     * existing caches must be re-generated. Mixed into the source hash so a
+     * version bump invalidates every cached entry without touching any .psx.
+     */
+    public const CACHE_VERSION = 1;
 
     /**
      * @param list<string> $argv Argument list (after `compile` subcommand).
@@ -77,6 +87,65 @@ final class CompileCommand
             . \DIRECTORY_SEPARATOR
             . \sha1($abs)
             . '.php';
+    }
+
+    /**
+     * Sidecar metadata file for a given source. Stores the source hash and the
+     * list of component FQCNs the file referenced at compile time, so a
+     * subsequent run can skip recompilation when the source is unchanged and
+     * those references still resolve.
+     */
+    public static function metaPathFor(string $cacheDir, string $sourcePath): string
+    {
+        return self::cachePathFor($cacheDir, $sourcePath) . '.meta';
+    }
+
+    private function computeSourceHash(string $source): string
+    {
+        return \hash('sha256', self::CACHE_VERSION . "\0" . $source);
+    }
+
+    /**
+     * @return array{hash: string, refs: list<string>}|null
+     */
+    private function readMeta(string $metaPath): ?array
+    {
+        if (!\is_file($metaPath)) {
+            return null;
+        }
+        $content = \file_get_contents($metaPath);
+        if ($content === false) {
+            return null;
+        }
+        $data = \json_decode($content, true);
+        if (!\is_array($data)) {
+            return null;
+        }
+        $hash = $data['hash'] ?? null;
+        $refs = $data['refs'] ?? null;
+        if (!\is_string($hash) || !\is_array($refs)) {
+            return null;
+        }
+        foreach ($refs as $r) {
+            if (!\is_string($r)) {
+                return null;
+            }
+        }
+        return ['hash' => $hash, 'refs' => \array_values($refs)];
+    }
+
+    /**
+     * @param list<string> $refs
+     * @param array<string, mixed> $knownFqcns
+     */
+    private function refsResolveAgainst(array $refs, array $knownFqcns): bool
+    {
+        foreach ($refs as $ref) {
+            if (!isset($knownFqcns[$ref])) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private function shortName(string $fqcn): string
@@ -269,10 +338,28 @@ final class CompileCommand
         $compiler = new Compiler();
         $stale = [];
         $knownFqcns = $manifestEntries + $runtimeDeclarations;
+        $cachedCount = 0;
 
         foreach ($sourceFiles as $sourceFile) {
             $compiledPath = self::cachePathFor($cacheDir, $sourceFile);
+            $metaPath = self::metaPathFor($cacheDir, $sourceFile);
             $source = $sourceContents[$sourceFile];
+            $sourceHash = $this->computeSourceHash($source);
+
+            // Cache hit: source unchanged AND every previously resolved ref is
+            // still in scope. The ref re-check matters because another file may
+            // have removed a component this file depends on — even though this
+            // file itself didn't change, it would now fail validation.
+            $cached = $this->readMeta($metaPath);
+            if (
+                $cached !== null
+                && $cached['hash'] === $sourceHash
+                && \is_file($compiledPath)
+                && $this->refsResolveAgainst($cached['refs'], $knownFqcns)
+            ) {
+                $cachedCount++;
+                continue;
+            }
 
             try {
                 $compiled = $compiler->compile($source);
@@ -281,7 +368,8 @@ final class CompileCommand
                 return 1;
             }
 
-            foreach ($compiler->getLastReferences() as $ref) {
+            $refs = $compiler->getLastReferences();
+            foreach ($refs as $ref) {
                 if (!isset($knownFqcns[$ref])) {
                     $this->println("\033[31m$sourceFile: unresolved component '$ref'\033[0m");
                     $this->println("  Add a 'use' statement, define {$this->shortName($ref)}.psx, or declare `// @psx-runtime $ref`.");
@@ -294,6 +382,17 @@ final class CompileCommand
                 $stale[] = $sourceFile;
                 if (!$check && \file_put_contents($compiledPath, $compiled) === false) {
                     $this->println("\033[31mError: failed to write $compiledPath (disk full or permissions?)\033[0m");
+                    return 1;
+                }
+            }
+
+            if (!$check) {
+                $metaJson = \json_encode(
+                    ['hash' => $sourceHash, 'refs' => $refs],
+                    \JSON_THROW_ON_ERROR,
+                );
+                if (\file_put_contents($metaPath, $metaJson) === false) {
+                    $this->println("\033[31mError: failed to write $metaPath\033[0m");
                     return 1;
                 }
             }
@@ -318,7 +417,9 @@ final class CompileCommand
         }
 
         $count = \count($sourceFiles);
-        $this->println("\033[32mCompiled $count .psx file" . ($count === 1 ? '' : 's') . " → $cacheDir\033[0m");
+        $plural = $count === 1 ? '' : 's';
+        $suffix = $cachedCount > 0 ? " ($cachedCount cached)" : '';
+        $this->println("\033[32mCompiled $count .psx file$plural$suffix → $cacheDir\033[0m");
         $this->println("Manifest: $manifestPath");
         return 0;
     }
