@@ -12,7 +12,9 @@ namespace Polidog\UsePhp\Psx;
  *   sha1 of the source's absolute path so source trees stay clean
  *   (no `.psx.php` files alongside `.psx`).
  * - Aggregates a manifest (FQCN -> compiled cache path) at
- *   `<cacheDir>/manifest.php`.
+ *   `<cacheDir>/manifest.php`. Only PascalCase-named files are entered
+ *   in the manifest; lowercase-named files (e.g., App Router's
+ *   `page.psx`, `layout.psx`) are compiled but loaded directly by path.
  *
  * Options:
  *   --check          Don't write files; exit non-zero if anything is out of date.
@@ -231,7 +233,24 @@ final class CompileCommand
             $sourceContents[$sourceFile] = $source;
 
             $ctx = NamespaceContext::fromSource($source);
+
+            foreach ($ctx->getRuntimeDeclarations() as $rd) {
+                $runtimeDeclarations[$rd] = true;
+            }
+
             $base = \pathinfo($sourceFile, \PATHINFO_FILENAME);
+
+            // PSX component tags must be PascalCase (`<Counter />`), and the
+            // manifest exists solely to resolve those tags. Files whose
+            // basename starts with a lowercase letter (App Router pattern:
+            // `page.psx`, `layout.psx`) are loaded directly by path and
+            // cannot be tag-referenced, so they don't belong in the manifest.
+            // Without this skip, multiple `page.psx` files in different
+            // directories would collide on the same namespace-qualified FQCN.
+            if ($base === '' || !\ctype_upper($base[0])) {
+                continue;
+            }
+
             $fqcn = $ctx->getNamespace() !== ''
                 ? $ctx->getNamespace() . '\\' . $base
                 : $base;
@@ -245,10 +264,6 @@ final class CompileCommand
                 return 1;
             }
             $manifestEntries[$fqcn] = $compiledPath;
-
-            foreach ($ctx->getRuntimeDeclarations() as $rd) {
-                $runtimeDeclarations[$rd] = true;
-            }
         }
 
         $compiler = new Compiler();
