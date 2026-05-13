@@ -21,8 +21,120 @@ class RendererTest extends TestCase
 
         $html = $renderer->renderElement($element);
 
-        $this->assertStringContainsString('className="container"', $html);
+        $this->assertStringContainsString('class="container"', $html);
+        $this->assertStringNotContainsString('className=', $html);
         $this->assertStringContainsString('Hello', $html);
+    }
+
+    /**
+     * @return iterable<string, array{string, string|bool, string}>
+     */
+    public static function jsxAttrCases(): iterable
+    {
+        // HTML attributes
+        yield 'className → class' => ['className', 'card', 'class="card"'];
+        yield 'htmlFor → for' => ['htmlFor', 'email', 'for="email"'];
+        yield 'tabIndex → tabindex' => ['tabIndex', '0', 'tabindex="0"'];
+        yield 'readOnly → readonly (bool)' => ['readOnly', true, ' readonly'];
+        yield 'autoFocus → autofocus (bool)' => ['autoFocus', true, ' autofocus'];
+        yield 'autoComplete → autocomplete' => ['autoComplete', 'off', 'autocomplete="off"'];
+        yield 'autoPlay → autoplay (bool)' => ['autoPlay', true, ' autoplay'];
+        yield 'crossOrigin → crossorigin' => ['crossOrigin', 'anonymous', 'crossorigin="anonymous"'];
+        yield 'contentEditable → contenteditable' => ['contentEditable', 'true', 'contenteditable="true"'];
+        yield 'spellCheck → spellcheck' => ['spellCheck', 'false', 'spellcheck="false"'];
+        yield 'srcSet → srcset' => ['srcSet', 'a.png 1x', 'srcset="a.png 1x"'];
+        yield 'maxLength → maxlength' => ['maxLength', '10', 'maxlength="10"'];
+        yield 'minLength → minlength' => ['minLength', '2', 'minlength="2"'];
+        yield 'colSpan → colspan' => ['colSpan', '2', 'colspan="2"'];
+        yield 'rowSpan → rowspan' => ['rowSpan', '3', 'rowspan="3"'];
+        yield 'dateTime → datetime' => ['dateTime', '2026-01-01', 'datetime="2026-01-01"'];
+        yield 'encType → enctype' => ['encType', 'multipart/form-data', 'enctype="multipart/form-data"'];
+        yield 'httpEquiv → http-equiv' => ['httpEquiv', 'refresh', 'http-equiv="refresh"'];
+        yield 'acceptCharset → accept-charset' => ['acceptCharset', 'utf-8', 'accept-charset="utf-8"'];
+        yield 'noValidate → novalidate (bool)' => ['noValidate', true, ' novalidate'];
+        yield 'formNoValidate → formnovalidate (bool)' => ['formNoValidate', true, ' formnovalidate'];
+        yield 'referrerPolicy → referrerpolicy' => ['referrerPolicy', 'no-referrer', 'referrerpolicy="no-referrer"'];
+        yield 'accessKey → accesskey' => ['accessKey', 's', 'accesskey="s"'];
+        yield 'inputMode → inputmode' => ['inputMode', 'numeric', 'inputmode="numeric"'];
+
+        // SVG hyphenated attributes
+        yield 'strokeLinecap → stroke-linecap' => ['strokeLinecap', 'round', 'stroke-linecap="round"'];
+        yield 'strokeLinejoin → stroke-linejoin' => ['strokeLinejoin', 'round', 'stroke-linejoin="round"'];
+        yield 'strokeWidth → stroke-width' => ['strokeWidth', '2', 'stroke-width="2"'];
+        yield 'strokeDasharray → stroke-dasharray' => ['strokeDasharray', '4 2', 'stroke-dasharray="4 2"'];
+        yield 'strokeMiterlimit → stroke-miterlimit' => ['strokeMiterlimit', '4', 'stroke-miterlimit="4"'];
+        yield 'fillRule → fill-rule' => ['fillRule', 'evenodd', 'fill-rule="evenodd"'];
+        yield 'clipRule → clip-rule' => ['clipRule', 'evenodd', 'clip-rule="evenodd"'];
+        yield 'clipPath → clip-path' => ['clipPath', 'url(#a)', 'clip-path="url(#a)"'];
+        yield 'fillOpacity → fill-opacity' => ['fillOpacity', '0.5', 'fill-opacity="0.5"'];
+        yield 'strokeOpacity → stroke-opacity' => ['strokeOpacity', '0.8', 'stroke-opacity="0.8"'];
+        yield 'stopColor → stop-color' => ['stopColor', '#fff', 'stop-color="#fff"'];
+        yield 'stopOpacity → stop-opacity' => ['stopOpacity', '1', 'stop-opacity="1"'];
+        yield 'textAnchor → text-anchor' => ['textAnchor', 'middle', 'text-anchor="middle"'];
+        yield 'dominantBaseline → dominant-baseline' => ['dominantBaseline', 'central', 'dominant-baseline="central"'];
+        yield 'pointerEvents → pointer-events' => ['pointerEvents', 'none', 'pointer-events="none"'];
+        yield 'markerEnd → marker-end' => ['markerEnd', 'url(#a)', 'marker-end="url(#a)"'];
+        yield 'fontFamily → font-family' => ['fontFamily', 'sans', 'font-family="sans"'];
+        yield 'shapeRendering → shape-rendering' => ['shapeRendering', 'auto', 'shape-rendering="auto"'];
+
+        // XLink / XML namespaces
+        yield 'xlinkHref → xlink:href' => ['xlinkHref', '#a', 'xlink:href="#a"'];
+        yield 'xlinkRole → xlink:role' => ['xlinkRole', 'link', 'xlink:role="link"'];
+        yield 'xlinkShow → xlink:show' => ['xlinkShow', 'new', 'xlink:show="new"'];
+        yield 'xlinkTitle → xlink:title' => ['xlinkTitle', 't', 'xlink:title="t"'];
+        yield 'xlinkActuate → xlink:actuate' => ['xlinkActuate', 'onLoad', 'xlink:actuate="onLoad"'];
+        yield 'xmlLang → xml:lang' => ['xmlLang', 'ja', 'xml:lang="ja"'];
+        yield 'xmlSpace → xml:space' => ['xmlSpace', 'preserve', 'xml:space="preserve"'];
+        yield 'xmlnsXlink → xmlns:xlink' => [
+            'xmlnsXlink', 'http://www.w3.org/1999/xlink', 'xmlns:xlink="http://www.w3.org/1999/xlink"',
+        ];
+    }
+
+    /**
+     * @param string|bool $value
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('jsxAttrCases')]
+    public function testRenderMapsJsxAttributeNamesToHtml(string $jsxName, $value, string $expected): void
+    {
+        $renderer = new Renderer('test');
+
+        $element = H::__callStatic('div', [$jsxName => $value]);
+        $html = $renderer->renderElement($element);
+
+        $this->assertStringContainsString($expected, $html);
+        $this->assertStringNotContainsString($jsxName . '=', $html);
+    }
+
+    public function testCanonicalAttributesPassThroughUnchanged(): void
+    {
+        $renderer = new Renderer('test');
+
+        // viewBox / preserveAspectRatio / gradientUnits are canonical camelCase
+        // in SVG and must NOT be rewritten by the JSX→HTML map.
+        $element = H::__callStatic('svg', [
+            'viewBox' => '0 0 24 24',
+            'preserveAspectRatio' => 'xMidYMid meet',
+        ]);
+
+        $html = $renderer->renderElement($element);
+
+        $this->assertStringContainsString('viewBox="0 0 24 24"', $html);
+        $this->assertStringContainsString('preserveAspectRatio="xMidYMid meet"', $html);
+    }
+
+    public function testDataAndAriaAttributesPassThroughUnchanged(): void
+    {
+        $renderer = new Renderer('test');
+
+        $element = H::__callStatic('div', [
+            'data-id' => '42',
+            'aria-label' => 'close',
+        ]);
+
+        $html = $renderer->renderElement($element);
+
+        $this->assertStringContainsString('data-id="42"', $html);
+        $this->assertStringContainsString('aria-label="close"', $html);
     }
 
     public function testRenderNestedElements(): void
