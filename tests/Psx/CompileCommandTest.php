@@ -167,6 +167,65 @@ class CompileCommandTest extends TestCase
         self::assertSame(1, $exitCode);
     }
 
+    public function testLowercaseBasenamesAreCompiledButOmittedFromManifest(): void
+    {
+        // App Router pattern: multiple `page.psx` files in different
+        // directories must all compile without colliding on a manifest FQCN.
+        \mkdir($this->workDir . '/components/about', 0o777, true);
+        \mkdir($this->workDir . '/components/counter', 0o777, true);
+
+        \file_put_contents(
+            $this->workDir . '/components/page.psx',
+            "<?php\nnamespace App;\nreturn fn() => fn() => 'root';\n"
+        );
+        \file_put_contents(
+            $this->workDir . '/components/about/page.psx',
+            "<?php\nnamespace App\\About;\nreturn fn() => fn() => 'about';\n"
+        );
+        \file_put_contents(
+            $this->workDir . '/components/counter/page.psx',
+            "<?php\nnamespace App\\Counter;\nreturn fn() => fn() => 'counter';\n"
+        );
+
+        $cmd = new CompileCommand();
+        $exitCode = $this->runCmd($cmd, [$this->workDir . '/components']);
+        self::assertSame(0, $exitCode);
+
+        $manifest = require $this->manifestPath;
+        self::assertSame([], $manifest, 'Lowercase basenames must not appear in the manifest.');
+
+        // All three files still get compiled to the cache.
+        foreach (['page.psx', 'about/page.psx', 'counter/page.psx'] as $rel) {
+            $compiled = CompileCommand::cachePathFor(
+                $this->cacheDir,
+                $this->workDir . '/components/' . $rel,
+            );
+            self::assertFileExists($compiled, "Expected $rel to be compiled to cache.");
+        }
+    }
+
+    public function testMixedPascalCaseAndLowercaseFilenames(): void
+    {
+        \mkdir($this->workDir . '/components/about', 0o777, true);
+
+        \file_put_contents(
+            $this->workDir . '/components/Counter.psx',
+            "<?php\nnamespace App;\nuse Polidog\\UsePhp\\Html\\H;\nreturn fn() => <div>c</div>;\n"
+        );
+        \file_put_contents(
+            $this->workDir . '/components/about/page.psx',
+            "<?php\nnamespace App\\About;\nreturn fn() => fn() => 'about';\n"
+        );
+
+        $cmd = new CompileCommand();
+        $exitCode = $this->runCmd($cmd, [$this->workDir . '/components']);
+        self::assertSame(0, $exitCode);
+
+        $manifest = require $this->manifestPath;
+        self::assertArrayHasKey('App\\Counter', $manifest);
+        self::assertArrayNotHasKey('App\\About\\page', $manifest);
+    }
+
     public function testCachePathForIsStable(): void
     {
         $source = $this->workDir . '/components/A.psx';
