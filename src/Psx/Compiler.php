@@ -30,6 +30,16 @@ final class Compiler implements CompilerInterface
     private array $lastReferences = [];
 
     /**
+     * @param PsxPreProcessorInterface $preProcessor Replaces PSX regions in source
+     *        with placeholder calls so the result parses as valid PHP. Injected so
+     *        tests (and any future variant pre-processor) can swap the implementation.
+     */
+    public function __construct(
+        private readonly PsxPreProcessorInterface $preProcessor = new PsxPreProcessor(),
+    ) {
+    }
+
+    /**
      * @param NamespaceContext|null $context Optional pre-existing context (used when
      *        recursively compiling brace expressions inside an outer .psx file so
      *        namespace + use resolution is preserved).
@@ -38,8 +48,7 @@ final class Compiler implements CompilerInterface
     {
         $this->lastReferences = [];
 
-        $preProcessor = new PsxPreProcessor();
-        [$processed, $regions] = $preProcessor->process($source);
+        [$processed, $regions] = $this->preProcessor->process($source);
 
         // Reuse the outer context when invoked recursively (from inside a `{...}`
         // brace expression), otherwise derive it from the pre-processed source.
@@ -51,7 +60,7 @@ final class Compiler implements CompilerInterface
             $result = $parser->parseElement();
             $lowered = $this->padToOriginalLineCount($region['source'], $result['php']);
             $output = \str_replace(
-                $preProcessor->placeholder($idx),
+                $this->preProcessor->placeholder($idx),
                 $lowered,
                 $output,
             );
