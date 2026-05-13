@@ -226,6 +226,139 @@ class CompileCommandTest extends TestCase
         self::assertArrayNotHasKey('App\\About\\page', $manifest);
     }
 
+    public function testSecondCompileSkipsUnchangedFiles(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/components/Counter.psx',
+            "<?php\nnamespace App;\nuse Polidog\\UsePhp\\Html\\H;\nreturn fn() => <div>x</div>;\n"
+        );
+        $cmd = new CompileCommand();
+        self::assertSame(0, $this->runCmd($cmd, [$this->workDir . '/components']));
+
+        $compiledPath = CompileCommand::cachePathFor(
+            $this->cacheDir,
+            $this->workDir . '/components/Counter.psx',
+        );
+        $metaPath = CompileCommand::metaPathFor(
+            $this->cacheDir,
+            $this->workDir . '/components/Counter.psx',
+        );
+        self::assertFileExists($metaPath);
+        $firstMtime = \filemtime($compiledPath);
+        // Filesystem mtime resolution is 1s on most systems; force a gap so a
+        // recompile would be observable.
+        \sleep(1);
+
+        self::assertSame(0, $this->runCmd($cmd, [$this->workDir . '/components']));
+
+        \clearstatcache();
+        self::assertSame(
+            $firstMtime,
+            \filemtime($compiledPath),
+            'Second compile with unchanged source must not rewrite cache.',
+        );
+    }
+
+    public function testCacheBustsWhenSourceChanges(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/components/Counter.psx',
+            "<?php\nnamespace App;\nuse Polidog\\UsePhp\\Html\\H;\nreturn fn() => <div>old</div>;\n"
+        );
+        $cmd = new CompileCommand();
+        $this->runCmd($cmd, [$this->workDir . '/components']);
+
+        $compiledPath = CompileCommand::cachePathFor(
+            $this->cacheDir,
+            $this->workDir . '/components/Counter.psx',
+        );
+        $firstContent = \file_get_contents($compiledPath);
+        \sleep(1);
+
+        \file_put_contents(
+            $this->workDir . '/components/Counter.psx',
+            "<?php\nnamespace App;\nuse Polidog\\UsePhp\\Html\\H;\nreturn fn() => <div>new</div>;\n"
+        );
+        self::assertSame(0, $this->runCmd($cmd, [$this->workDir . '/components']));
+
+        \clearstatcache();
+        self::assertNotSame(
+            $firstContent,
+            \file_get_contents($compiledPath),
+            'Source change must trigger recompile.',
+        );
+    }
+
+    public function testCacheBustsWhenCacheVersionChangesViaMetaTamper(): void
+    {
+        // Simulate a CACHE_VERSION bump: rewrite the meta hash so the stored
+        // value no longer matches what compute would produce for the current
+        // source. The compiler must re-run.
+        \file_put_contents(
+            $this->workDir . '/components/Counter.psx',
+            "<?php\nnamespace App;\nuse Polidog\\UsePhp\\Html\\H;\nreturn fn() => <div>x</div>;\n"
+        );
+        $cmd = new CompileCommand();
+        $this->runCmd($cmd, [$this->workDir . '/components']);
+
+        $metaPath = CompileCommand::metaPathFor(
+            $this->cacheDir,
+            $this->workDir . '/components/Counter.psx',
+        );
+        $compiledPath = CompileCommand::cachePathFor(
+            $this->cacheDir,
+            $this->workDir . '/components/Counter.psx',
+        );
+        \file_put_contents($metaPath, \json_encode(['hash' => 'stale', 'refs' => []]));
+        \unlink($compiledPath);
+
+        self::assertSame(0, $this->runCmd($cmd, [$this->workDir . '/components']));
+        self::assertFileExists($compiledPath, 'Cache miss on bad meta must regenerate the compiled file.');
+    }
+
+    public function testCachedFileStillRevalidatesReferences(): void
+    {
+        // First pass: Page.psx references Counter (which exists).
+        \file_put_contents(
+            $this->workDir . '/components/Counter.psx',
+            "<?php\nnamespace App;\nuse Polidog\\UsePhp\\Html\\H;\nreturn fn() => <div>c</div>;\n"
+        );
+        \file_put_contents(
+            $this->workDir . '/components/Page.psx',
+            "<?php\nnamespace App;\nuse App\\Counter;\nreturn fn() => <Counter />;\n"
+        );
+        $cmd = new CompileCommand();
+        self::assertSame(0, $this->runCmd($cmd, [$this->workDir . '/components']));
+
+        // Remove Counter.psx — Page.psx is unchanged (cache hit candidate) but
+        // its cached reference now fails to resolve.
+        \unlink($this->workDir . '/components/Counter.psx');
+        self::assertSame(
+            1,
+            $this->runCmd($cmd, [$this->workDir . '/components']),
+            'Cache hit must still report unresolved references against the current FQCN set.',
+        );
+    }
+
+    public function testCleanRemovesMetaFiles(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/components/A.psx',
+            "<?php\nnamespace X;\nreturn fn() => <div></div>;\n"
+        );
+        $cmd = new CompileCommand();
+        $this->runCmd($cmd, [$this->workDir . '/components']);
+
+        $metaPath = CompileCommand::metaPathFor(
+            $this->cacheDir,
+            $this->workDir . '/components/A.psx',
+        );
+        self::assertFileExists($metaPath);
+
+        $this->runCmd($cmd, [$this->workDir . '/components', '--clean']);
+        self::assertFileDoesNotExist($metaPath);
+    }
+
     public function testCachePathForIsStable(): void
     {
         $source = $this->workDir . '/components/A.psx';
