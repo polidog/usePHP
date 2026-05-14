@@ -1,0 +1,9 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "PSX",
+  "scopeName": "source.psx",
+  "fileTypes": ["psx"],
+  "patterns": [
+    { "include": "source.php" }
+  ]
+}

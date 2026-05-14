@@ -1,0 +1,129 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "PSX Injection",
+  "scopeName": "psx.injection",
+  "injectionSelector": "L:source.psx -comment -string",
+  "patterns": [
+    { "include": "#psx-fragment-close" },
+    { "include": "#psx-fragment-open" },
+    { "include": "#psx-component" },
+    { "include": "#psx-component-close" },
+    { "include": "#psx-tag" },
+    { "include": "#psx-tag-close" }
+  ],
+  "repository": {
+    "psx-fragment-open": {
+      "name": "punctuation.definition.tag.fragment.begin.psx",
+      "match": "<>"
+    },
+    "psx-fragment-close": {
+      "name": "punctuation.definition.tag.fragment.end.psx",
+      "match": "</>"
+    },
+    "psx-component": {
+      "name": "meta.tag.component.psx",
+      "begin": "(<)([A-Z][A-Za-z0-9_]*)(?=[\\s/>]|$)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.tag.begin.psx" },
+        "2": { "name": "support.class.component.psx entity.name.tag.component.psx" }
+      },
+      "end": "(/?>)",
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.tag.end.psx" }
+      },
+      "patterns": [
+        { "include": "#psx-attributes" }
+      ]
+    },
+    "psx-component-close": {
+      "name": "meta.tag.component.close.psx",
+      "begin": "(</)([A-Z][A-Za-z0-9_]*)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.tag.begin.psx" },
+        "2": { "name": "support.class.component.psx entity.name.tag.component.psx" }
+      },
+      "end": "(>)",
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.tag.end.psx" }
+      }
+    },
+    "psx-tag": {
+      "name": "meta.tag.html.psx",
+      "begin": "(<)([a-z][a-zA-Z0-9-]*)(?=[\\s/>]|$)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.tag.begin.psx" },
+        "2": { "name": "entity.name.tag.psx" }
+      },
+      "end": "(/?>)",
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.tag.end.psx" }
+      },
+      "patterns": [
+        { "include": "#psx-attributes" }
+      ]
+    },
+    "psx-tag-close": {
+      "name": "meta.tag.html.close.psx",
+      "begin": "(</)([a-z][a-zA-Z0-9-]*)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.tag.begin.psx" },
+        "2": { "name": "entity.name.tag.psx" }
+      },
+      "end": "(>)",
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.tag.end.psx" }
+      }
+    },
+    "psx-attributes": {
+      "patterns": [
+        { "include": "#psx-attribute-string-double" },
+        { "include": "#psx-attribute-string-single" },
+        { "include": "#psx-attribute-expression" },
+        { "include": "#psx-attribute" }
+      ]
+    },
+    "psx-attribute": {
+      "match": "([A-Za-z_][A-Za-z0-9_-]*)(?:\\s*(=))?",
+      "captures": {
+        "1": { "name": "entity.other.attribute-name.psx" },
+        "2": { "name": "punctuation.separator.key-value.psx keyword.operator.assignment.psx" }
+      }
+    },
+    "psx-attribute-string-double": {
+      "name": "string.quoted.double.psx",
+      "begin": "\"",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.string.begin.psx" }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.psx" }
+      }
+    },
+    "psx-attribute-string-single": {
+      "name": "string.quoted.single.psx",
+      "begin": "'",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.string.begin.psx" }
+      },
+      "end": "'",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.psx" }
+      }
+    },
+    "psx-attribute-expression": {
+      "name": "meta.embedded.expression.psx",
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": { "name": "punctuation.section.embedded.begin.psx" }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": { "name": "punctuation.section.embedded.end.psx" }
+      },
+      "patterns": [
+        { "include": "source.php" }
+      ]
+    }
+  }
+}

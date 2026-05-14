@@ -1,0 +1,53 @@
+{
+  "name": "vscode-psx",
+  "displayName": "usePHP PSX",
+  "description": "Syntax highlighting for usePHP .psx files (TSX-like template syntax)",
+  "version": "0.1.0",
+  "publisher": "polidog",
+  "engines": {
+    "vscode": "^1.70.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "psx",
+    "usephp",
+    "php",
+    "jsx",
+    "tsx"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/polidog/usePHP.git"
+  },
+  "license": "MIT",
+  "contributes": {
+    "languages": [
+      {
+        "id": "psx",
+        "aliases": ["PSX", "usePHP PSX"],
+        "extensions": [".psx"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "psx",
+        "scopeName": "source.psx",
+        "path": "./syntaxes/psx.tmLanguage.json",
+        "embeddedLanguages": {
+          "meta.embedded.expression.psx": "php"
+        }
+      },
+      {
+        "scopeName": "psx.injection",
+        "path": "./syntaxes/psx-injection.tmLanguage.json",
+        "injectTo": ["source.psx"],
+        "embeddedLanguages": {
+          "meta.embedded.expression.psx": "php"
+        }
+      }
+    ]
+  }
+}

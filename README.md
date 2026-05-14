@@ -577,6 +577,17 @@ If a component is registered at runtime instead of being defined in a `.psx` fil
 
 For the full spec — Fragment syntax, attribute dispatch, manifest format, edge cases — see [docs/PSX.md](docs/PSX.md).
 
+### Editor support
+
+Syntax highlighting for `.psx` is bundled in [`editors/`](editors/README.md):
+
+- **Neovim / Vim** — [`editors/nvim/`](editors/nvim/README.md) (lazy.nvim / packer / vim-plug / manual install)
+- **VS Code** — [`editors/vscode/`](editors/vscode/README.md) (`.vsix` build or local symlink)
+
+Each editor's README walks through install + verify steps. An LSP /
+tree-sitter grammar / PHPStan extension are intentionally out of scope
+here and will land in dedicated repositories.
+
 ## Generated HTML
 
 ```php
