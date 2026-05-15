@@ -29,6 +29,20 @@ use Polidog\UsePhp\Storage\StorageType;
  */
 final class UsePHP
 {
+    /**
+     * Regex pattern (without delimiters) that a deferred component name must
+     * match. Names appear in URLs as a path segment, so we restrict to a
+     * conservative set of URL-safe characters. Shared by the producer
+     * (`registerDeferred`, `Renderer::renderDeferred`) and the consumer
+     * (`doHandleDeferred`) so the two ends cannot drift apart.
+     */
+    public const DEFER_NAME_PATTERN = '[A-Za-z0-9_-]+';
+
+    public static function isValidDeferName(string $name): bool
+    {
+        return \preg_match('/^' . self::DEFER_NAME_PATTERN . '$/', $name) === 1;
+    }
+
     private ComponentRegistry $registry;
     private ?SnapshotSerializer $snapshotSerializer = null;
     private ?RouterInterface $router = null;
@@ -44,6 +58,14 @@ final class UsePHP
     private array $deferredRegistry = [];
 
     private string $deferPrefix = Renderer::DEFAULT_DEFER_PREFIX;
+
+    /**
+     * Optional header sink used by tests to capture headers without depending
+     * on xdebug. In production this stays null and we go through `\header()`.
+     *
+     * @var \Closure(string): void|null
+     */
+    private ?\Closure $headerEmitter = null;
 
     public function __construct()
     {
@@ -112,9 +134,18 @@ final class UsePHP
         string $component,
         ?string $cacheControl = null,
     ): self {
-        if (\preg_match('/^[A-Za-z0-9_-]+$/', $name) !== 1) {
+        if (!self::isValidDeferName($name)) {
             throw new \InvalidArgumentException(
-                "Deferred component name must match `[A-Za-z0-9_-]+`, got: '$name'",
+                'Deferred component name must match `' . self::DEFER_NAME_PATTERN . "`, got: '$name'",
+            );
+        }
+        if (isset($this->deferredRegistry[$name])) {
+            $existing = $this->deferredRegistry[$name]['component'];
+            throw new \InvalidArgumentException(
+                "Deferred name '$name' is already registered (component: $existing). "
+                . 'Deferred names are part of the public URL surface and must be unique — '
+                . 'reusing a name with a different component or cacheControl is almost '
+                . 'always a mistake. Pick a distinct name.',
             );
         }
         $this->deferredRegistry[$name] = [
@@ -141,6 +172,30 @@ final class UsePHP
     public function getDeferPrefix(): string
     {
         return $this->deferPrefix;
+    }
+
+    /**
+     * Test-only seam: redirect outgoing headers from `\header()` to the given
+     * closure so tests can assert on `Cache-Control` etc. without xdebug.
+     * Pass `null` to restore the default `\header()` behavior.
+     *
+     * @internal Not part of the public API; subject to change without notice.
+     *
+     * @param \Closure(string): void|null $emitter
+     */
+    public function withHeaderEmitter(?\Closure $emitter): self
+    {
+        $this->headerEmitter = $emitter;
+        return $this;
+    }
+
+    private function emitHeader(string $header): void
+    {
+        if ($this->headerEmitter !== null) {
+            ($this->headerEmitter)($header);
+            return;
+        }
+        \header($header);
     }
 
     /**
@@ -507,34 +562,39 @@ final class UsePHP
     {
         $prefixWithSlash = $this->deferPrefix . '/';
         if (!\str_starts_with($request->path, $prefixWithSlash)) {
-            \http_response_code(404);
-            return 'Not Found';
+            return $this->respondNotFound('Not Found');
         }
         $name = \rawurldecode(\substr($request->path, \strlen($prefixWithSlash)));
-        if ($name === '' || \str_contains($name, '/') || \preg_match('/^[A-Za-z0-9_-]+$/', $name) !== 1) {
-            \http_response_code(404);
-            return 'Not Found';
+        if (!self::isValidDeferName($name)) {
+            return $this->respondNotFound('Not Found');
         }
 
         $registration = $this->deferredRegistry[$name] ?? null;
         if ($registration === null) {
-            \http_response_code(404);
-            return 'Deferred component not registered: ' . \htmlspecialchars($name, \ENT_QUOTES, 'UTF-8');
+            return $this->respondNotFound(
+                'Deferred component not registered: ' . \htmlspecialchars($name, \ENT_QUOTES, 'UTF-8'),
+            );
         }
 
-        if ($registration['cacheControl'] !== null) {
-            \header('Cache-Control: ' . $registration['cacheControl']);
-        } else {
-            \header('Cache-Control: private, max-age=0');
-        }
-
+        // Query parameters become component props. If a client passes an
+        // array form (e.g. `?post_id[]=1`), we reject it as 400 rather than
+        // silently dropping it — otherwise the component renders with the
+        // key missing and the failure mode is invisible. This also mirrors
+        // the parent-side check in Renderer::renderDeferred, where non-scalar
+        // params throw at render time.
         /** @var array<string, mixed> $props */
         $props = [];
         foreach ($request->query as $key => $value) {
-            if (\is_scalar($value)) {
-                $props[$key] = $value;
+            if (!\is_scalar($value)) {
+                \http_response_code(400);
+                $this->emitHeader('Cache-Control: no-store');
+                return 'Deferred component param "' . \htmlspecialchars((string) $key, \ENT_QUOTES, 'UTF-8')
+                    . '" must be a scalar; arrays and other types are not supported.';
             }
+            $props[$key] = $value;
         }
+
+        $this->emitHeader('Cache-Control: ' . ($registration['cacheControl'] ?? 'private, max-age=0'));
 
         // Reset render context state — this is a fresh sub-render, not a
         // continuation of any page-level render pass.
@@ -542,12 +602,35 @@ final class UsePHP
 
         try {
             $element = $this->renderPsxComponent($registration['component'], $props);
-        } catch (\RuntimeException $e) {
+        } catch (\Throwable $e) {
+            // Surface details to the operator via error_log, but return a
+            // generic message to the client — exception messages frequently
+            // expose FQCNs, file paths, or internal state we don't want
+            // visible on a public endpoint.
+            \error_log(\sprintf(
+                "[usePHP] defer render failed for name '%s' (component %s): %s\n%s",
+                $name,
+                $registration['component'],
+                $e->getMessage(),
+                $e->getTraceAsString(),
+            ));
             \http_response_code(500);
-            return 'Failed to render deferred component: ' . \htmlspecialchars($e->getMessage(), \ENT_QUOTES, 'UTF-8');
+            $this->emitHeader('Cache-Control: no-store');
+            return 'Failed to render deferred component.';
         }
 
         return $this->renderElement($element);
+    }
+
+    /**
+     * Emit a 404 with a `no-store` Cache-Control so a CDN's default policy
+     * cannot pin the negative result against a later valid registration.
+     */
+    private function respondNotFound(string $body): string
+    {
+        \http_response_code(404);
+        $this->emitHeader('Cache-Control: no-store');
+        return $body;
     }
 
     /**

@@ -320,6 +320,148 @@ class RuntimeIntegrationTest extends TestCase
         $app->registerDeferred('not/allowed', 'App\\X');
     }
 
+    public function testRegisterDeferredRejectsDuplicateName(): void
+    {
+        $app = new UsePHP();
+        $app->registerDeferred('user-header', 'App\\First');
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('already registered');
+        $app->registerDeferred('user-header', 'App\\Second');
+    }
+
+    public function testHandleDeferredEmitsDefaultCacheControl(): void
+    {
+        $app = new UsePHP();
+        $app->registerComponent(
+            'App\\Header',
+            static fn(array $props): Element => new Element('header', [], ['ok']),
+        );
+        $app->registerDeferred('user-header', 'App\\Header');
+
+        $headers = $this->captureDeferHeaders(
+            $app,
+            new RequestContext(method: 'GET', path: '/_defer/user-header'),
+        );
+        self::assertContains('Cache-Control: private, max-age=0', $headers);
+    }
+
+    public function testHandleDeferredEmitsCustomCacheControl(): void
+    {
+        $app = new UsePHP();
+        $app->registerComponent(
+            'App\\Header',
+            static fn(array $props): Element => new Element('header', [], ['ok']),
+        );
+        $app->registerDeferred('shared', 'App\\Header', cacheControl: 'public, s-maxage=60');
+
+        $headers = $this->captureDeferHeaders(
+            $app,
+            new RequestContext(method: 'GET', path: '/_defer/shared'),
+        );
+        self::assertContains('Cache-Control: public, s-maxage=60', $headers);
+        // Default must not leak through when a custom value is set.
+        self::assertNotContains('Cache-Control: private, max-age=0', $headers);
+    }
+
+    public function testHandleDeferredEmitsNoStoreFor404(): void
+    {
+        $app = new UsePHP();
+        $headers = $this->captureDeferHeaders(
+            $app,
+            new RequestContext(method: 'GET', path: '/_defer/missing'),
+        );
+        self::assertContains('Cache-Control: no-store', $headers);
+    }
+
+    public function testHandleDeferredRejectsNonScalarQueryWith400(): void
+    {
+        $app = new UsePHP();
+        $app->registerComponent(
+            'App\\Header',
+            static fn(array $props): Element => new Element('header', [], ['ok']),
+        );
+        $app->registerDeferred('hdr', 'App\\Header');
+
+        $savedStatus = \http_response_code();
+        try {
+            $headers = [];
+            $app->withHeaderEmitter(function (string $h) use (&$headers): void {
+                $headers[] = $h;
+            });
+            $html = $app->handleDeferred(new RequestContext(
+                method: 'GET',
+                path: '/_defer/hdr',
+                query: ['post_id' => ['nested' => 1]],
+            ));
+            self::assertNotNull($html);
+            self::assertStringContainsString('must be a scalar', $html);
+            self::assertSame(400, \http_response_code());
+            self::assertContains('Cache-Control: no-store', $headers);
+        } finally {
+            \http_response_code($savedStatus === false ? 200 : $savedStatus);
+        }
+    }
+
+    public function testHandleDeferredSurfacesGenericMessageWhenRenderThrows(): void
+    {
+        $app = new UsePHP();
+        $secretFqcn = 'Internal\\Secret\\PathYouShouldNeverSee';
+        $app->registerComponent(
+            $secretFqcn,
+            static function (array $props): Element {
+                throw new \RuntimeException('Sensitive details: /etc/private.key');
+            },
+        );
+        $app->registerDeferred('boom', $secretFqcn);
+
+        // Redirect error_log so the intentional stderr write from the
+        // 500 path does not pollute the test runner's output.
+        $logFile = \tempnam(\sys_get_temp_dir(), 'usephp-defer-log-') ?: '/dev/null';
+        $savedLog = \ini_set('error_log', $logFile);
+        $savedStatus = \http_response_code();
+        try {
+            $html = $app->handleDeferred(new RequestContext(
+                method: 'GET',
+                path: '/_defer/boom',
+            ));
+            self::assertNotNull($html);
+            self::assertSame(500, \http_response_code());
+            // Generic message — no FQCN or exception text in the response.
+            self::assertSame('Failed to render deferred component.', $html);
+            self::assertStringNotContainsString($secretFqcn, $html);
+            self::assertStringNotContainsString('/etc/private.key', $html);
+            // The operator-facing details still went to error_log.
+            $logged = \is_file($logFile) ? (\file_get_contents($logFile) ?: '') : '';
+            self::assertStringContainsString($secretFqcn, $logged);
+            self::assertStringContainsString('/etc/private.key', $logged);
+        } finally {
+            \http_response_code($savedStatus === false ? 200 : $savedStatus);
+            \ini_set('error_log', $savedLog === false ? '' : $savedLog);
+            if (\is_file($logFile)) {
+                @\unlink($logFile);
+            }
+        }
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function captureDeferHeaders(UsePHP $app, RequestContext $request): array
+    {
+        $headers = [];
+        $app->withHeaderEmitter(function (string $h) use (&$headers): void {
+            $headers[] = $h;
+        });
+        $savedStatus = \http_response_code();
+        try {
+            $app->handleDeferred($request);
+        } finally {
+            \http_response_code($savedStatus === false ? 200 : $savedStatus);
+        }
+        return $headers;
+    }
+
     public function testInstallPsxErrorHandlerWritesRewrittenTrace(): void
     {
         $app = new UsePHP();

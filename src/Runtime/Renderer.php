@@ -6,6 +6,7 @@ namespace Polidog\UsePhp\Runtime;
 
 use Polidog\UsePhp\Snapshot\SnapshotSerializer;
 use Polidog\UsePhp\Storage\StorageType;
+use Polidog\UsePhp\UsePHP;
 
 /**
  * Renders Element tree to HTML string.
@@ -426,9 +427,9 @@ final class Renderer
         $params = $element->props['__params'] ?? [];
         $fallback = $element->props['__fallback'] ?? null;
 
-        if ($name === '' || preg_match('/^[A-Za-z0-9_-]+$/', $name) !== 1) {
+        if (!UsePHP::isValidDeferName($name)) {
             throw new \RuntimeException(
-                "Deferred component name must be URL-safe (`[A-Za-z0-9_-]+`), got: '$name'",
+                'Deferred component name must be URL-safe (`' . UsePHP::DEFER_NAME_PATTERN . "`), got: '$name'",
             );
         }
 

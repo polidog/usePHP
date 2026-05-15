@@ -88,9 +88,16 @@ $router->get('/todo', function (): \Polidog\UsePhp\Runtime\Element {
         ->renderPsxComponent('App\\Components\\Psx\\TodoList', []);
 });
 
-// Deferred endpoints serve fragment HTML and must NOT be wrapped in the
-// page chrome below — the client replaces a placeholder with the response
-// body verbatim. Handle the defer route before reaching the layout shell.
+// `$app->run()` also handles defer routes via its own internal branch, but
+// this example wraps `run()` output in the `<!DOCTYPE html>...` layout shell
+// further down (ob_start + the literal HTML at the bottom of this file). We
+// don't want that wrapping for defer fragments — `usephp.js` splices the
+// response straight into a placeholder, so layout chrome would end up as
+// stray markup inside the page. Calling `handleDeferred()` explicitly here,
+// before the layout-wrapping path, lets us short-circuit with a bare fragment
+// response. In integrations that already separate the fragment route from
+// the page route (most frameworks), `run()`'s built-in handling is enough
+// and this early-exit is unnecessary.
 $deferredHtml = $app->handleDeferred();
 if ($deferredHtml !== null) {
     header('Content-Type: text/html; charset=UTF-8');

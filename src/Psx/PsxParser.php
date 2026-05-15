@@ -507,6 +507,23 @@ final class PsxParser implements PsxParserInterface
                         . 'Use <' . $tagName . ' defer="name" /> instead.',
                     );
                 }
+                // String literal form (`defer="user-header"`): the value
+                // arrives here already quoted as PHP source, e.g. `'user-header'`.
+                // Validate the URL-safe shape at compile time so typos surface
+                // during build, not as runtime exceptions in production.
+                if (!$attr['isExpr']) {
+                    $literalSource = $attr['value'] ?? '';
+                    if (\preg_match("/^'([A-Za-z0-9_-]+)'$/", $literalSource) !== 1) {
+                        $literal = \substr($literalSource, 1, -1);
+                        throw $this->error(
+                            "<$tagName defer=\"$literal\"> name must match `[A-Za-z0-9_-]+`. "
+                            . 'Names appear as URL path segments and are validated by the runtime.',
+                        );
+                    }
+                }
+                // Brace expressions (`defer={$dynamicName}`) cannot be
+                // validated here — the runtime check in Renderer::renderDeferred
+                // and the endpoint match in UsePHP::doHandleDeferred take over.
                 $deferNameExpr = $attr['value'];
                 continue;
             }
