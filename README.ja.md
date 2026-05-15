@@ -577,6 +577,16 @@ return fn() => (
 
 完全な仕様（Fragment構文、属性のディスパッチ、manifest形式、エッジケース）は[docs/PSX.md](docs/PSX.md)を参照してください。
 
+### エディタサポート
+
+`.psx`ファイル向けのシンタックスハイライト定義は [`editors/`](editors/README.md) に同梱しています:
+
+- **Neovim / Vim** — [`editors/nvim/`](editors/nvim/README.md) (lazy.nvim / packer / vim-plug / 手動インストール対応)
+- **VS Code** — [`editors/vscode/`](editors/vscode/README.md) (`.vsix` ビルド または ローカル symlink)
+
+各READMEにインストールと動作確認の手順をまとめています。LSP / tree-sitter
+grammar / PHPStan extension はここでは扱わず、別リポジトリで提供する予定です。
+
 ## 生成されるHTML
 
 ```php
