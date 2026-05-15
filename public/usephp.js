@@ -45,6 +45,20 @@
     //     any cache read, so old fragments can't survive a release.
     //   - `window.usePHP.clearDeferCache([nameOrUrl])`: runtime purge of
     //     both tiers, all entries or a single defer name / placeholder URL.
+    //
+    // Explicit reload is a separate, opt-in concern from cache
+    // invalidation. A component that sets `Defer::$reloadable` renders a
+    // placeholder carrying `data-usephp-defer-name`; usephp.js then keeps
+    // that wrapper in the DOM after the fragment resolves (instead of
+    // replacing it away) and swaps content *inside* it. The retained,
+    // name-tagged wrapper is what makes a later re-fetch possible:
+    //   - `window.usePHP.reloadDefer([nameOrUrl])` busts that URL's cache
+    //     (both tiers) and re-fetches in place — e.g. after a mutation.
+    //   - a form's `data-usephp-reload-defer="<names>"` does the same
+    //     automatically once its partial submit succeeds (the common
+    //     "form edits data, reload the deferred list" pattern).
+    // Components that don't opt in are still replaced away on resolve and
+    // produce byte-identical markup/behaviour to before this feature.
 
     // In-memory cap. List-style pages that defer per-row content with
     // distinct query params (e.g. `<CommentDeferred id={$id} />` for many
@@ -322,9 +336,93 @@
         }
     }
 
+    // Explicitly re-fetch resolved reloadable deferred regions.
+    //   reloadDefer()              → every reloadable region on the page
+    //   reloadDefer(deferName)     → every region with that defer name
+    //   reloadDefer(placeholderUrl)→ the region(s) at that exact URL
+    //
+    // Only components that opted in via `Defer::$reloadable` keep a
+    // re-targetable wrapper (`data-usephp-defer-name`); non-reloadable
+    // defers were replaced away on resolve and are intentionally not found
+    // here. Each match has both cache tiers busted for its URL first, so
+    // the reload always reflects current server state rather than a stale
+    // cached fragment. Matching mirrors clearDeferCache(): exact URL or
+    // defer-name, prefix-agnostic. Returns the number of regions reloaded
+    // so callers can detect a no-op (e.g. a typo'd name).
+    function reloadDefer(target) {
+        const wrappers = document.querySelectorAll('[data-usephp-defer-name][data-usephp-defer-url]');
+        const all = target === undefined || target === null || target === '';
+        let count = 0;
+        wrappers.forEach((wrapper) => {
+            const url = wrapper.dataset.usephpDeferUrl;
+            if (!url) return;
+            const name = wrapper.getAttribute('data-usephp-defer-name');
+            if (!all && !(name === target || url === target || urlMatchesName(url, target))) {
+                return;
+            }
+            // A reload must reflect current server state, so drop any cached
+            // fragment for this URL (both tiers) before re-fetching.
+            clearDeferCache(url);
+            // Re-arm: clearing the resolved marker lets fetchDeferred run
+            // again (it self-guards against resolved wrappers otherwise).
+            wrapper.removeAttribute('data-usephp-defer-loaded');
+            wrapper.setAttribute('aria-busy', 'true');
+            count++;
+            fetchDeferred(wrapper);
+        });
+        return count;
+    }
+
     const usePHP = (window.usePHP = window.usePHP || {});
     usePHP.clearDeferCache = clearDeferCache;
+    usePHP.reloadDefer = reloadDefer;
     usePHP.DEFER_CACHE_VERSION = DEFER_CACHE_VERSION;
+
+    // =====================================================================
+    // Declarative reload triggers
+    // =====================================================================
+    //
+    // `data-usephp-reload-defer` is read in two complementary places, both
+    // thin wrappers over reloadDefer() — the imperative API stays the one
+    // source of truth:
+    //
+    //   • on a `<form data-usephp-form>` — fires after a successful partial
+    //     submit (see the submit handler). Timing matters: the mutation's
+    //     response is applied first, so the re-fetch reflects new state.
+    //   • on any element *outside* a usephp form — fires on click. This is
+    //     the "no form involved" path: a standalone Refresh button/link, a
+    //     toolbar control, etc.
+    //
+    // The attribute value is a space/comma-separated list of defer names
+    // (or exact URLs). An empty value reloads every reloadable region.
+
+    function parseReloadTargets(value) {
+        return (value || '').split(/[\s,]+/).filter(Boolean);
+    }
+
+    function dispatchReloadDefer(value) {
+        const targets = parseReloadTargets(value);
+        if (targets.length === 0) {
+            reloadDefer();
+            return;
+        }
+        targets.forEach((t) => reloadDefer(t));
+    }
+
+    // Click path: any element carrying the attribute, except forms (their
+    // submit path owns the timing) and controls inside a usephp form (the
+    // form's own attribute drives the post-submit reload; firing on click
+    // would race the async submit and re-fetch stale data).
+    document.addEventListener('click', function(e) {
+        const trigger = e.target.closest('[data-usephp-reload-defer]');
+        if (!trigger) return;
+        if (trigger.tagName === 'FORM') return;
+        if (trigger.closest('[data-usephp-form]')) return;
+        // A reload link that also navigated away would be self-defeating;
+        // suppress default activation for anchors.
+        if (trigger.tagName === 'A') e.preventDefault();
+        dispatchReloadDefer(trigger.getAttribute('data-usephp-reload-defer'));
+    });
 
     // =====================================================================
     // Partial form submission
@@ -380,6 +478,15 @@
 
                 // Newly injected HTML may contain deferred placeholders.
                 processDeferred(component);
+
+                // Declarative post-submit reload. The canonical
+                // "form mutates data → reload the deferred list" wiring:
+                // the form names the deferred region(s) to refresh and we
+                // fire it only now, after the mutation's partial response
+                // has been applied, so the re-fetch sees the new state.
+                if (form.hasAttribute('data-usephp-reload-defer')) {
+                    dispatchReloadDefer(form.getAttribute('data-usephp-reload-defer'));
+                }
             } else {
                 form.submit();
             }
@@ -394,9 +501,51 @@
     // Deferred component hydration
     // =====================================================================
 
+    // A reloadable component renders `data-usephp-defer-name`; usephp.js
+    // keys off that attribute's presence alone (mirroring the bare
+    // data-usephp-defer-cache opt-in). When absent, every path below is
+    // byte-for-byte the historical behaviour.
+    function deferIsReloadable(el) {
+        return el.hasAttribute('data-usephp-defer-name');
+    }
+
+    // Single placement point shared by the L1, L2 and network paths so the
+    // reloadable / non-reloadable decision can't drift between them.
+    //
+    //   non-reloadable → hydrate nested placeholders in the fragment, then
+    //                     replace the placeholder away (unchanged).
+    //   reloadable     → swap the fragment *into* the wrapper, keeping the
+    //                     name-tagged, url-bearing wrapper in the DOM so a
+    //                     later reloadDefer() can re-target and re-fetch it.
+    function placeDeferredFragment(placeholder, fragment) {
+        if (!deferIsReloadable(placeholder)) {
+            // Hydrate nested defers before the fragment enters the DOM, then
+            // splice it in. Exactly the pre-feature code path.
+            processDeferred(fragment);
+            placeholder.replaceWith(fragment);
+            return;
+        }
+
+        placeholder.replaceChildren(fragment);
+        placeholder.removeAttribute('aria-busy');
+        // Mark resolved so a generic processDeferred() re-scan does not
+        // re-fetch this still-url-bearing wrapper; reloadDefer() clears it.
+        placeholder.setAttribute('data-usephp-defer-loaded', '');
+        // Nested placeholders inside the freshly placed fragment still need
+        // hydration. Scoping to the wrapper plus the
+        // :not([data-usephp-defer-loaded]) selector keeps it from matching
+        // itself.
+        processDeferred(placeholder);
+    }
+
     async function fetchDeferred(placeholder) {
         const url = placeholder.dataset.usephpDeferUrl;
         if (!url) return;
+
+        // Defensive: a resolved reloadable wrapper is only re-fetched via
+        // reloadDefer(), which clears this marker first. Any other caller
+        // (a stray direct invocation) is a no-op.
+        if (placeholder.hasAttribute('data-usephp-defer-loaded')) return;
 
         // Component-declared opt-in. false → this component did not opt
         // into localStorage persistence, so L2 is bypassed for both reads
@@ -415,8 +564,7 @@
             // pristine for future hits.
             rememberDeferFragment(url, cached);
             const clone = cached.cloneNode(true);
-            processDeferred(clone);
-            placeholder.replaceWith(clone);
+            placeDeferredFragment(placeholder, clone);
             return;
         }
 
@@ -428,8 +576,7 @@
             const persisted = readPersisted(url);
             if (persisted) {
                 rememberDeferFragment(url, persisted.cloneNode(true));
-                processDeferred(persisted);
-                placeholder.replaceWith(persisted);
+                placeDeferredFragment(placeholder, persisted);
                 return;
             }
         }
@@ -473,11 +620,10 @@
                 persistFragment(url, html);
             }
 
-            // A deferred component's rendered output may itself contain
-            // nested defer placeholders. Kick off their fetches before
-            // moving the fragment into the DOM so they hydrate too.
-            processDeferred(template.content);
-            placeholder.replaceWith(template.content);
+            // Placement (and nested-defer hydration) is centralised so the
+            // reloadable wrapper-retention decision stays consistent with
+            // the cache-hit paths above.
+            placeDeferredFragment(placeholder, template.content);
         } catch (error) {
             // Network/other error — leave the fallback in place but log so
             // the failure mode is visible to developers.
@@ -487,7 +633,14 @@
 
     function processDeferred(root) {
         const scope = root || document;
-        scope.querySelectorAll('[data-usephp-defer-url]').forEach(fetchDeferred);
+        // A reloadable wrapper keeps `data-usephp-defer-url` after it
+        // resolves so reloadDefer() can re-fetch it, but it must not be
+        // re-fetched by a generic scan (initial load, or a partial form
+        // submit that re-renders surrounding chrome). The resolved marker
+        // excludes it; reloadDefer() clears that marker to re-arm.
+        scope
+            .querySelectorAll('[data-usephp-defer-url]:not([data-usephp-defer-loaded])')
+            .forEach(fetchDeferred);
     }
 
     // Reconcile the persisted-cache version before the first read so a

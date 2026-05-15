@@ -509,6 +509,7 @@ final class Renderer
         $params = $element->props['__params'] ?? [];
         $fallback = $element->props['__fallback'] ?? null;
         $localCache = $element->props['__localCache'] ?? false;
+        $reloadable = $element->props['__reloadable'] ?? false;
 
         if (!UsePHP::isValidDeferName($name)) {
             throw new \RuntimeException(
@@ -550,10 +551,21 @@ final class Renderer
         // same markup as before.
         $cacheAttr = $localCache === true ? ' data-usephp-defer-cache' : '';
 
+        // Opt-in explicit reload (`Defer::$reloadable`). Carrying the
+        // registered name on the placeholder is the single signal usephp.js
+        // uses to (a) keep the wrapper in the DOM after the fragment
+        // resolves instead of replacing it away, and (b) re-target it for
+        // `reloadDefer()`. Absent the opt-in there is no name attribute and
+        // the markup is byte-identical to before this feature existed.
+        $nameAttr = $reloadable === true
+            ? ' data-usephp-defer-name="' . htmlspecialchars($name, ENT_QUOTES, 'UTF-8') . '"'
+            : '';
+
         return sprintf(
-            '<div data-usephp-defer-url="%s"%s>%s</div>',
+            '<div data-usephp-defer-url="%s"%s%s>%s</div>',
             htmlspecialchars($url, ENT_QUOTES, 'UTF-8'),
             $cacheAttr,
+            $nameAttr,
             $fallbackHtml,
         );
     }

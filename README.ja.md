@@ -713,6 +713,52 @@ window.usePHP.DEFER_CACHE_VERSION;                                // 現ビル�
 しても解決します。`localStorage` が使えない場合（Safari プライベートモード、
 クォータ超過、無効化）は L2 が静かに no-op になり、L1 がページを供給し続けます。
 
+### 明示的リロード
+
+既定では deferフラグメントは **一度だけ** 取得されます。`usephp.js` が
+プレースホルダをレスポンスで置き換え、ラッパーごと消えるため再取得の
+取っ掛かりが残りません。`Defer::$reloadable` を opt-in すると、再取得
+可能なラッパーを DOM に残せます:
+
+```php
+// クラスコンポーネント
+#[Defer(name: 'todo-list', reloadable: true)]
+
+// .psx 内のクロージャコンポーネント
+fc($render, defer: new Defer(name: 'todo-list', reloadable: true));
+```
+
+プレースホルダに `data-usephp-defer-name="todo-list"` が付与され、
+`usephp.js` はラッパーを置き換えず **その内側** に内容を差し込むので、
+後から再取得できます。リロードのたびに **まずその URL の両キャッシュ層を
+破棄** するので、常に最新のサーバ状態を反映します。トリガーは3経路、
+すべて1つのコアAPIの上に実装されています:
+
+```js
+// 1. 命令的 — どこからでも呼べる（フォーム不要）:
+window.usePHP.reloadDefer();                       // 全リロード可能領域
+window.usePHP.reloadDefer('todo-list');            // defer 名で指定
+window.usePHP.reloadDefer('/_defer/todo-list?p=2'); // 厳密 URL で指定
+// 戻り値はリロードした領域数（0 ⇒ 何もマッチせず）
+```
+
+```psx
+// 2. partial フォーム送信後 —「フォームでデータ更新→listリロード」の
+//    定番配線。更新レスポンス適用後にだけ発火するので、再取得は
+//    新しい状態を見ます:
+<form data-usephp-form data-usephp-reload-defer="todo-list"> … </form>
+
+// 3. usephp フォーム外の任意要素のクリックで — 単独の更新ボタン/
+//    リンク、ツールバーのコントロールなど:
+<button data-usephp-reload-defer="todo-list">更新</button>
+```
+
+属性値は空白/カンマ区切りの defer 名（または厳密 URL）のリスト。空値は
+全リロード可能領域を再取得します。リロードは `clearDeferCache()` とは
+別の関心事です（後者は無効化のみで再取得はしません）。`reloadable` を
+設定しないコンポーネントは従来どおり — 解決時に置換され、マークアップは
+バイト一致です。
+
 ### 要件と制約
 
 - **モードごとに別コンポーネントにする。** インライン描画は基底コンポーネント、defer エンドポイントは `Defer` を持つラッパーで担当します。同じコンポーネントをコールサイトでモード切替するのは非対応です。
@@ -722,6 +768,7 @@ window.usePHP.DEFER_CACHE_VERSION;                                // 現ビル�
 - **認可はコンポーネント側の責務。** 名前と params は URL に露出するため、敏感な情報を取得するエンドポイントでは、コンポーネント側でセッションや権限を確認してください（HMAC 署名は不要になりました — 名前はあくまで「公開された入口名」）。
 - **入れ子のdeferも動作します。** deferしたコンポーネントの出力内にさらに `<...Deferred />` がある場合、`usephp.js` が再帰的に hydrate します。
 - **2 段構成の defer キャッシュ（L1 インメモリ + opt-in な L2 `localStorage`）。** 永続化はコンポーネントが決め（HTTP `Cache-Control` ではなく `Defer::$localCache`、時間失効なし）、JS の強制リセット API があります — 上記 [クライアントキャッシュと強制リセット](#クライアントキャッシュと強制リセット) を参照。opt-in しないコンポーネントは従来のインメモリのみキャッシュと全く同じ挙動です。
+- **opt-in な明示的リロード（`Defer::$reloadable`）。** 再取得可能なラッパーを残し、`window.usePHP.reloadDefer()`・フォームの `data-usephp-reload-defer`・任意要素のクリックで defer 領域を再取得できます — 上記 [明示的リロード](#明示的リロード) を参照。リロードのたびにその URL の両キャッシュ層を先に破棄します。opt-in しないコンポーネントは解決時に置換され、マークアップはバイト一致です。
 - **JSなしのユーザーはfallbackしか見えません。** これは仕様上のトレードオフです。
 - **フレームワーク統合:** コントローラから `UsePHP::handleDeferred()` を呼んでください。defer ルート（GET `/_defer/...`）ならレンダリング済みHTMLを返し、そうでなければ `null` を返します（`handleAction()` と同じパターン）。プレフィックスは `setDeferPrefix('/api/_d')` で変更可。
 

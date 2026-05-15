@@ -86,6 +86,22 @@ class FcDeferTest extends TestCase
         self::assertTrue($element->props['__localCache']);
     }
 
+    public function testReloadableRidesThroughFcPlaceholder(): void
+    {
+        $app = new UsePHP();
+        RenderContext::setApp($app);
+
+        $wrapped = fc(
+            fn(array $props): Element => H::ul(children: 'list'),
+            defer: new Defer(name: 'todo-list', reloadable: true),
+        );
+
+        $element = $wrapped(['fallback' => H::span(children: 'loading')]);
+
+        self::assertSame('__defer__', $element->type);
+        self::assertTrue($element->props['__reloadable']);
+    }
+
     public function testScalarPropsForwardAsQueryParams(): void
     {
         $app = new UsePHP();
