@@ -558,10 +558,13 @@ final class Renderer
         // byte-identical to the pre-feature markup, mirroring how
         // `reloadable` adds its own `data-usephp-defer-name`. Emitted only
         // when positive and persistence is actually on; `localCacheTtl: 0`
-        // (or `localCache: false`) leaves no trace. The `Defer`
-        // constructor already rejects `ttl > 0 && !localCache`, but the
-        // guard is repeated here so a raw `H::defer()` call can't emit a
-        // dangling attribute usephp.js would ignore anyway.
+        // (or `localCache: false`) leaves no trace. A non-positive value
+        // reaching here via a raw `H::defer()` (the `Defer` constructor
+        // normalises it away) is deliberately treated as "no bound", not
+        // an error — the `> 0` test below is the single place that decides
+        // it, so a stray negative simply omits the attribute rather than
+        // emitting one usephp.js would ignore. (`Defer` still throws on a
+        // *positive* TTL without `localCache`, the real misconfiguration.)
         $cacheTtlAttr = ($localCache === true && $localCacheTtl > 0)
             ? ' data-usephp-defer-cache-ttl="' . $localCacheTtl . '"'
             : '';

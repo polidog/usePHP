@@ -30,7 +30,7 @@
     //       content to the next on a shared terminal. By default there is
     //       no time expiry: a persisted entry lives until a
     //       `DEFER_CACHE_VERSION` bump or `clearDeferCache()` drops it. A
-    //       component may additionally bound the entry by age via
+    //       component may additionally cap the entry's age via
     //       `Defer::$localCacheTtl`, surfaced as a separate
     //       `data-usephp-defer-cache-ttl="<seconds>"` attribute: once the
     //       persisted entry is older than that, the next read discards it
@@ -236,8 +236,11 @@
 
     // Evict oldest-`storedAt`-first until under the cap, so a long-lived
     // page that keeps deferring fresh URLs can't grow localStorage
-    // unbounded. This is a storage bound, not a validity policy — entries
-    // never expire by time.
+    // unbounded. This enforces only the storage-size cap; it applies no
+    // time policy. Per-placeholder age-out (`Defer::$localCacheTtl`) is a
+    // separate validity check done in readPersisted() at read time, so an
+    // entry that has aged out but not yet been read still counts toward
+    // the cap here until that read prunes it.
     function enforcePersistedCap() {
         if (!lsAvailable) return;
         const entries = [];

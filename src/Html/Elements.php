@@ -1209,7 +1209,8 @@ final class H
      *        surfaced to usephp.js via a bare placeholder data attribute.
      *        `false` keeps the fragment in the per-page in-memory cache
      *        only — usephp.js never reads the HTTP `Cache-Control` header
-     *        to make this decision, and there is no time expiry.
+     *        to make this decision, and there is no time expiry by default
+     *        (see `$localCacheTtl` below to bound the entry by age).
      * @param bool $reloadable Opt-in explicit reload. When `true` the
      *        rendered placeholder also carries `data-usephp-defer-name`, so
      *        usephp.js keeps the wrapper after resolving and the region can

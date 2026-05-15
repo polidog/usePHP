@@ -136,19 +136,26 @@ class DeferAttributeTest extends TestCase
         self::assertSame(60, $element->props['__localCacheTtl']);
     }
 
-    public function testRejectsNegativeLocalCacheTtl(): void
+    public function testNonPositiveLocalCacheTtlIsNormalisedToZero(): void
     {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('localCacheTtl must be >= 0');
-        new Defer(name: 'x', localCache: true, localCacheTtl: -1);
+        // A nonsensical negative (or 0) is "no time bound", not an error —
+        // normalised to 0 so the property reads back as its effective
+        // value rather than a stored -1.
+        self::assertSame(0, new Defer(name: 'x', localCache: true, localCacheTtl: -1)->localCacheTtl);
+        self::assertSame(0, new Defer(name: 'x', localCache: true, localCacheTtl: 0)->localCacheTtl);
+
+        // ...and a clamped-away negative no longer trips the
+        // positive-TTL-without-localCache guard.
+        self::assertSame(0, new Defer(name: 'x', localCacheTtl: -5)->localCacheTtl);
     }
 
-    public function testRejectsLocalCacheTtlWithoutLocalCache(): void
+    public function testRejectsPositiveLocalCacheTtlWithoutLocalCache(): void
     {
-        // A TTL only bounds the localStorage entry, which is never written
-        // unless localCache opted in — so a positive TTL there is a
-        // misconfiguration worth surfacing eagerly rather than silently
-        // ignoring.
+        // A *positive* TTL only bounds the localStorage entry, which is
+        // never written unless localCache opted in — so that combination
+        // is a real misconfiguration worth surfacing eagerly rather than
+        // silently ignoring. (A non-positive TTL is fine: it just means
+        // no bound.)
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('no effect without localCache');
         new Defer(name: 'x', localCacheTtl: 60);

@@ -723,12 +723,14 @@ briefly, then the fresh fragment. It is a **hard discard, not
 stale-while-revalidate** (no stale paint, no background swap). The bound
 applies to the L2 `localStorage` tier only; L1 is per-page anyway.
 
-`localCacheTtl: 0` (the default) means no time bound — byte-identical
-markup and behaviour to a plain `localCache: true`. A separate attribute
+Any `localCacheTtl <= 0` (the `0` default included) means no time bound —
+byte-identical markup and behaviour to a plain `localCache: true`. A
+negative is normalised to `0` (read as "no bound", not an error), so only
+a genuinely *positive* value ever takes effect. A separate attribute
 (rather than a value on the bare opt-in) keeps that default, and every
 non-opted-in placeholder, byte-identical to the pre-feature markup. A
-positive TTL without `localCache: true` throws (it would bound an entry
-that's never written).
+*positive* TTL without `localCache: true` still throws (it would bound an
+entry that's never written).
 
 **Forced reset is handled in JS:**
 

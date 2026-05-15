@@ -517,6 +517,21 @@ class RendererTest extends TestCase
         );
     }
 
+    public function testRenderDeferTreatsNonPositiveCacheTtlAsNoBound(): void
+    {
+        $renderer = new Renderer('test');
+
+        // Defer::__construct normalises a negative away, but a raw
+        // H::defer() can still pass one. The renderer's `> 0` test is the
+        // single decision point: a non-positive TTL deliberately omits the
+        // attribute (no bound) rather than being an error or emitting one
+        // usephp.js would ignore.
+        $this->assertSame(
+            '<div data-usephp-defer-url="/_defer/x" data-usephp-defer-cache></div>',
+            $renderer->renderElement(H::defer('x', [], null, true, false, -1)),
+        );
+    }
+
     public function testRenderDeferOmitsCacheTtlAttributeWithoutLocalCache(): void
     {
         $renderer = new Renderer('test');

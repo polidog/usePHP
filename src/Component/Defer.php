@@ -44,15 +44,17 @@ final class Defer
      *        time). The component decides this explicitly; usephp.js does
      *        not infer it from the `Cache-Control` header.
      * @param int $localCacheTtl Optional client-side (localStorage) cache
-     *        lifetime in seconds. `0` (default) means no time expiry —
-     *        byte-identical behaviour to a plain `localCache: true`. A
+     *        lifetime in seconds. Any value `<= 0` (the `0` default
+     *        included) means no time expiry and is normalised to `0` —
+     *        byte-identical behaviour to a plain `localCache: true`; a
+     *        nonsensical negative is read as "no bound", not an error. A
      *        positive value bounds the persisted entry's age: once it is
      *        older than this many seconds usephp.js discards it on the
      *        next read and re-fetches from the network (the fallback shows
      *        briefly, then the fresh fragment). This is a hard discard,
      *        not stale-while-revalidate. Governs the L2 localStorage tier
      *        only — the per-page L1 in-memory cache has no time bound.
-     *        Meaningless without persistence, so passing a positive TTL
+     *        Meaningless without persistence, so passing a *positive* TTL
      *        with `localCache: false` throws.
      * @param bool $reloadable Opt-in explicit reload. `false` (default)
      *        keeps the historical behaviour: usephp.js fetches the fragment
@@ -80,12 +82,12 @@ final class Defer
                 'Deferred component name must match `' . UsePHP::DEFER_NAME_PATTERN . "`, got: '$name'",
             );
         }
-        if ($localCacheTtl < 0) {
-            throw new \InvalidArgumentException(
-                "Defer target '$name': localCacheTtl must be >= 0 seconds (0 = no expiry), got: $localCacheTtl",
-            );
-        }
-        if ($localCacheTtl > 0 && $localCache === false) {
+        // A non-positive TTL just means "no time bound" — the same as the
+        // 0 default — rather than an error. Normalise so $localCacheTtl
+        // always reads back as its effective value (0), and so the guard
+        // and renderer below only ever see a clean >= 0.
+        $this->localCacheTtl = max(0, $this->localCacheTtl);
+        if ($this->localCacheTtl > 0 && $localCache === false) {
             throw new \InvalidArgumentException(
                 "Defer target '$name': localCacheTtl has no effect without localCache: true "
                 . '(it bounds the localStorage entry, which is only written when localCache is opted in).',
