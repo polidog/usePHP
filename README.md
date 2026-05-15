@@ -591,55 +591,86 @@ here and will land in dedicated repositories.
 ## Deferred rendering (CDN-friendly partial hydration)
 
 Some components depend on per-user state (logged-in name, cart count, A/B
-bucket) and would otherwise force the entire page out of the CDN cache. Mark
-those components `defer="name"` and only the fallback is included in the
-cacheable HTML — the real component is fetched after page load via a separate
-GET to a **dedicated endpoint** `/_defer/{name}`.
+bucket) and would otherwise force the entire page out of the CDN cache. The
+fix is to split such a component into two pieces:
+
+1. A **base** component that does the actual rendering.
+2. A **deferred wrapper** that carries the defer config — `fc(..., defer: new Defer(...))`
+   for closure components, or `#[Defer(...)]` for class components.
+
+The page references the wrapper, which renders only a fallback in the cacheable
+HTML. The real component is fetched after page load via a separate GET to a
+**dedicated endpoint** `/_defer/{name}`.
 
 ```psx
-<UserHeader defer="user-header" fallback={<HeaderSkeleton />} />
+{/* UserHeader.psx — the actual content, reused inline elsewhere if needed */}
+return fn(array $props) => <header>Hello {$_SESSION['user']['name'] ?? 'guest'}</header>;
 ```
 
-Server-side, register the name → component mapping along with the per-endpoint
-`Cache-Control`:
+```psx
+{/* UserHeaderDeferred.psx — the wrapper */}
+use Polidog\UsePhp\Component\Defer;
+use function Polidog\UsePhp\Runtime\fc;
+
+return fc(
+    fn(array $props) => <UserHeader />,
+    defer: new Defer(name: 'user-header', cacheControl: 'private, no-store'),
+);
+```
+
+```psx
+{/* Page.psx — fallback travels as a normal prop */}
+<UserHeaderDeferred fallback={<HeaderSkeleton />} />
+```
+
+`usephp compile` discovers `Defer` configs and writes a sidecar
+`deferred-manifest.php` next to the regular manifest — `loadComponentManifest()`
+picks it up and auto-calls `registerDeferred()` for each entry, so the manual
+wiring goes away. Class components use the same flow:
 
 ```php
-$app->registerDeferred(
-    name: 'user-header',
-    component: 'App\\Components\\Psx\\UserHeader',
-    cacheControl: 'private, no-store', // defaults to 'private, max-age=0'
-);
+#[Component(name: 'UserHeaderDeferred')]
+#[Defer(name: 'user-header', cacheControl: 'private, no-store')]
+final class UserHeaderDeferred extends BaseComponent
+{
+    public function render(): Element { /* the real content */ }
+}
+
+$app->register(UserHeaderDeferred::class); // auto-registers the defer endpoint too
 ```
 
 What happens at runtime:
 
-1. SSR emits a placeholder `<div data-usephp-defer-url="/_defer/user-header">…fallback…</div>`.
+1. SSR invokes the wrapper, which (on the page-render path) emits
+   `<div data-usephp-defer-url="/_defer/user-header">…fallback…</div>`.
 2. The main HTML is independent of the user — safe to cache at the CDN edge.
-3. `usephp.js` finds all `[data-usephp-defer-url]` elements after `DOMContentLoaded` and `GET`s each URL. The server resolves the registered name to an FQCN, calls `renderPsxComponent($fqcn, $props)`, and returns the rendered HTML with the configured `Cache-Control` header.
+3. `usephp.js` finds all `[data-usephp-defer-url]` elements after `DOMContentLoaded` and `GET`s each URL. The framework flips an internal flag, re-invokes the wrapper in endpoint mode (so it returns the real content instead of the placeholder), and responds with the configured `Cache-Control`.
 4. The placeholder is replaced in place with the real component.
 5. Because each deferred endpoint has its own URL, each can carry its own cache policy — `public, s-maxage=60` for a shared announcement bar, `private, no-store` for a session-coupled `UserHeader`, etc.
 
 ### Passing data from the parent
 
-Any attribute besides `defer` and `fallback` is forwarded as a query parameter:
+Any prop besides `fallback` is forwarded as a query parameter on the deferred
+fetch:
 
 ```psx
-<PostComments defer="post-comments" post_id={$postId} sort="new" />
+<PostCommentsDeferred fallback={<Skeleton />} post_id={$postId} sort="new" />
 ```
 
-This becomes `GET /_defer/post-comments?post_id=123&sort=new`. The component
-reads them as `$props['post_id']`. Values must be scalar (`int`/`string`/
-`float`/`bool`) — arrays, Elements, and Closures cannot cross the URL boundary.
-All values arrive as **strings** on the server.
+This becomes `GET /_defer/post-comments?post_id=123&sort=new`. The wrapper's
+inner closure receives them as `$props['post_id']`. Values must be scalar
+(`int`/`string`/`float`/`bool`) — arrays, Elements, and Closures cannot cross
+the URL boundary. All values arrive as **strings** on the server.
 
 ### Requirements & limitations
 
-- **`defer` requires a registered name.** Boolean `<X defer />` fails at compile time. Use `defer="name"` and register the same name via `registerDeferred()` — unregistered names return 404.
-- **Deferred targets must be PSX components or `registerComponent()`-registered callables.** Class-based components (`BaseComponent` subclasses with `#[Component]`) are not yet supported as defer targets — wrap them in a `fc()` if you need this.
+- **One component per mode.** Use a base component for inline rendering and a wrapper carrying `Defer` for the deferred endpoint. Don't try to switch modes on the same component at the call site.
+- **Defer names are URL-safe and unique.** Pattern: `[A-Za-z0-9_-]+`. Two wrappers attempting to register the same name fail at compile time.
+- **Class-based defer targets are supported.** Annotate the class with `#[Defer(name: '...')]`; `register()` auto-wires the endpoint. The class itself decides what `render()` produces in endpoint mode.
 - **Params must be scalar.** They travel through the URL query string, so `int`/`string`/`float`/`bool` only (bools are coerced to `'1'/'0'`). Arrays, Elements, Closures, and resources are rejected at render time.
 - **Authorization is the component's responsibility.** The name and params are visible in the URL — for endpoints that surface sensitive data, check session/permissions inside the component. (HMAC signing is no longer needed; the name is a public entry-point identifier.)
-- **Nested defer works.** A deferred component's output may itself contain `<X defer="…" />` placeholders; `usephp.js` recursively hydrates them.
-- **Per-page defer cache.** `usephp.js` keeps an in-memory `Map<URL, DocumentFragment>` for the lifetime of the page. Partial updates that re-emit the same defer placeholder reuse the cached fragment instead of re-fetching. Cache is keyed by URL, so changing params produces a new entry; a full page reload clears it. The cache is bounded at 64 entries with simple LRU eviction so list-style pages that defer per-row fragments (`<Comment defer="comment" id={$id} />` × N) cannot grow it without limit.
+- **Nested defer works.** A deferred component's output may itself contain `<...Deferred />` placeholders; `usephp.js` recursively hydrates them.
+- **Per-page defer cache.** `usephp.js` keeps an in-memory `Map<URL, DocumentFragment>` for the lifetime of the page. Partial updates that re-emit the same defer placeholder reuse the cached fragment instead of re-fetching. Cache is keyed by URL, so changing params produces a new entry; a full page reload clears it. The cache is bounded at 64 entries with simple LRU eviction so list-style pages that defer per-row fragments (`<CommentDeferred id={$id} />` × N) cannot grow it without limit.
 - **No-JS users see the fallback only.** This is the documented trade-off: the deferred component never renders without JavaScript.
 - **Framework integration:** call `UsePHP::handleDeferred()` from your controller; it returns the rendered HTML for `GET /_defer/...` requests, or `null` otherwise. Mirrors `handleAction()`. The prefix is configurable via `setDeferPrefix('/api/_d')`.
 

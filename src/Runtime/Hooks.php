@@ -4,8 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Runtime;
 
-use function Polidog\UsePhp\Html\getFunctionComponentName;
-
+use Polidog\UsePhp\Component\Defer;
 use Polidog\UsePhp\Storage\StorageType;
 
 /**
@@ -84,40 +83,28 @@ function useEffect(callable $callback, ?array $deps = null): void
 /**
  * Wrap a function component for direct invocation with useState support.
  *
+ * When `$defer` is supplied, the returned wrapper emits an `H::defer(...)`
+ * placeholder on the page-render path and runs the inner component on the
+ * defer-endpoint render path. The `Defer` value travels on the returned
+ * {@see FunctionComponent}, so `usephp compile` can pick it up and
+ * auto-register the endpoint without a manual `registerDeferred()` call.
+ *
  * @param callable(array<string, mixed>): Element $component
  * @param string|null $key State management key
  * @param StorageType $storageType Storage type for component state
- * @return callable(array<string, mixed>): Element
+ * @param Defer|null $defer Optional deferred-endpoint configuration
  */
-function fc(callable $component, ?string $key = null, StorageType $storageType = StorageType::Session): callable
-{
-    return function (array $props = []) use ($component, $key, $storageType): Element {
-        $componentName = getFunctionComponentName($component);
-        $instanceKey = $key ?? ($props['key'] ?? null);
-        unset($props['key']);
+function fc(
+    callable $component,
+    ?string $key = null,
+    StorageType $storageType = StorageType::Session,
+    ?Defer $defer = null,
+): FunctionComponent {
+    $closure = $component instanceof \Closure
+        ? $component
+        : \Closure::fromCallable($component);
 
-        $instanceId = RenderContext::beginComponent($componentName, $instanceKey);
-        $state = ComponentState::getInstance($instanceId, $storageType);
-        ComponentState::reset();
-
-        $result = $component($props);
-
-        RenderContext::endComponent();
-
-        // Wrap with component container for snapshot support
-        $wrapperProps = ['data-usephp' => $instanceId];
-
-        if ($storageType === StorageType::Snapshot) {
-            $snapshot = $state->createSnapshot();
-            $app = RenderContext::getApp();
-            $snapshotJson = $app !== null
-                ? $app->getSnapshotSerializer()->serialize($snapshot)
-                : $snapshot->toJson();
-            $wrapperProps['data-usephp-snapshot'] = $snapshotJson;
-        }
-
-        return new Element('div', $wrapperProps, [$result]);
-    };
+    return new FunctionComponent($closure, $key, $storageType, $defer);
 }
 
 /**

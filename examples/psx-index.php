@@ -59,17 +59,12 @@ if (psxNeedsCompile($psxDir, $manifestPath)) {
 
 $app = new UsePHP();
 $app->setSnapshotSecret('phase-1-demo-secret');
+// loadComponentManifest also picks up the sidecar deferred-manifest.php
+// emitted by `usephp compile`, which auto-registers every endpoint declared
+// by `fc(..., defer: new Defer(...))` or `#[Defer]`. UserHeaderDeferred ships
+// `cacheControl: 'private, no-store'` because UserHeader reads $_SESSION —
+// the page stays CDN-cacheable, the per-user fragment never is.
 $app->loadComponentManifest($manifestPath);
-
-// Deferred components are addressable by URL-safe name. UserHeader reads
-// $_SESSION, so we mark its endpoint `private, no-store` — the page itself
-// remains CDN-cacheable, while the per-user fragment is fetched separately
-// at /_defer/user-header and never cached by intermediaries.
-$app->registerDeferred(
-    name: 'user-header',
-    component: 'App\\Components\\Psx\\UserHeader',
-    cacheControl: 'private, no-store',
-);
 
 $router = $app->getRouter();
 $router->get('/', function (): \Polidog\UsePhp\Runtime\Element {

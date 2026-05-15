@@ -149,50 +149,19 @@ class CompilerTest extends TestCase
         self::assertStringContainsString("renderPsxComponent('App\\\\Pages\\\\Unknown'", $result);
     }
 
-    public function testDeferAttributeCompilesToHDefer(): void
+    public function testFallbackPropPassesThroughAsRegularProp(): void
     {
-        $result = $this->compileExpression('<UserHeader defer="user-header" />');
-        self::assertStringContainsString("\\Polidog\\UsePhp\\Html\\H::defer('user-header', [], null)", $result);
-        self::assertStringNotContainsString('renderPsxComponent', $result);
-    }
-
-    public function testDeferAttributeWithFallback(): void
-    {
-        $result = $this->compileExpression('<UserHeader defer="user-header" fallback={<HeaderSkeleton />} />');
-        self::assertStringContainsString("\\Polidog\\UsePhp\\Html\\H::defer('user-header', [],", $result);
-        self::assertStringContainsString('renderPsxComponent(\'HeaderSkeleton\'', $result);
-    }
-
-    public function testDeferAttributeBundlesOtherPropsAsParams(): void
-    {
-        $result = $this->compileExpression('<PostComments defer="post-comments" post_id={5} sort="new" />');
+        // After removing the magic `defer`/`fallback` handling, the parser
+        // treats every attribute identically — the wrapping deferred component
+        // (e.g. UserHeaderDeferred via fc(..., defer: ...)) reads `fallback`
+        // out of $props itself. This test pins down that nothing here is
+        // magic anymore.
+        $result = $this->compileExpression('<UserHeaderDeferred fallback={<HeaderSkeleton />} />');
         self::assertStringContainsString(
-            "\\Polidog\\UsePhp\\Html\\H::defer('post-comments', ['post_id' => 5, 'sort' => 'new'], null)",
+            "renderPsxComponent('UserHeaderDeferred', ['fallback' =>",
             $result,
         );
-    }
-
-    public function testDeferAttributeRejectsBooleanForm(): void
-    {
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('requires a registered name');
-        $this->compileExpression('<UserHeader defer />');
-    }
-
-    public function testDeferAttributeRejectsInvalidLiteralName(): void
-    {
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('must match');
-        // Slash is not URL-safe in a defer name.
-        $this->compileExpression('<UserHeader defer="bad/name" />');
-    }
-
-    public function testDeferAttributeAllowsDynamicBraceExpression(): void
-    {
-        // Brace expressions are passed through verbatim — runtime is
-        // responsible for validating the resolved value.
-        $result = $this->compileExpression('<UserHeader defer={$dyn} />');
-        self::assertStringContainsString('\\Polidog\\UsePhp\\Html\\H::defer($dyn,', $result);
+        self::assertStringNotContainsString('H::defer(', $result);
     }
 
     public function testCompilesCounterPsxFixtureToValidPhp(): void

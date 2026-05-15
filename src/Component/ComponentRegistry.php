@@ -18,6 +18,9 @@ final class ComponentRegistry
     /** @var array<string, StorageType> */
     private array $storageTypes = [];
 
+    /** @var array<string, Defer> */
+    private array $defers = [];
+
     /**
      * Register a component class.
      *
@@ -30,7 +33,40 @@ final class ComponentRegistry
         $this->components[$name] = $className;
         $this->storageTypes[$name] = $this->resolveStorageType($className);
 
+        // Explicitly clear on re-register so a class without #[Defer] cannot
+        // inherit a stale Defer from a previous class registered under the
+        // same component name (register() overwrites by name).
+        $defer = $this->resolveDefer($className);
+        if ($defer !== null) {
+            $this->defers[$name] = $defer;
+        } else {
+            unset($this->defers[$name]);
+        }
+
         return $this;
+    }
+
+    /**
+     * Read the `#[Defer]` attribute carried by a registered class, if any.
+     * Returns null when the class isn't registered or carries no `#[Defer]`.
+     */
+    public function getDefer(string $name): ?Defer
+    {
+        return $this->defers[$name] ?? null;
+    }
+
+    /**
+     * Resolve the `#[Defer]` attribute from a component class.
+     *
+     * @param class-string<ComponentInterface> $className
+     */
+    private function resolveDefer(string $className): ?Defer
+    {
+        $reflection = new ReflectionClass($className);
+        $attributes = $reflection->getAttributes(Defer::class);
+
+        $first = $attributes[0] ?? null;
+        return $first?->newInstance();
     }
 
     /**

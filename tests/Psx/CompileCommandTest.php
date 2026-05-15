@@ -359,6 +359,73 @@ class CompileCommandTest extends TestCase
         self::assertFileDoesNotExist($metaPath);
     }
 
+    public function testEmitsDeferredManifestForFcWithDefer(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/components/UserHeaderDeferred.psx',
+            "<?php\n"
+            . "namespace App\\Components;\n"
+            . "use Polidog\\UsePhp\\Component\\Defer;\n"
+            . "use Polidog\\UsePhp\\Html\\H;\n"
+            . "use function Polidog\\UsePhp\\Runtime\\fc;\n"
+            . "return fc(\n"
+            . "    fn(array \$props) => H::header(children: 'hi'),\n"
+            . "    defer: new Defer(name: 'user-header', cacheControl: 'private, no-store'),\n"
+            . ");\n",
+        );
+
+        $cmd = new CompileCommand();
+        $exitCode = $this->runCmd($cmd, [$this->workDir . '/components']);
+        self::assertSame(0, $exitCode);
+
+        $deferredPath = $this->cacheDir . '/' . CompileCommand::DEFERRED_MANIFEST_FILENAME;
+        self::assertFileExists($deferredPath, 'Compile must emit a deferred manifest sidecar.');
+
+        $entries = require $deferredPath;
+        self::assertArrayHasKey('user-header', $entries);
+        self::assertSame('App\\Components\\UserHeaderDeferred', $entries['user-header']['component']);
+        self::assertSame('private, no-store', $entries['user-header']['cacheControl']);
+    }
+
+    public function testOmitsDeferredManifestWhenNoDeferredComponents(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/components/Plain.psx',
+            "<?php\n"
+            . "namespace App;\n"
+            . "use Polidog\\UsePhp\\Html\\H;\n"
+            . "return fn() => <div>plain</div>;\n",
+        );
+
+        $cmd = new CompileCommand();
+        self::assertSame(0, $this->runCmd($cmd, [$this->workDir . '/components']));
+
+        $deferredPath = $this->cacheDir . '/' . CompileCommand::DEFERRED_MANIFEST_FILENAME;
+        self::assertFileDoesNotExist(
+            $deferredPath,
+            'No deferred components → no sidecar manifest written.',
+        );
+    }
+
+    public function testRejectsDuplicateDeferredName(): void
+    {
+        $template = static fn(string $class) => "<?php\n"
+            . "namespace App\\Components;\n"
+            . "use Polidog\\UsePhp\\Component\\Defer;\n"
+            . "use Polidog\\UsePhp\\Html\\H;\n"
+            . "use function Polidog\\UsePhp\\Runtime\\fc;\n"
+            . "return fc(\n"
+            . "    fn(array \$props) => H::div(),\n"
+            . "    defer: new Defer(name: 'dup'),\n"
+            . ");\n";
+
+        \file_put_contents($this->workDir . '/components/A.psx', $template('A'));
+        \file_put_contents($this->workDir . '/components/B.psx', $template('B'));
+
+        $cmd = new CompileCommand();
+        self::assertSame(1, $this->runCmd($cmd, [$this->workDir . '/components']));
+    }
+
     public function testCachePathForIsStable(): void
     {
         $source = $this->workDir . '/components/A.psx';
