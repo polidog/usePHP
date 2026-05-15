@@ -666,10 +666,12 @@ $app->register(UserHeaderDeferred::class); // defer エンドポイントも自�
   `Cache-Control` を一切見ません。コンポーネントが `Defer::$localCache = true`
   を指定した場合**のみ**保存します。指定が無ければメモリのみに留まるため、
   共有端末で前ユーザーのセッション依存 defer 内容が次のユーザーに漏れる
-  ことはありません。**時間による失効はありません** — 保存エントリは
-  `DEFER_CACHE_VERSION` の更新か `clearDeferCache()` で消えるまで残ります。
-  エンドポイントの `cacheControl`（サーバ / CDN キャッシュ）は**別の関心事**
-  で、このクライアント側の判断とは意図的に切り離されています。
+  ことはありません。**デフォルトでは時間による失効はありません** — 保存
+  エントリは `DEFER_CACHE_VERSION` の更新か `clearDeferCache()` で消えるまで
+  残ります。`Defer::$localCacheTtl`（秒）を指定すると経過時間でも失効させ
+  られます（下記参照）。エンドポイントの `cacheControl`（サーバ / CDN
+  キャッシュ）は**別の関心事**で、このクライアント側の判断とは意図的に
+  切り離されています。
 
 参照順は L1 → L2 → ネットワークで、L2 を見るのは opt-in したコンポーネント
 のみ。L2 ヒット時は L1 に昇格します。両層とも URL をキーにし、**64 エントリ
@@ -691,8 +693,33 @@ fc($render, defer: new Defer(name: 'announcement-bar', localCache: true));
 `usephp.js` はその属性の有無（だけ）を見て永続化を判断します。
 `localCache` と `cacheControl` は独立です。エンドポイントには
 `cacheControl: 'private, no-store'` を出しつつクライアントキャッシュを許可
-する、あるいはその逆も可能です。失効が無いので、無効化は
+する、あるいはその逆も可能です。デフォルトでは失効が無いので、無効化は
 `DEFER_CACHE_VERSION`（デプロイ）か `clearDeferCache()`（実行時）で行います。
+
+#### 時間で失効させる — `Defer::$localCacheTtl`
+
+「N 秒経ったら単純に古い扱いにしたい」場合は、`localCache: true` と
+あわせて `localCacheTtl`（秒）を指定します:
+
+```php
+#[Defer(name: 'feed', localCache: true, localCacheTtl: 60)]
+
+fc($render, defer: new Defer(name: 'feed', localCache: true, localCacheTtl: 60));
+```
+
+これは opt-in 属性の隣に**別属性** `data-usephp-defer-cache-ttl="60"` を
+追加します。保存エントリがその秒数より古くなると、次の参照で**破棄して
+ネットワークから取り直します** — フォールバックが一瞬出てから新しい
+フラグメントに置き換わります。**ハード破棄であり stale-while-revalidate
+ではありません**（古い内容の先行描画も、裏での差し替えもありません）。
+この上限は L2 `localStorage` 層のみに効きます（L1 はもともとページ単位）。
+
+`localCacheTtl: 0`（デフォルト）は時間上限なし — 素の `localCache: true`
+とマークアップも挙動も**バイト単位で同一**です。値を bare 属性に載せず
+別属性にしているのは、このデフォルトと opt-in していないプレースホルダを
+従来マークアップとバイト単位で同一に保つためです。`localCache: true` 抜き
+で正の TTL を渡すと例外になります（書き込まれないエントリを縛ることに
+なるため）。
 
 **強制リセットは JS で対応します:**
 
@@ -767,7 +794,7 @@ window.usePHP.reloadDefer('/_defer/todo-list?p=2'); // 厳密 URL で指定
 - **paramsはスカラのみ。** クエリ文字列を経由するため、`int`/`string`/`float`/`bool` のみ。`bool` は `'1'/'0'` に変換。配列・Element・Closure・リソースは渡せません。
 - **認可はコンポーネント側の責務。** 名前と params は URL に露出するため、敏感な情報を取得するエンドポイントでは、コンポーネント側でセッションや権限を確認してください（HMAC 署名は不要になりました — 名前はあくまで「公開された入口名」）。
 - **入れ子のdeferも動作します。** deferしたコンポーネントの出力内にさらに `<...Deferred />` がある場合、`usephp.js` が再帰的に hydrate します。
-- **2 段構成の defer キャッシュ（L1 インメモリ + opt-in な L2 `localStorage`）。** 永続化はコンポーネントが決め（HTTP `Cache-Control` ではなく `Defer::$localCache`、時間失効なし）、JS の強制リセット API があります — 上記 [クライアントキャッシュと強制リセット](#クライアントキャッシュと強制リセット) を参照。opt-in しないコンポーネントは従来のインメモリのみキャッシュと全く同じ挙動です。
+- **2 段構成の defer キャッシュ（L1 インメモリ + opt-in な L2 `localStorage`）。** 永続化はコンポーネントが決め（HTTP `Cache-Control` ではなく `Defer::$localCache`、デフォルトは時間失効なし・`Defer::$localCacheTtl` 秒で任意に上限可）、JS の強制リセット API があります — 上記 [クライアントキャッシュと強制リセット](#クライアントキャッシュと強制リセット) を参照。opt-in しないコンポーネントは従来のインメモリのみキャッシュと全く同じ挙動です。
 - **opt-in な明示的リロード（`Defer::$reloadable`）。** 再取得可能なラッパーを残し、`window.usePHP.reloadDefer()`・フォームの `data-usephp-reload-defer`・任意要素のクリックで defer 領域を再取得できます — 上記 [明示的リロード](#明示的リロード) を参照。リロードのたびにその URL の両キャッシュ層を先に破棄します。opt-in しないコンポーネントは解決時に置換され、マークアップはバイト一致です。
 - **JSなしのユーザーはfallbackしか見えません。** これは仕様上のトレードオフです。
 - **フレームワーク統合:** コントローラから `UsePHP::handleDeferred()` を呼んでください。defer ルート（GET `/_defer/...`）ならレンダリング済みHTMLを返し、そうでなければ `null` を返します（`handleAction()` と同じパターン）。プレフィックスは `setDeferPrefix('/api/_d')` で変更可。

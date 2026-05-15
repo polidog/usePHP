@@ -1216,6 +1216,12 @@ final class H
      *        be re-fetched via `window.usePHP.reloadDefer()` or a form's
      *        `data-usephp-reload-defer`. `false` is byte-identical to the
      *        pre-feature markup (placeholder is replaced away on resolve).
+     * @param int $localCacheTtl Optional localStorage cache lifetime in
+     *        seconds, surfaced via `data-usephp-defer-cache-ttl` (emitted
+     *        only when positive and `$localCache` is on). `0` (default) =
+     *        no time expiry. A positive value makes usephp.js discard the
+     *        persisted entry once it is older than this and re-fetch
+     *        (hard discard, not stale-while-revalidate). L2 tier only.
      */
     public static function defer(
         string $name,
@@ -1223,6 +1229,7 @@ final class H
         ?Element $fallback = null,
         bool $localCache = false,
         bool $reloadable = false,
+        int $localCacheTtl = 0,
     ): Element {
         return new Element('__defer__', [
             '__name' => $name,
@@ -1230,6 +1237,7 @@ final class H
             '__fallback' => $fallback,
             '__localCache' => $localCache,
             '__reloadable' => $reloadable,
+            '__localCacheTtl' => $localCacheTtl,
         ], []);
     }
 

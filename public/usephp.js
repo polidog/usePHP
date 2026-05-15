@@ -27,11 +27,19 @@
     //       component sets `Defer::$localCache`. No attribute → the
     //       fragment never touches localStorage and stays L1-only, so a
     //       session-coupled component (the default) can't leak one user's
-    //       content to the next on a shared terminal. There is no time
-    //       expiry: a persisted entry lives until a `DEFER_CACHE_VERSION`
-    //       bump or `clearDeferCache()` drops it. The endpoint's
-    //       `Cache-Control` header is deliberately ignored here — it
-    //       governs server/CDN caching, a separate concern.
+    //       content to the next on a shared terminal. By default there is
+    //       no time expiry: a persisted entry lives until a
+    //       `DEFER_CACHE_VERSION` bump or `clearDeferCache()` drops it. A
+    //       component may additionally bound the entry by age via
+    //       `Defer::$localCacheTtl`, surfaced as a separate
+    //       `data-usephp-defer-cache-ttl="<seconds>"` attribute: once the
+    //       persisted entry is older than that, the next read discards it
+    //       and falls through to the network (a hard discard — the
+    //       fallback shows briefly, then the fresh fragment — not
+    //       stale-while-revalidate). No attribute → no time bound, exactly
+    //       as before. The endpoint's `Cache-Control` header is
+    //       deliberately ignored here — it governs server/CDN caching, a
+    //       separate concern.
     //
     // Read order is L1 → L2 → network. L2 is consulted only when the
     // placeholder opts in. An L2 hit is promoted into L1 so the rest of
@@ -211,6 +219,21 @@
         return placeholder.hasAttribute('data-usephp-defer-cache');
     }
 
+    // Optional hard-discard lifetime for this placeholder's L2 entry, in
+    // milliseconds. Read from `data-usephp-defer-cache-ttl` (seconds),
+    // rendered only when the component set a positive `Defer::$localCacheTtl`
+    // *and* opted into persistence. Returns 0 — no time bound, the historical
+    // behaviour — when the attribute is absent or not a positive integer.
+    // The TTL is kept on the placeholder rather than baked into the stored
+    // record so the same persisted fragment stays valid for whatever the
+    // current build asks, and re-tuning the TTL needs no version bump.
+    function placeholderCacheTtlMs(placeholder) {
+        const raw = placeholder.dataset.usephpDeferCacheTtl;
+        if (!raw) return 0;
+        const ttl = parseInt(raw, 10);
+        return Number.isFinite(ttl) && ttl > 0 ? ttl * 1000 : 0;
+    }
+
     // Evict oldest-`storedAt`-first until under the cap, so a long-lived
     // page that keeps deferring fresh URLs can't grow localStorage
     // unbounded. This is a storage bound, not a validity policy — entries
@@ -280,11 +303,15 @@
     }
 
     // Return a fresh DocumentFragment for a persisted entry, or null on
-    // miss / corruption / version mismatch (pruning the bad entry). No
-    // time check — entries are valid until a version bump or
-    // clearDeferCache() removes them. The per-record version guards
-    // against a stale write landing from an older still-open tab.
-    function readPersisted(url) {
+    // miss / corruption / version mismatch / age-out (pruning the bad
+    // entry). `maxAgeMs` is the placeholder's optional hard-discard
+    // lifetime: 0 (the default) means no time check — entries are valid
+    // until a version bump or clearDeferCache() removes them; a positive
+    // value discards the entry once `storedAt` is older than that, so the
+    // caller falls through to a fresh network fetch. The per-record
+    // version guards against a stale write landing from an older
+    // still-open tab.
+    function readPersisted(url, maxAgeMs = 0) {
         if (!lsAvailable) return null;
         let raw;
         try {
@@ -304,6 +331,16 @@
             !rec ||
             typeof rec.html !== 'string' ||
             rec.v !== DEFER_CACHE_VERSION
+        ) {
+            removePersisted(url);
+            return null;
+        }
+        // Component-declared hard discard. Treat a missing/garbled
+        // storedAt as infinitely old so a positive TTL always re-fetches
+        // rather than serving an entry it can't date.
+        if (
+            maxAgeMs > 0 &&
+            Date.now() - (typeof rec.storedAt === 'number' ? rec.storedAt : 0) > maxAgeMs
         ) {
             removePersisted(url);
             return null;
@@ -615,6 +652,10 @@
         // into localStorage persistence, so L2 is bypassed for both reads
         // and writes and behaviour matches the old L1-only cache.
         const wantsLocalCache = placeholderWantsLocalCache(placeholder);
+        // Optional hard-discard age for the persisted entry (0 = none).
+        // Only meaningful alongside wantsLocalCache; it gates the L2 read
+        // below and never affects L1, which is per-page anyway.
+        const localCacheTtlMs = placeholderCacheTtlMs(placeholder);
 
         // L1 hit: skip the network round-trip and reuse the previously
         // fetched fragment. Clone so each placeholder gets its own nodes,
@@ -637,7 +678,7 @@
         // subsequent same-page hits and LRU bookkeeping go through the
         // shared in-memory path.
         if (wantsLocalCache) {
-            const persisted = readPersisted(url);
+            const persisted = readPersisted(url, localCacheTtlMs);
             if (persisted) {
                 rememberDeferFragment(url, persisted.cloneNode(true));
                 if (isCurrent()) placeDeferredFragment(placeholder, persisted);

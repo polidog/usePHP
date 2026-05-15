@@ -674,10 +674,12 @@ the URL boundary. All values arrive as **strings** on the server.
   **only** when the component sets `Defer::$localCache = true`; without it
   the fragment stays memory-only, so a session-coupled component (the
   default) can't leak one user's content to the next on a shared terminal.
-  **There is no time expiry** — a persisted entry lives until a
-  `DEFER_CACHE_VERSION` bump or `clearDeferCache()` removes it. The
-  endpoint's `cacheControl` is a **separate** concern (server/CDN caching)
-  and is intentionally decoupled from this client decision.
+  **By default there is no time expiry** — a persisted entry lives until a
+  `DEFER_CACHE_VERSION` bump or `clearDeferCache()` removes it. Set
+  `Defer::$localCacheTtl` (seconds) to additionally bound it by age (see
+  below). The endpoint's `cacheControl` is a **separate** concern
+  (server/CDN caching) and is intentionally decoupled from this client
+  decision.
 
 Read order is L1 → L2 → network; L2 is consulted only for components that
 opted in. An L2 hit is promoted into L1. Both tiers are keyed by URL and
@@ -699,9 +701,34 @@ This renders `<div data-usephp-defer-url="…" data-usephp-defer-cache>`;
 `usephp.js` keys off that bare attribute's presence (and nothing else) to
 decide persistence. `localCache` and `cacheControl` are independent: you
 can ship `cacheControl: 'private, no-store'` for the endpoint while still
-allowing the client cache, or vice versa. Because there's no expiry,
-invalidate via `DEFER_CACHE_VERSION` (deploy) or `clearDeferCache()`
-(runtime).
+allowing the client cache, or vice versa. Because there's no expiry by
+default, invalidate via `DEFER_CACHE_VERSION` (deploy) or
+`clearDeferCache()` (runtime).
+
+#### Optional time bound — `Defer::$localCacheTtl`
+
+If a fragment should simply go stale after N seconds, set
+`localCacheTtl` (seconds) alongside `localCache: true`:
+
+```php
+#[Defer(name: 'feed', localCache: true, localCacheTtl: 60)]
+
+fc($render, defer: new Defer(name: 'feed', localCache: true, localCacheTtl: 60));
+```
+
+This adds a **separate** `data-usephp-defer-cache-ttl="60"` attribute next
+to the bare opt-in. Once the persisted entry is older than that, the next
+read **discards it and re-fetches from the network** — the fallback shows
+briefly, then the fresh fragment. It is a **hard discard, not
+stale-while-revalidate** (no stale paint, no background swap). The bound
+applies to the L2 `localStorage` tier only; L1 is per-page anyway.
+
+`localCacheTtl: 0` (the default) means no time bound — byte-identical
+markup and behaviour to a plain `localCache: true`. A separate attribute
+(rather than a value on the bare opt-in) keeps that default, and every
+non-opted-in placeholder, byte-identical to the pre-feature markup. A
+positive TTL without `localCache: true` throws (it would bound an entry
+that's never written).
 
 **Forced reset is handled in JS:**
 
@@ -777,7 +804,7 @@ replaced away on resolve, byte-identical markup.
 - **Params must be scalar.** They travel through the URL query string, so `int`/`string`/`float`/`bool` only (bools are coerced to `'1'/'0'`). Arrays, Elements, Closures, and resources are rejected at render time.
 - **Authorization is the component's responsibility.** The name and params are visible in the URL — for endpoints that surface sensitive data, check session/permissions inside the component. (HMAC signing is no longer needed; the name is a public entry-point identifier.)
 - **Nested defer works.** A deferred component's output may itself contain `<...Deferred />` placeholders; `usephp.js` recursively hydrates them.
-- **Two-tier defer cache (L1 in-memory + opt-in L2 `localStorage`).** Component-decided persistence (`Defer::$localCache`, not the HTTP `Cache-Control`; no time expiry) and a JS forced-reset API — see [Client-side cache & forced reset](#client-side-cache--forced-reset) above. Components that don't opt in behave exactly like the previous in-memory-only cache.
+- **Two-tier defer cache (L1 in-memory + opt-in L2 `localStorage`).** Component-decided persistence (`Defer::$localCache`, not the HTTP `Cache-Control`; no time expiry by default, optionally bounded by `Defer::$localCacheTtl` seconds) and a JS forced-reset API — see [Client-side cache & forced reset](#client-side-cache--forced-reset) above. Components that don't opt in behave exactly like the previous in-memory-only cache.
 - **Opt-in explicit reload (`Defer::$reloadable`).** Keeps a re-targetable wrapper so a deferred region can be re-fetched via `window.usePHP.reloadDefer()`, a form's `data-usephp-reload-defer`, or a click on any element — see [Explicit reload](#explicit-reload) above. Each reload busts both cache tiers for that URL first. Components that don't opt in are replaced away on resolve, byte-identical markup.
 - **No-JS users see the fallback only.** This is the documented trade-off: the deferred component never renders without JavaScript.
 - **Framework integration:** call `UsePHP::handleDeferred()` from your controller; it returns the rendered HTML for `GET /_defer/...` requests, or `null` otherwise. Mirrors `handleAction()`. The prefix is configurable via `setDeferPrefix('/api/_d')`.

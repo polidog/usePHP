@@ -112,6 +112,48 @@ class DeferAttributeTest extends TestCase
         self::assertTrue($element->props['__reloadable']);
     }
 
+    public function testLocalCacheTtlDefaultsToZeroAndPropagatesAsZero(): void
+    {
+        // 0 = no time bound: behaviour and (per RendererTest) markup are
+        // byte-identical to a plain `localCache: true` / no opt-in at all.
+        $defer = new Defer(name: 'x');
+        self::assertSame(0, $defer->localCacheTtl);
+
+        $element = $defer->buildPlaceholder(['fallback' => H::span()]);
+        self::assertArrayHasKey('__localCacheTtl', $element->props);
+        self::assertSame(0, $element->props['__localCacheTtl']);
+    }
+
+    public function testLocalCacheTtlPropagatesIntoPlaceholder(): void
+    {
+        // A positive TTL must ride through buildPlaceholder() onto the
+        // H::defer element so the renderer can emit
+        // data-usephp-defer-cache-ttl for usephp.js to age the L2 entry.
+        $defer = new Defer(name: 'x', localCache: true, localCacheTtl: 60);
+        self::assertSame(60, $defer->localCacheTtl);
+
+        $element = $defer->buildPlaceholder(['fallback' => H::span()]);
+        self::assertSame(60, $element->props['__localCacheTtl']);
+    }
+
+    public function testRejectsNegativeLocalCacheTtl(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('localCacheTtl must be >= 0');
+        new Defer(name: 'x', localCache: true, localCacheTtl: -1);
+    }
+
+    public function testRejectsLocalCacheTtlWithoutLocalCache(): void
+    {
+        // A TTL only bounds the localStorage entry, which is never written
+        // unless localCache opted in — so a positive TTL there is a
+        // misconfiguration worth surfacing eagerly rather than silently
+        // ignoring.
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('no effect without localCache');
+        new Defer(name: 'x', localCacheTtl: 60);
+    }
+
     public function testRegisterAutoRendersClassEndpoint(): void
     {
         // Regression for Copilot review on PR #17: registering a #[Defer]

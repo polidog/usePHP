@@ -483,4 +483,65 @@ class RendererTest extends TestCase
             $html,
         );
     }
+
+    public function testRenderDeferEmitsCacheTtlAttributeWhenSet(): void
+    {
+        $renderer = new Renderer('test');
+
+        // A positive localCacheTtl is surfaced as its own attribute,
+        // sitting right after the bare opt-in it refines. Pinned exactly
+        // so the markup contract usephp.js parses can't drift.
+        $element = H::defer('feed', [], null, true, false, 60);
+        $html = $renderer->renderElement($element);
+
+        $this->assertSame(
+            '<div data-usephp-defer-url="/_defer/feed"'
+            . ' data-usephp-defer-cache data-usephp-defer-cache-ttl="60"></div>',
+            $html,
+        );
+    }
+
+    public function testRenderDeferOmitsCacheTtlAttributeWhenZero(): void
+    {
+        $renderer = new Renderer('test');
+
+        // ttl 0 (the default) → no attribute, so an opted-in component
+        // with no TTL is byte-for-byte identical to before this feature.
+        $this->assertSame(
+            '<div data-usephp-defer-url="/_defer/x" data-usephp-defer-cache></div>',
+            $renderer->renderElement(H::defer('x', [], null, true, false, 0)),
+        );
+        $this->assertStringNotContainsString(
+            'data-usephp-defer-cache-ttl',
+            $renderer->renderElement(H::defer('y', [], null, true)),
+        );
+    }
+
+    public function testRenderDeferOmitsCacheTtlAttributeWithoutLocalCache(): void
+    {
+        $renderer = new Renderer('test');
+
+        // The Defer constructor rejects ttl-without-localCache, but a raw
+        // H::defer() call can still pass it; the renderer must not emit a
+        // dangling attribute usephp.js would ignore (no opt-in → no L2).
+        $html = $renderer->renderElement(H::defer('x', [], null, false, false, 60));
+        $this->assertSame('<div data-usephp-defer-url="/_defer/x"></div>', $html);
+    }
+
+    public function testRenderDeferEmitsCacheTtlAndNameTogether(): void
+    {
+        $renderer = new Renderer('test');
+
+        // All three opt-ins compose; attribute order is pinned as
+        // url, cache, cache-ttl, name.
+        $element = H::defer('todo-list', ['page' => 2], null, true, true, 30);
+        $html = $renderer->renderElement($element);
+
+        $this->assertSame(
+            '<div data-usephp-defer-url="/_defer/todo-list?page=2"'
+            . ' data-usephp-defer-cache data-usephp-defer-cache-ttl="30"'
+            . ' data-usephp-defer-name="todo-list"></div>',
+            $html,
+        );
+    }
 }
