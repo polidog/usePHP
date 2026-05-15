@@ -1,0 +1,15 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Components\Psx;
+
+use Polidog\UsePhp\Html\H;
+
+// Pure, side-effect-free placeholder rendered in the initial (cacheable)
+// response while UserHeader is being fetched.
+return fn(array $props) => (
+    <header className="user-header user-header--skeleton" aria-busy="true">
+        <span>...</span>
+    </header>
+);

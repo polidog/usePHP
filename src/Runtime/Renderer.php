@@ -269,6 +269,11 @@ final class Renderer
             return $this->renderChildren($element->children);
         }
 
+        // Handle deferred placeholder
+        if ($element->type === '__defer__') {
+            return $this->renderDeferred($element);
+        }
+
         $tag = $element->type;
         $props = $element->props;
         $hasAction = isset($props['wire:click']);
@@ -400,6 +405,46 @@ final class Renderer
         }
 
         return $html;
+    }
+
+    /**
+     * Render a deferred placeholder. Embeds an HMAC-signed payload that
+     * usephp.js sends back via POST after page load to fetch and swap in the
+     * real component HTML.
+     */
+    private function renderDeferred(Element $element): string
+    {
+        $fqcn = (string) ($element->props['__fqcn'] ?? '');
+        /** @var array<string, mixed> $props */
+        $props = $element->props['__props'] ?? [];
+        $fallback = $element->props['__fallback'] ?? null;
+
+        try {
+            $payload = json_encode(
+                ['fqcn' => $fqcn, 'props' => $props],
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+            );
+        } catch (\JsonException $e) {
+            throw new \RuntimeException(
+                "Deferred component '$fqcn' has non-JSON-serializable props: " . $e->getMessage(),
+                0,
+                $e,
+            );
+        }
+
+        $serializer = $this->snapshotSerializer ?? new SnapshotSerializer();
+        $sig = $serializer->signString($payload);
+
+        $fallbackHtml = $fallback instanceof Element || is_string($fallback)
+            ? $this->renderElement($fallback)
+            : '';
+
+        return sprintf(
+            '<div data-usephp-defer-payload="%s" data-usephp-defer-sig="%s">%s</div>',
+            htmlspecialchars($payload, ENT_QUOTES, 'UTF-8'),
+            htmlspecialchars($sig, ENT_QUOTES, 'UTF-8'),
+            $fallbackHtml,
+        );
     }
 
     /**

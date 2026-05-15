@@ -1,0 +1,22 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Components\Psx;
+
+use Polidog\UsePhp\Html\H;
+
+// Reads $_SESSION on the server, so the rendered output depends on the user.
+// Because this component is loaded via `defer` from a CDN-cacheable page, the
+// session lookup happens in a separate POST request that the CDN does not
+// cache.
+return fn(array $props) => (
+    <header className="user-header">
+        {!empty($_SESSION['user'])
+            ? <>
+                <span>Hello, {$_SESSION['user']['name']}</span>
+                <a href="/logout">Log out</a>
+              </>
+            : <a href="/login">Log in as Alice</a>}
+    </header>
+);

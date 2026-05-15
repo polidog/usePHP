@@ -1186,6 +1186,38 @@ final class H
     }
 
     // =========================================================================
+    // Deferred Component
+    // =========================================================================
+
+    /**
+     * Create a deferred component placeholder. The component identified by
+     * $fqcn is NOT rendered at SSR time — only the $fallback element is
+     * embedded in the response. usephp.js then issues a POST to the same URL
+     * after page load, the server renders the component, and the placeholder
+     * is replaced in place.
+     *
+     * This keeps the main HTML free of per-user content so it can be cached
+     * by a CDN; the deferred fragment is fetched separately with the user's
+     * cookies/session intact.
+     *
+     * @param string $fqcn Fully-qualified class name registered with the
+     *                     PSX manifest or via UsePHP::registerComponent().
+     * @param array<string, mixed> $props JSON-serializable props.
+     * @param Element|null $fallback Fallback element rendered immediately.
+     */
+    public static function defer(
+        string $fqcn,
+        array $props = [],
+        ?Element $fallback = null,
+    ): Element {
+        return new Element('__defer__', [
+            '__fqcn' => $fqcn,
+            '__props' => $props,
+            '__fallback' => $fallback,
+        ], []);
+    }
+
+    // =========================================================================
     // Fallback for any undefined element
     // =========================================================================
 

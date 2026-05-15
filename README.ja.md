@@ -587,6 +587,32 @@ return fn() => (
 各READMEにインストールと動作確認の手順をまとめています。LSP / tree-sitter
 grammar / PHPStan extension はここでは扱わず、別リポジトリで提供する予定です。
 
+## 遅延レンダリング（CDNキャッシュ対応の部分ハイドレーション）
+
+ログイン名・カート個数・A/Bバケットなど「ユーザーごとに違うけど、それ以外
+はキャッシュに乗せたい」コンポーネントは `defer` 属性でマークします。SSR
+時にはフォールバックだけが埋め込まれ、本体はページ読み込み後に別のPOST
+リクエストで取得されます。
+
+```psx
+<UserHeader defer fallback={<HeaderSkeleton />} />
+```
+
+実行時の流れ:
+
+1. SSRは `<div data-usephp-defer-payload="..." data-usephp-defer-sig="...">` というプレースホルダ（中身はレンダリング済みのfallback）を出力します。payload はsnapshot secret によるHMACで署名されているので、クライアントから別コンポーネントを偽装して呼び出すことはできません。
+2. メインHTMLはユーザー状態に依存しないので、CDNエッジでキャッシュできます。
+3. `usephp.js` が `DOMContentLoaded` 後に `[data-usephp-defer-payload]` を見つけ、payload を POST で送り返します。サーバーは署名を検証し、`renderPsxComponent($fqcn, $props)` を呼び、レンダリング結果を返します。
+4. プレースホルダがその場で本体のHTMLに置き換わります。
+
+### 要件と制約
+
+- **snapshot secret を必ず設定する。** `defer` は snapshot と同じHMAC鍵を使います。本番環境では必ず `UsePHP::setSnapshotSecret(...)` を呼び出してください。
+- **deferの対象はPSXコンポーネントまたは `registerComponent()` で登録した callable のみ。** クラスベースコンポーネント（`BaseComponent` 継承＋ `#[Component]`）は現状未対応です。必要なら `fc()` でラップしてください。
+- **propsはJSONシリアライズ可能なものだけ。** Closure・Element・リソースは渡せません。deferコンポーネントの prop に Element を渡すとレンダリング時にエラーになります。
+- **JSなしのユーザーはfallbackしか見えません。** これは仕様上のトレードオフです。
+- **フレームワーク統合:** コントローラから `UsePHP::handleDeferred()` を呼んでください。defer リクエストならレンダリング済みHTMLを返し、そうでなければ `null` を返します（`handleAction()` と同じパターン）。
+
 ## 生成されるHTML
 
 ```php

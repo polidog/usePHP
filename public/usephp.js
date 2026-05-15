@@ -1,10 +1,10 @@
 /**
- * usePHP - Minimal JS for partial page updates
- * Falls back to full page reload if JS is disabled
- * Supports snapshot-based state management
+ * usePHP - Minimal JS for partial page updates and deferred component fetches.
+ * Falls back to full page reload if JS is disabled.
+ * Supports snapshot-based state management.
  *
- * Security note: innerHTML is used intentionally here as the HTML content
- * comes from our own server endpoint, not from user input.
+ * Security note: innerHTML/outerHTML are used intentionally here as the HTML
+ * content comes from our own server endpoint, not from user input.
  */
 (function() {
     document.addEventListener('submit', async function(e) {
@@ -54,6 +54,9 @@
                     // Remove the hidden field as it's not needed in DOM
                     snapshotField.remove();
                 }
+
+                // Newly injected HTML may contain deferred placeholders.
+                processDeferred(component);
             } else {
                 form.submit();
             }
@@ -63,4 +66,45 @@
             component.removeAttribute('aria-busy');
         }
     });
+
+    async function fetchDeferred(placeholder) {
+        const payload = placeholder.dataset.usephpDeferPayload;
+        const sig = placeholder.dataset.usephpDeferSig;
+        if (!payload || !sig) return;
+
+        placeholder.setAttribute('aria-busy', 'true');
+
+        try {
+            const formData = new FormData();
+            formData.set('_usephp_defer_payload', payload);
+            formData.set('_usephp_defer_sig', sig);
+
+            const response = await fetch(location.href, {
+                method: 'POST',
+                headers: { 'X-UsePHP-Defer': '1' },
+                body: formData,
+            });
+
+            if (!response.ok) return;
+
+            const html = await response.text();
+            // Server-rendered HTML is trusted content from our endpoint.
+            const template = document.createElement('template');
+            template.innerHTML = html;
+            placeholder.replaceWith(template.content);
+        } catch {
+            // Network/other error — leave the fallback in place.
+        }
+    }
+
+    function processDeferred(root) {
+        const scope = root || document;
+        scope.querySelectorAll('[data-usephp-defer-payload]').forEach(fetchDeferred);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => processDeferred());
+    } else {
+        processDeferred();
+    }
 })();

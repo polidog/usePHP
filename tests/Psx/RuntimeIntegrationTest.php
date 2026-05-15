@@ -161,6 +161,132 @@ class RuntimeIntegrationTest extends TestCase
         self::assertSame('p', $element->type);
     }
 
+    public function testHandleDeferredReturnsNullWhenNotADeferRequest(): void
+    {
+        $app = new UsePHP();
+        $savedPost = $_POST;
+        $savedMethod = $_SERVER['REQUEST_METHOD'] ?? null;
+        try {
+            $_POST = [];
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            self::assertNull($app->handleDeferred());
+
+            $_SERVER['REQUEST_METHOD'] = 'GET';
+            self::assertNull($app->handleDeferred());
+        } finally {
+            $_POST = $savedPost;
+            if ($savedMethod === null) {
+                unset($_SERVER['REQUEST_METHOD']);
+            } else {
+                $_SERVER['REQUEST_METHOD'] = $savedMethod;
+            }
+        }
+    }
+
+    public function testHandleDeferredRendersComponentForValidSignedPayload(): void
+    {
+        $app = new UsePHP();
+        $app->setSnapshotSecret('defer-test-secret');
+        $app->registerComponent(
+            'App\\Header',
+            static fn(array $props): Element => new Element('header', [], [($props['name'] ?? 'guest')]),
+        );
+
+        $payload = \json_encode(
+            ['fqcn' => 'App\\Header', 'props' => ['name' => 'alice']],
+            \JSON_UNESCAPED_UNICODE | \JSON_UNESCAPED_SLASHES,
+        );
+        $sig = $app->getSnapshotSerializer()->signString($payload);
+
+        $savedPost = $_POST;
+        $savedMethod = $_SERVER['REQUEST_METHOD'] ?? null;
+        try {
+            $_POST = [
+                '_usephp_defer_payload' => $payload,
+                '_usephp_defer_sig' => $sig,
+            ];
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            $html = $app->handleDeferred();
+        } finally {
+            $_POST = $savedPost;
+            if ($savedMethod === null) {
+                unset($_SERVER['REQUEST_METHOD']);
+            } else {
+                $_SERVER['REQUEST_METHOD'] = $savedMethod;
+            }
+        }
+
+        self::assertNotNull($html);
+        self::assertStringContainsString('<header>alice</header>', $html);
+    }
+
+    public function testHandleDeferredRejectsTamperedSignature(): void
+    {
+        $app = new UsePHP();
+        $app->setSnapshotSecret('defer-test-secret');
+        $app->registerComponent(
+            'App\\Header',
+            static fn(array $props): Element => new Element('header', [], ['x']),
+        );
+
+        $savedPost = $_POST;
+        $savedMethod = $_SERVER['REQUEST_METHOD'] ?? null;
+        $savedStatus = \http_response_code();
+        try {
+            $_POST = [
+                '_usephp_defer_payload' => '{"fqcn":"App\\\\Header","props":{}}',
+                '_usephp_defer_sig' => 'not-a-valid-sig',
+            ];
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            $html = $app->handleDeferred();
+            self::assertSame('Invalid defer signature', $html);
+            self::assertSame(400, \http_response_code());
+        } finally {
+            $_POST = $savedPost;
+            if ($savedMethod === null) {
+                unset($_SERVER['REQUEST_METHOD']);
+            } else {
+                $_SERVER['REQUEST_METHOD'] = $savedMethod;
+            }
+            \http_response_code($savedStatus === false ? 200 : $savedStatus);
+        }
+    }
+
+    public function testHandleDeferredRejectsUnregisteredComponent(): void
+    {
+        $app = new UsePHP();
+        $app->setSnapshotSecret('defer-test-secret');
+
+        $payload = \json_encode(
+            ['fqcn' => 'App\\NotRegistered', 'props' => []],
+            \JSON_UNESCAPED_UNICODE | \JSON_UNESCAPED_SLASHES,
+        );
+        $sig = $app->getSnapshotSerializer()->signString($payload);
+
+        $savedPost = $_POST;
+        $savedMethod = $_SERVER['REQUEST_METHOD'] ?? null;
+        $savedStatus = \http_response_code();
+        try {
+            $_POST = [
+                '_usephp_defer_payload' => $payload,
+                '_usephp_defer_sig' => $sig,
+            ];
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            $html = $app->handleDeferred();
+            self::assertNotNull($html);
+            self::assertStringContainsString('not registered', $html);
+            self::assertSame(404, \http_response_code());
+        } finally {
+            $_POST = $savedPost;
+            if ($savedMethod === null) {
+                unset($_SERVER['REQUEST_METHOD']);
+            } else {
+                $_SERVER['REQUEST_METHOD'] = $savedMethod;
+            }
+            \http_response_code($savedStatus === false ? 200 : $savedStatus);
+        }
+    }
+
     public function testInstallPsxErrorHandlerWritesRewrittenTrace(): void
     {
         $app = new UsePHP();

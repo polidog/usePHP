@@ -97,6 +97,26 @@ final class SnapshotSerializer
     }
 
     /**
+     * Sign an arbitrary string payload with the configured secret key.
+     *
+     * Used for embedding signed payloads in the HTML response (e.g. deferred
+     * component placeholders) so the server can verify a round-tripped value
+     * has not been tampered with.
+     */
+    public function signString(string $payload): string
+    {
+        return hash_hmac(self::CHECKSUM_ALGORITHM, $payload, $this->secretKey);
+    }
+
+    /**
+     * Verify a payload + signature pair produced by signString().
+     */
+    public function verifyString(string $payload, string $signature): bool
+    {
+        return hash_equals($this->signString($payload), $signature);
+    }
+
+    /**
      * Create a new serializer with a different secret key.
      */
     public function withSecretKey(string $secretKey): self

@@ -149,6 +149,39 @@ class CompilerTest extends TestCase
         self::assertStringContainsString("renderPsxComponent('App\\\\Pages\\\\Unknown'", $result);
     }
 
+    public function testDeferAttributeCompilesToHDefer(): void
+    {
+        $result = $this->compileExpression('<UserHeader defer />');
+        self::assertStringContainsString("\\Polidog\\UsePhp\\Html\\H::defer('UserHeader', [], null)", $result);
+        self::assertStringNotContainsString('renderPsxComponent', $result);
+    }
+
+    public function testDeferAttributeWithFallback(): void
+    {
+        $result = $this->compileExpression('<UserHeader defer fallback={<HeaderSkeleton />} />');
+        self::assertStringContainsString("\\Polidog\\UsePhp\\Html\\H::defer('UserHeader', [],", $result);
+        self::assertStringContainsString('renderPsxComponent(\'HeaderSkeleton\'', $result);
+    }
+
+    public function testDeferAttributePreservesOtherProps(): void
+    {
+        $result = $this->compileExpression('<UserHeader defer initial={5} title="x" />');
+        self::assertStringContainsString(
+            "\\Polidog\\UsePhp\\Html\\H::defer('UserHeader', ['initial' => 5, 'title' => 'x'], null)",
+            $result,
+        );
+    }
+
+    public function testDeferResolvesFqcnViaUseStatement(): void
+    {
+        $source = "<?php\nnamespace App\\Pages;\nuse App\\Components\\UserHeader;\nreturn fn() => <UserHeader defer />;";
+        $result = $this->compiler->compile($source);
+        self::assertStringContainsString(
+            "\\Polidog\\UsePhp\\Html\\H::defer('App\\\\Components\\\\UserHeader'",
+            $result,
+        );
+    }
+
     public function testCompilesCounterPsxFixtureToValidPhp(): void
     {
         $sourcePath = \dirname(__DIR__, 2) . '/examples/components/psx/Counter.psx';
