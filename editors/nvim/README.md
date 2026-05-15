@@ -24,12 +24,23 @@ it to use `editors/nvim` as its runtime root.
 {
   'polidog/usePHP',
   ft = 'psx',
+  init = function()
+    vim.filetype.add({ extension = { psx = 'psx' } })
+  end,
   config = function(plugin)
     vim.opt.runtimepath:append(plugin.dir .. '/editors/nvim')
-    vim.cmd('runtime! ftdetect/psx.vim')
+    vim.cmd('runtime! syntax/psx.vim')
+    vim.cmd('runtime! ftplugin/psx.vim')
   end,
 }
 ```
+
+`init` runs at startup (before the lazy-load), so `.psx` gets the
+`psx` filetype, which then fires the `ft = 'psx'` load trigger. `config`
+re-sources `syntax/psx.vim` and `ftplugin/psx.vim` for the buffer that
+just triggered the load — the `FileType` autocmd has already fired by
+the time `config` runs, so `runtime! ftdetect/psx.vim` would be a no-op
+for that first buffer.
 
 ### packer.nvim
 
