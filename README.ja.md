@@ -590,30 +590,55 @@ grammar / PHPStan extension はここでは扱わず、別リポジトリで提�
 ## 遅延レンダリング（CDNキャッシュ対応の部分ハイドレーション）
 
 ログイン名・カート個数・A/Bバケットなど「ユーザーごとに違うけど、それ以外
-はキャッシュに乗せたい」コンポーネントは `defer` 属性でマークします。SSR
-時にはフォールバックだけが埋め込まれ、本体はページ読み込み後に別のPOST
-リクエストで取得されます。
+はキャッシュに乗せたい」コンポーネントは `defer="名前"` 属性でマークします。
+SSR時にはフォールバックだけが埋め込まれ、本体はページ読み込み後に
+**専用エンドポイント** `/_defer/{name}` への GET で取得されます。
 
 ```psx
-<UserHeader defer fallback={<HeaderSkeleton />} />
+<UserHeader defer="user-header" fallback={<HeaderSkeleton />} />
+```
+
+サーバ側では `registerDeferred()` で名前と対応するコンポーネント、
+そしてエンドポイント個別の `Cache-Control` を宣言します：
+
+```php
+$app->registerDeferred(
+    name: 'user-header',
+    component: 'App\\Components\\Psx\\UserHeader',
+    cacheControl: 'private, no-store', // 省略時は 'private, max-age=0'
+);
 ```
 
 実行時の流れ:
 
-1. SSRは `<div data-usephp-defer-payload="..." data-usephp-defer-sig="...">` というプレースホルダ（中身はレンダリング済みのfallback）を出力します。payload はsnapshot secret によるHMACで署名されているので、クライアントから別コンポーネントを偽装して呼び出すことはできません。
+1. SSRは `<div data-usephp-defer-url="/_defer/user-header">…fallback…</div>` を出力します。
 2. メインHTMLはユーザー状態に依存しないので、CDNエッジでキャッシュできます。
-3. `usephp.js` が `DOMContentLoaded` 後に `[data-usephp-defer-payload]` を見つけ、payload を POST で送り返します。サーバーは署名を検証し、`renderPsxComponent($fqcn, $props)` を呼び、レンダリング結果を返します。
+3. `usephp.js` が `DOMContentLoaded` 後に `[data-usephp-defer-url]` を見つけ、その URL に GET します。サーバーは登録名から FQCN を解決して `renderPsxComponent($fqcn, $props)` を呼び、レンダリング結果を返します。
 4. プレースホルダがその場で本体のHTMLに置き換わります。
+5. エンドポイントは登録時の `Cache-Control` を返すので、共通のお知らせバーは `public, s-maxage=60`、セッション依存の UserHeader は `private, no-store`、と**コンポーネント単位で**キャッシュ戦略を設定できます。
+
+### 親→子に値を渡したいとき
+
+`defer` 以外の属性は自動的にクエリパラメータに変換されます：
+
+```psx
+<PostComments defer="post-comments" post_id={$postId} sort="new" />
+```
+
+これは `GET /_defer/post-comments?post_id=123&sort=new` になります。
+コンポーネント側では `$props['post_id']` で受け取れます（スカラ値のみ可。
+配列・Element・Closure は渡せません。URL を経由するので値は**文字列化**されます）。
 
 ### 要件と制約
 
-- **snapshot secret は必須。** `defer` は snapshot と同じHMAC鍵を使います。`UsePHP::setSnapshotSecret(...)` を呼んでいない状態でdefer placeholderをレンダリングすると例外、エンドポイントも secret 未設定時はdeferリクエストを拒否します（空鍵HMACだとクライアントから署名偽造できてしまうため）。
+- **defer は登録名必須。** ブール属性としての `<X defer />` はパース時にエラーになります。`defer="name"` を使い、`registerDeferred()` で同じ名前を登録してください。未登録名は 404 を返します。
 - **deferの対象はPSXコンポーネントまたは `registerComponent()` で登録した callable のみ。** クラスベースコンポーネント（`BaseComponent` 継承＋ `#[Component]`）は現状未対応です。必要なら `fc()` でラップしてください。
-- **propsはJSONシリアライズ可能なものだけ。** Closure・Element・リソースは渡せません。deferコンポーネントの prop に Element を渡すとレンダリング時にエラーになります。
-- **入れ子のdeferも動作します。** deferしたコンポーネントの出力内にさらに `<X defer />` がある場合、`usephp.js` が再帰的に hydrate します。
-- **ページ単位の defer キャッシュ。** `usephp.js` は `Map<sig, DocumentFragment>` をページ生存期間中保持します。partial update が同じ defer placeholder を再出力した場合（state駆動コンポーネントの周囲にあるレイアウト chrome など）は、再 fetch せずキャッシュされた fragment を再利用します。キーは HMAC 署名なので、props を変えれば別エントリ。フルページリロードで消えます。同一ページ内で強制的に再取得したい場合は、props を変えて署名を変えてください。
+- **paramsはスカラのみ。** クエリ文字列を経由するため、`int`/`string`/`float`/`bool` のみ。`bool` は `'1'/'0'` に変換。配列・Element・Closure・リソースは渡せません。
+- **認可はコンポーネント側の責務。** 名前と params は URL に露出するため、敏感な情報を取得するエンドポイントでは、コンポーネント側でセッションや権限を確認してください（HMAC 署名は不要になりました — 名前はあくまで「公開された入口名」）。
+- **入れ子のdeferも動作します。** deferしたコンポーネントの出力内にさらに `<X defer="…" />` がある場合、`usephp.js` が再帰的に hydrate します。
+- **ページ単位の defer キャッシュ。** `usephp.js` は `Map<URL, DocumentFragment>` をページ生存期間中保持します。partial update が同じ defer placeholder を再出力した場合は、再 fetch せずキャッシュされた fragment を再利用します。キーは URL なので、params を変えれば別エントリ。フルページリロードで消えます。
 - **JSなしのユーザーはfallbackしか見えません。** これは仕様上のトレードオフです。
-- **フレームワーク統合:** コントローラから `UsePHP::handleDeferred()` を呼んでください。defer リクエストならレンダリング済みHTMLを返し、そうでなければ `null` を返します（`handleAction()` と同じパターン）。
+- **フレームワーク統合:** コントローラから `UsePHP::handleDeferred()` を呼んでください。defer ルート（GET `/_defer/...`）ならレンダリング済みHTMLを返し、そうでなければ `null` を返します（`handleAction()` と同じパターン）。プレフィックスは `setDeferPrefix('/api/_d')` で変更可。
 
 ## 生成されるHTML
 

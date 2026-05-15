@@ -40,6 +40,11 @@ final class UsePHP
     /** @var array<string, callable> FQCN => loaded callable */
     private array $psxLoaded = [];
 
+    /** @var array<string, array{component: string, cacheControl: ?string}> name => deferred registration */
+    private array $deferredRegistry = [];
+
+    private string $deferPrefix = Renderer::DEFAULT_DEFER_PREFIX;
+
     public function __construct()
     {
         $this->registry = new ComponentRegistry();
@@ -83,6 +88,59 @@ final class UsePHP
     {
         $this->psxLoaded[$fqcn] = $component;
         return $this;
+    }
+
+    /**
+     * Register a deferred component under a URL-safe name.
+     *
+     * The name becomes the path segment under the defer prefix (default
+     * `/_defer`), so `<X defer="user-header" />` resolves to
+     * `GET /_defer/user-header`. Each registration can carry its own
+     * Cache-Control header so per-component CDN caching becomes possible
+     * (e.g. `private, no-store` for session-coupled fragments, `public,
+     * s-maxage=60` for shared ones).
+     *
+     * @param string $name URL-safe registration name (`[A-Za-z0-9_-]+`).
+     * @param string $component FQCN of a PSX component or one registered
+     *        via registerComponent().
+     * @param string|null $cacheControl Optional Cache-Control header. When
+     *        omitted, defaults to `private, max-age=0` so per-user fragments
+     *        do not leak through shared caches by accident.
+     */
+    public function registerDeferred(
+        string $name,
+        string $component,
+        ?string $cacheControl = null,
+    ): self {
+        if (\preg_match('/^[A-Za-z0-9_-]+$/', $name) !== 1) {
+            throw new \InvalidArgumentException(
+                "Deferred component name must match `[A-Za-z0-9_-]+`, got: '$name'",
+            );
+        }
+        $this->deferredRegistry[$name] = [
+            'component' => $component,
+            'cacheControl' => $cacheControl,
+        ];
+        return $this;
+    }
+
+    /**
+     * Set the URL prefix under which deferred component endpoints are served.
+     * Default is `/_defer`. Pass without trailing slash.
+     */
+    public function setDeferPrefix(string $prefix): self
+    {
+        $prefix = '/' . \trim($prefix, '/');
+        if ($prefix === '/') {
+            throw new \InvalidArgumentException('Defer prefix must not be empty or root.');
+        }
+        $this->deferPrefix = $prefix;
+        return $this;
+    }
+
+    public function getDeferPrefix(): string
+    {
+        return $this->deferPrefix;
     }
 
     /**
@@ -273,9 +331,9 @@ final class UsePHP
                 return;
             }
 
-            // Handle deferred component requests
-            if ($request->isPost() && isset($_POST['_usephp_defer_payload'])) {
-                $html = $this->doHandleDeferred();
+            // Handle deferred component requests (GET /_defer/{name})
+            if ($this->matchesDeferRoute($request)) {
+                $html = $this->doHandleDeferred($request);
                 echo $html;
                 return;
             }
@@ -408,67 +466,74 @@ final class UsePHP
 
     /**
      * Handle a deferred component fetch and return the rendered HTML.
-     * Returns null if the request is not a valid defer request.
+     * Returns null if the request is not a defer route (caller should
+     * continue with normal routing).
      *
      * Use this from inside a framework integration so the defer endpoint
      * works without going through UsePHP::run().
      */
-    public function handleDeferred(): ?string
+    public function handleDeferred(?RequestContext $request = null): ?string
     {
-        if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !isset($_POST['_usephp_defer_payload'])) {
+        $request ??= RequestContext::fromGlobals();
+        if (!$this->matchesDeferRoute($request)) {
             return null;
         }
 
         RenderContext::setApp($this);
 
         try {
-            return $this->doHandleDeferred();
+            return $this->doHandleDeferred($request);
         } finally {
             RenderContext::clearApp();
         }
     }
 
     /**
+     * Does this request target a deferred component endpoint?
+     */
+    private function matchesDeferRoute(RequestContext $request): bool
+    {
+        if ($request->method !== 'GET') {
+            return false;
+        }
+        return $request->path === $this->deferPrefix
+            || \str_starts_with($request->path, $this->deferPrefix . '/');
+    }
+
+    /**
      * Render a deferred component request.
      */
-    private function doHandleDeferred(): string
+    private function doHandleDeferred(RequestContext $request): string
     {
-        $payload = $_POST['_usephp_defer_payload'] ?? null;
-        $sig = $_POST['_usephp_defer_sig'] ?? null;
-
-        if (!is_string($payload) || !is_string($sig)) {
-            http_response_code(400);
-            return 'Invalid defer request';
+        $prefixWithSlash = $this->deferPrefix . '/';
+        if (!\str_starts_with($request->path, $prefixWithSlash)) {
+            \http_response_code(404);
+            return 'Not Found';
+        }
+        $name = \rawurldecode(\substr($request->path, \strlen($prefixWithSlash)));
+        if ($name === '' || \str_contains($name, '/') || \preg_match('/^[A-Za-z0-9_-]+$/', $name) !== 1) {
+            \http_response_code(404);
+            return 'Not Found';
         }
 
-        // Without a secret, an empty-key HMAC would accept any payload from
-        // any client. Refuse rather than silently rendering attacker-chosen
-        // components.
-        $serializer = $this->getSnapshotSerializer();
-        if (!$serializer->hasSecretKey()) {
-            http_response_code(400);
-            return 'Defer endpoint disabled: snapshot secret not configured';
+        $registration = $this->deferredRegistry[$name] ?? null;
+        if ($registration === null) {
+            \http_response_code(404);
+            return 'Deferred component not registered: ' . \htmlspecialchars($name, \ENT_QUOTES, 'UTF-8');
         }
 
-        if (!$serializer->verifyString($payload, $sig)) {
-            http_response_code(400);
-            return 'Invalid defer signature';
+        if ($registration['cacheControl'] !== null) {
+            \header('Cache-Control: ' . $registration['cacheControl']);
+        } else {
+            \header('Cache-Control: private, max-age=0');
         }
 
-        try {
-            /** @var array{fqcn?: mixed, props?: mixed} $data */
-            $data = json_decode($payload, true, 512, JSON_THROW_ON_ERROR);
-        } catch (\JsonException) {
-            http_response_code(400);
-            return 'Invalid defer payload';
-        }
-
-        $fqcn = $data['fqcn'] ?? null;
-        $props = $data['props'] ?? [];
-
-        if (!is_string($fqcn) || !is_array($props)) {
-            http_response_code(400);
-            return 'Invalid defer payload';
+        /** @var array<string, mixed> $props */
+        $props = [];
+        foreach ($request->query as $key => $value) {
+            if (\is_scalar($value)) {
+                $props[$key] = $value;
+            }
         }
 
         // Reset render context state — this is a fresh sub-render, not a
@@ -476,10 +541,10 @@ final class UsePHP
         RenderContext::beginRender();
 
         try {
-            $element = $this->renderPsxComponent($fqcn, $props);
+            $element = $this->renderPsxComponent($registration['component'], $props);
         } catch (\RuntimeException $e) {
-            http_response_code(404);
-            return 'Deferred component not found: ' . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8');
+            \http_response_code(500);
+            return 'Failed to render deferred component: ' . \htmlspecialchars($e->getMessage(), \ENT_QUOTES, 'UTF-8');
         }
 
         return $this->renderElement($element);
@@ -638,7 +703,11 @@ final class UsePHP
         RenderContext::setApp($this);
 
         try {
-            $renderer = new Renderer('_root_', $this->getSnapshotSerializer());
+            $renderer = new Renderer(
+                '_root_',
+                $this->getSnapshotSerializer(),
+                deferPrefix: $this->deferPrefix,
+            );
             return $renderer->renderElement($element);
         } finally {
             RenderContext::clearApp();
@@ -675,6 +744,7 @@ final class UsePHP
                 $instanceId,
                 $this->getSnapshotSerializer(),
                 $storageType,
+                $this->deferPrefix,
             );
 
             return $renderer->render(fn() => $component->render());
@@ -706,6 +776,7 @@ final class UsePHP
             $instanceId,
             $this->getSnapshotSerializer(),
             $storageType,
+            $this->deferPrefix,
         );
 
         return $renderer->renderPartial(fn() => $component->render());

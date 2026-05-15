@@ -61,6 +61,16 @@ $app = new UsePHP();
 $app->setSnapshotSecret('phase-1-demo-secret');
 $app->loadComponentManifest($manifestPath);
 
+// Deferred components are addressable by URL-safe name. UserHeader reads
+// $_SESSION, so we mark its endpoint `private, no-store` — the page itself
+// remains CDN-cacheable, while the per-user fragment is fetched separately
+// at /_defer/user-header and never cached by intermediaries.
+$app->registerDeferred(
+    name: 'user-header',
+    component: 'App\\Components\\Psx\\UserHeader',
+    cacheControl: 'private, no-store',
+);
+
 $router = $app->getRouter();
 $router->get('/', function (): \Polidog\UsePhp\Runtime\Element {
     \Polidog\UsePhp\Runtime\RenderContext::beginRender();
@@ -77,6 +87,16 @@ $router->get('/todo', function (): \Polidog\UsePhp\Runtime\Element {
     return \Polidog\UsePhp\Runtime\RenderContext::getApp()
         ->renderPsxComponent('App\\Components\\Psx\\TodoList', []);
 });
+
+// Deferred endpoints serve fragment HTML and must NOT be wrapped in the
+// page chrome below — the client replaces a placeholder with the response
+// body verbatim. Handle the defer route before reaching the layout shell.
+$deferredHtml = $app->handleDeferred();
+if ($deferredHtml !== null) {
+    header('Content-Type: text/html; charset=UTF-8');
+    echo $deferredHtml;
+    exit;
+}
 
 ob_start();
 $app->run();

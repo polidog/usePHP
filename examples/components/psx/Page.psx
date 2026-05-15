@@ -13,7 +13,7 @@ use App\Components\Psx\UserHeader;
 
 return fn(array $props) => (
     <div className="page">
-        <UserHeader defer fallback={<HeaderSkeleton />} />
+        <UserHeader defer="user-header" fallback={<HeaderSkeleton />} />
         <h1>PSX demo</h1>
         <Card title="Stateful counter">
             <Counter initial={10} />
