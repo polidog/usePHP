@@ -11,8 +11,6 @@ use Polidog\UsePhp\Runtime\Renderer;
 
 use function Polidog\UsePhp\Runtime\useState;
 
-use Polidog\UsePhp\Snapshot\SnapshotSerializer;
-
 class RendererTest extends TestCase
 {
     public function testRenderSimpleElement(): void
@@ -331,76 +329,76 @@ class RendererTest extends TestCase
 
     public function testRenderDeferEmitsPlaceholderWithFallback(): void
     {
-        $serializer = new SnapshotSerializer('test-secret');
-        $renderer = new Renderer('test', $serializer);
+        $renderer = new Renderer('test');
 
         $element = H::defer(
-            'App\\Components\\UserHeader',
-            ['initial' => 1],
+            'user-header',
+            [],
             H::div(className: 'skeleton', children: 'Loading...'),
         );
 
         $html = $renderer->renderElement($element);
 
-        // Placeholder wrapper carries the signed payload.
-        $this->assertStringContainsString('data-usephp-defer-payload="', $html);
-        $this->assertStringContainsString('data-usephp-defer-sig="', $html);
-        // FQCN appears in the (JSON-escaped) payload.
-        $this->assertStringContainsString('App\\\\Components\\\\UserHeader', $html);
+        $this->assertStringContainsString('data-usephp-defer-url="/_defer/user-header"', $html);
         // Fallback is rendered inline.
         $this->assertStringContainsString('<div class="skeleton">Loading...</div>', $html);
+        // No signed payload — names are public identifiers.
+        $this->assertStringNotContainsString('data-usephp-defer-sig', $html);
+        $this->assertStringNotContainsString('data-usephp-defer-payload', $html);
     }
 
     public function testRenderDeferEmptyFallback(): void
     {
-        $renderer = new Renderer('test', new SnapshotSerializer('test-secret'));
-
-        $element = H::defer('App\\Components\\Foo');
-
-        $html = $renderer->renderElement($element);
-
-        $this->assertStringContainsString('data-usephp-defer-payload="', $html);
-        // No inner content.
-        $this->assertMatchesRegularExpression('/data-usephp-defer-sig="[a-f0-9]+"><\/div>$/', $html);
-    }
-
-    public function testRenderDeferSignatureMatchesSerializer(): void
-    {
-        $serializer = new SnapshotSerializer('test-secret');
-        $renderer = new Renderer('test', $serializer);
-
-        $element = H::defer('App\\Foo', ['x' => 1]);
-        $html = $renderer->renderElement($element);
-
-        // Extract payload and sig from the placeholder attributes.
-        \preg_match('/data-usephp-defer-payload="([^"]+)"/', $html, $payloadMatch);
-        \preg_match('/data-usephp-defer-sig="([^"]+)"/', $html, $sigMatch);
-        $payload = \htmlspecialchars_decode($payloadMatch[1], ENT_QUOTES);
-        $sig = $sigMatch[1];
-
-        $this->assertTrue($serializer->verifyString($payload, $sig));
-    }
-
-    public function testRenderDeferThrowsWhenSecretNotConfigured(): void
-    {
-        // No serializer at all → renderDeferred constructs an empty-key one
-        // internally and must refuse to emit a forgeable placeholder.
         $renderer = new Renderer('test');
-        $element = H::defer('App\\Foo');
+
+        $element = H::defer('foo');
+
+        $html = $renderer->renderElement($element);
+
+        // No inner content between the wrapper tags.
+        $this->assertSame('<div data-usephp-defer-url="/_defer/foo"></div>', $html);
+    }
+
+    public function testRenderDeferEncodesScalarParamsAsQueryString(): void
+    {
+        $renderer = new Renderer('test');
+
+        $element = H::defer('post-comments', ['post_id' => 123, 'sort' => 'new']);
+        $html = $renderer->renderElement($element);
+
+        $this->assertStringContainsString(
+            'data-usephp-defer-url="/_defer/post-comments?post_id=123&amp;sort=new"',
+            $html,
+        );
+    }
+
+    public function testRenderDeferUsesCustomPrefix(): void
+    {
+        $renderer = new Renderer('test', deferPrefix: '/api/_d');
+
+        $element = H::defer('user-header');
+        $html = $renderer->renderElement($element);
+
+        $this->assertStringContainsString('data-usephp-defer-url="/api/_d/user-header"', $html);
+    }
+
+    public function testRenderDeferThrowsForInvalidName(): void
+    {
+        $renderer = new Renderer('test');
+        $element = H::defer('not/allowed');
 
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('requires a snapshot secret');
+        $this->expectExceptionMessage('URL-safe');
         $renderer->renderElement($element);
     }
 
-    public function testRenderDeferThrowsWhenSecretIsEmpty(): void
+    public function testRenderDeferRejectsNonScalarParams(): void
     {
-        // Empty-key serializer explicitly passed in.
-        $renderer = new Renderer('test', new SnapshotSerializer(''));
-        $element = H::defer('App\\Foo');
+        $renderer = new Renderer('test');
+        $element = H::defer('x', ['bad' => ['nested' => true]]);
 
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('requires a snapshot secret');
+        $this->expectExceptionMessage('must be scalar');
         $renderer->renderElement($element);
     }
 }

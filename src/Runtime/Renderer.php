@@ -13,6 +13,9 @@ use Polidog\UsePhp\Storage\StorageType;
  */
 final class Renderer
 {
+    public const DEFAULT_DEFER_PREFIX = '/_defer';
+
+
     private const SELF_CLOSING_TAGS = [
         'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
         'link', 'meta', 'param', 'source', 'track', 'wbr',
@@ -193,15 +196,18 @@ final class Renderer
     private string $componentId;
     private ?SnapshotSerializer $snapshotSerializer;
     private ?StorageType $storageType;
+    private string $deferPrefix;
 
     public function __construct(
         string $componentId,
         ?SnapshotSerializer $snapshotSerializer = null,
         ?StorageType $storageType = null,
+        string $deferPrefix = self::DEFAULT_DEFER_PREFIX,
     ) {
         $this->componentId = $componentId;
         $this->snapshotSerializer = $snapshotSerializer;
         $this->storageType = $storageType;
+        $this->deferPrefix = $deferPrefix;
     }
 
     /**
@@ -408,56 +414,54 @@ final class Renderer
     }
 
     /**
-     * Render a deferred placeholder. Embeds an HMAC-signed payload that
-     * usephp.js sends back via POST after page load to fetch and swap in the
-     * real component HTML.
+     * Render a deferred placeholder. Embeds the GET URL to a dedicated
+     * defer endpoint; usephp.js fetches it after page load and swaps in the
+     * response. The URL is name-addressed, so each deferred component can
+     * carry its own Cache-Control policy and is independently CDN-cacheable.
      */
     private function renderDeferred(Element $element): string
     {
-        $fqcn = (string) ($element->props['__fqcn'] ?? '');
-        /** @var array<string, mixed> $props */
-        $props = $element->props['__props'] ?? [];
+        $name = (string) ($element->props['__name'] ?? '');
+        /** @var array<string, mixed> $params */
+        $params = $element->props['__params'] ?? [];
         $fallback = $element->props['__fallback'] ?? null;
 
-        // Defer must be cryptographically signed. An empty-key HMAC is
-        // computable by any client, which would let them forge a payload for
-        // any registered component and have the server render it with
-        // attacker-controlled props. Fail loudly at render time so a
-        // misconfigured app cannot ship defer placeholders an attacker can
-        // replay.
-        $serializer = $this->snapshotSerializer ?? new SnapshotSerializer();
-        if (!$serializer->hasSecretKey()) {
+        if ($name === '' || preg_match('/^[A-Za-z0-9_-]+$/', $name) !== 1) {
             throw new \RuntimeException(
-                "Deferred component '$fqcn' requires a snapshot secret. "
-                . 'Call UsePHP::setSnapshotSecret(...), or pass a SnapshotSerializer '
-                . 'constructed with a secret key directly to Renderer. '
-                . 'An empty-key HMAC would let any client forge defer requests.'
+                "Deferred component name must be URL-safe (`[A-Za-z0-9_-]+`), got: '$name'",
             );
         }
 
-        try {
-            $payload = json_encode(
-                ['fqcn' => $fqcn, 'props' => $props],
-                JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
-            );
-        } catch (\JsonException $e) {
-            throw new \RuntimeException(
-                "Deferred component '$fqcn' has non-JSON-serializable props: " . $e->getMessage(),
-                0,
-                $e,
-            );
+        $queryParams = [];
+        foreach ($params as $key => $value) {
+            if ($key === '') {
+                throw new \RuntimeException(
+                    "Deferred component '$name' params must use non-empty string keys.",
+                );
+            }
+            if ($value === null) {
+                continue;
+            }
+            if (!is_scalar($value)) {
+                throw new \RuntimeException(
+                    "Deferred component '$name' param '$key' must be scalar; got " . get_debug_type($value),
+                );
+            }
+            $queryParams[$key] = is_bool($value) ? ($value ? '1' : '0') : (string) $value;
         }
 
-        $sig = $serializer->signString($payload);
+        $url = $this->deferPrefix . '/' . rawurlencode($name);
+        if ($queryParams !== []) {
+            $url .= '?' . http_build_query($queryParams);
+        }
 
         $fallbackHtml = $fallback instanceof Element || is_string($fallback)
             ? $this->renderElement($fallback)
             : '';
 
         return sprintf(
-            '<div data-usephp-defer-payload="%s" data-usephp-defer-sig="%s">%s</div>',
-            htmlspecialchars($payload, ENT_QUOTES, 'UTF-8'),
-            htmlspecialchars($sig, ENT_QUOTES, 'UTF-8'),
+            '<div data-usephp-defer-url="%s">%s</div>',
+            htmlspecialchars($url, ENT_QUOTES, 'UTF-8'),
             $fallbackHtml,
         );
     }

@@ -151,35 +151,32 @@ class CompilerTest extends TestCase
 
     public function testDeferAttributeCompilesToHDefer(): void
     {
-        $result = $this->compileExpression('<UserHeader defer />');
-        self::assertStringContainsString("\\Polidog\\UsePhp\\Html\\H::defer('UserHeader', [], null)", $result);
+        $result = $this->compileExpression('<UserHeader defer="user-header" />');
+        self::assertStringContainsString("\\Polidog\\UsePhp\\Html\\H::defer('user-header', [], null)", $result);
         self::assertStringNotContainsString('renderPsxComponent', $result);
     }
 
     public function testDeferAttributeWithFallback(): void
     {
-        $result = $this->compileExpression('<UserHeader defer fallback={<HeaderSkeleton />} />');
-        self::assertStringContainsString("\\Polidog\\UsePhp\\Html\\H::defer('UserHeader', [],", $result);
+        $result = $this->compileExpression('<UserHeader defer="user-header" fallback={<HeaderSkeleton />} />');
+        self::assertStringContainsString("\\Polidog\\UsePhp\\Html\\H::defer('user-header', [],", $result);
         self::assertStringContainsString('renderPsxComponent(\'HeaderSkeleton\'', $result);
     }
 
-    public function testDeferAttributePreservesOtherProps(): void
+    public function testDeferAttributeBundlesOtherPropsAsParams(): void
     {
-        $result = $this->compileExpression('<UserHeader defer initial={5} title="x" />');
+        $result = $this->compileExpression('<PostComments defer="post-comments" post_id={5} sort="new" />');
         self::assertStringContainsString(
-            "\\Polidog\\UsePhp\\Html\\H::defer('UserHeader', ['initial' => 5, 'title' => 'x'], null)",
+            "\\Polidog\\UsePhp\\Html\\H::defer('post-comments', ['post_id' => 5, 'sort' => 'new'], null)",
             $result,
         );
     }
 
-    public function testDeferResolvesFqcnViaUseStatement(): void
+    public function testDeferAttributeRejectsBooleanForm(): void
     {
-        $source = "<?php\nnamespace App\\Pages;\nuse App\\Components\\UserHeader;\nreturn fn() => <UserHeader defer />;";
-        $result = $this->compiler->compile($source);
-        self::assertStringContainsString(
-            "\\Polidog\\UsePhp\\Html\\H::defer('App\\\\Components\\\\UserHeader'",
-            $result,
-        );
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('requires a registered name');
+        $this->compileExpression('<UserHeader defer />');
     }
 
     public function testCompilesCounterPsxFixtureToValidPhp(): void

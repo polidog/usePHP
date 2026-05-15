@@ -7,12 +7,13 @@
  * content comes from our own server endpoint, not from user input.
  */
 (function() {
-    // Cache of already-fetched defer fragments keyed by HMAC signature.
-    // `sig = HMAC(fqcn + props)`, so identical sigs imply identical server
-    // output — partial updates that re-emit the same defer placeholder
-    // (e.g. layout chrome around a state-driven component) can reuse the
-    // fragment instead of re-fetching. In-memory only; a full page reload
-    // clears it.
+    // Cache of already-fetched defer fragments keyed by the placeholder URL.
+    // Same URL → same server output, so partial updates that re-emit the
+    // same defer placeholder (e.g. layout chrome around a state-driven
+    // component) can reuse the fragment instead of re-fetching. In-memory
+    // only; a full page reload clears it. The browser's HTTP cache also
+    // applies per the endpoint's Cache-Control, so this is a per-page
+    // de-duplication layer on top of the normal cache.
     const deferCache = new Map();
 
     document.addEventListener('submit', async function(e) {
@@ -76,16 +77,15 @@
     });
 
     async function fetchDeferred(placeholder) {
-        const payload = placeholder.dataset.usephpDeferPayload;
-        const sig = placeholder.dataset.usephpDeferSig;
-        if (!payload || !sig) return;
+        const url = placeholder.dataset.usephpDeferUrl;
+        if (!url) return;
 
         // Cache hit: skip the network round-trip and reuse the previously
         // fetched fragment. Clone so each placeholder gets its own nodes,
         // and re-run processDeferred so nested placeholders (which the
         // cached fragment still carries) hydrate too — they will normally
-        // also hit the cache by their own sig.
-        const cached = deferCache.get(sig);
+        // also hit the cache by their own URL.
+        const cached = deferCache.get(url);
         if (cached) {
             const clone = cached.cloneNode(true);
             processDeferred(clone);
@@ -96,24 +96,21 @@
         placeholder.setAttribute('aria-busy', 'true');
 
         try {
-            const formData = new FormData();
-            formData.set('_usephp_defer_payload', payload);
-            formData.set('_usephp_defer_sig', sig);
-
-            const response = await fetch(location.href, {
-                method: 'POST',
+            const response = await fetch(url, {
+                method: 'GET',
                 headers: { 'X-UsePHP-Defer': '1' },
-                body: formData,
+                credentials: 'same-origin',
             });
 
             if (!response.ok) {
-                // Log so misconfiguration (route only handles GET, server
-                // returns 400 because of bad signature, etc.) is discoverable
-                // — otherwise the user just sees the skeleton stay forever.
+                // Log so misconfiguration (unregistered name, wrong prefix,
+                // etc.) is discoverable — otherwise the user just sees the
+                // skeleton stay forever.
                 console.warn(
                     '[usePHP] defer fetch returned non-OK status:',
                     response.status,
                     response.statusText,
+                    url,
                 );
                 return;
             }
@@ -126,7 +123,7 @@
             // Store a pristine clone before the original fragment is
             // consumed by replaceWith — moving children into the DOM would
             // leave the cached entry empty otherwise.
-            deferCache.set(sig, template.content.cloneNode(true));
+            deferCache.set(url, template.content.cloneNode(true));
 
             // A deferred component's rendered output may itself contain
             // nested defer placeholders. Kick off their fetches before
@@ -136,13 +133,13 @@
         } catch (error) {
             // Network/other error — leave the fallback in place but log so
             // the failure mode is visible to developers.
-            console.warn('[usePHP] defer fetch failed:', error);
+            console.warn('[usePHP] defer fetch failed:', error, url);
         }
     }
 
     function processDeferred(root) {
         const scope = root || document;
-        scope.querySelectorAll('[data-usephp-defer-payload]').forEach(fetchDeferred);
+        scope.querySelectorAll('[data-usephp-defer-url]').forEach(fetchDeferred);
     }
 
     if (document.readyState === 'loading') {

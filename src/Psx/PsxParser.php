@@ -496,12 +496,18 @@ final class PsxParser implements PsxParserInterface
 
         // Pull off the magic `defer` and `fallback` attributes if present so
         // they don't end up in the props bag.
-        $isDeferred = false;
+        $deferNameExpr = null;
         $fallbackExpr = null;
         $remainingAttrs = [];
         foreach ($attrs as $attr) {
             if ($attr['name'] === 'defer') {
-                $isDeferred = true;
+                if ($attr['isExpr'] && $attr['value'] === 'true') {
+                    throw $this->error(
+                        "<$tagName defer /> requires a registered name. "
+                        . 'Use <' . $tagName . ' defer="name" /> instead.',
+                    );
+                }
+                $deferNameExpr = $attr['value'];
                 continue;
             }
             if ($attr['name'] === 'fallback') {
@@ -521,12 +527,18 @@ final class PsxParser implements PsxParserInterface
             $propsEntries[] = "'children' => " . $this->emitChildrenArg($children, $trailingNewlines);
         }
         $props = '[' . \implode(', ', $propsEntries) . ']';
-        $escapedFqcn = \str_replace('\\', '\\\\', $fqcn);
 
-        if ($isDeferred) {
+        if ($deferNameExpr !== null) {
+            if ($children !== null && $children !== []) {
+                throw $this->error(
+                    "<$tagName defer> cannot have children. Move them into the fallback element.",
+                );
+            }
             $fallbackArg = $fallbackExpr ?? 'null';
-            return "\\Polidog\\UsePhp\\Html\\H::defer('$escapedFqcn', $props, $fallbackArg)";
+            return "\\Polidog\\UsePhp\\Html\\H::defer($deferNameExpr, $props, $fallbackArg)";
         }
+
+        $escapedFqcn = \str_replace('\\', '\\\\', $fqcn);
 
         return "\\Polidog\\UsePhp\\Runtime\\RenderContext::getApp()->renderPsxComponent('$escapedFqcn', $props)";
     }
