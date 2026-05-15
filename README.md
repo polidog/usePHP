@@ -662,6 +662,52 @@ inner closure receives them as `$props['post_id']`. Values must be scalar
 (`int`/`string`/`float`/`bool`) — arrays, Elements, and Closures cannot cross
 the URL boundary. All values arrive as **strings** on the server.
 
+### Client-side cache & forced reset
+
+`usephp.js` puts a two-tier cache in front of every deferred fetch:
+
+- **L1 — in-memory** `Map<URL, DocumentFragment>`, per page lifetime. Always
+  on; a full reload clears it. Identical to the previous behaviour.
+- **L2 — `localStorage`**, surviving reloads and shared across tabs. Opt-in:
+  a fragment is persisted **only** when the defer endpoint's response carries
+  `Cache-Control: public` with a positive `max-age=N`. Anything `private` /
+  `no-store` / `no-cache` — including the framework default
+  `private, max-age=0` — stays memory-only, so a shared terminal can't leak
+  one user's session-coupled deferred content to the next. The persisted
+  entry's TTL mirrors the server's `max-age` (`s-maxage` is ignored — it
+  bounds shared caches, not a private browser store).
+
+Read order is L1 → L2 → network; an L2 hit is promoted into L1. Both tiers
+are keyed by URL and bounded at 64 entries (L1 LRU, L2 oldest-first), so a
+list page that defers per-row fragments can't grow them without limit.
+
+Make a deferred component L2-cacheable by giving its endpoint an explicit
+client TTL:
+
+```php
+#[Defer(name: 'announcement-bar', cacheControl: 'public, max-age=60')]
+```
+
+**Forced reset is handled in JS:**
+
+```js
+// Runtime purge (e.g. after login/logout, or a "refresh" button):
+window.usePHP.clearDeferCache();                                  // both tiers, everything
+window.usePHP.clearDeferCache('post-comments');                   // every variant of one defer name
+window.usePHP.clearDeferCache('/_defer/post-comments?post_id=1'); // one exact placeholder URL
+
+// Deploy-time invalidation: bump the constant in usephp.js. A mismatch
+// against the value persisted in localStorage wipes the whole namespace
+// before the first cache read, so old fragments can't survive a release.
+const DEFER_CACHE_VERSION = '1'; // → '2' on the next deploy
+window.usePHP.DEFER_CACHE_VERSION;                                // read the current build's value
+```
+
+Name matching is prefix-agnostic, so a custom `setDeferPrefix('/api/_d')`
+still resolves. If `localStorage` is unavailable (Safari private mode, quota
+exceeded, disabled) the L2 tier silently no-ops and L1 keeps serving the
+page.
+
 ### Requirements & limitations
 
 - **One component per mode.** Use a base component for inline rendering and a wrapper carrying `Defer` for the deferred endpoint. Don't try to switch modes on the same component at the call site.
@@ -670,7 +716,7 @@ the URL boundary. All values arrive as **strings** on the server.
 - **Params must be scalar.** They travel through the URL query string, so `int`/`string`/`float`/`bool` only (bools are coerced to `'1'/'0'`). Arrays, Elements, Closures, and resources are rejected at render time.
 - **Authorization is the component's responsibility.** The name and params are visible in the URL — for endpoints that surface sensitive data, check session/permissions inside the component. (HMAC signing is no longer needed; the name is a public entry-point identifier.)
 - **Nested defer works.** A deferred component's output may itself contain `<...Deferred />` placeholders; `usephp.js` recursively hydrates them.
-- **Per-page defer cache.** `usephp.js` keeps an in-memory `Map<URL, DocumentFragment>` for the lifetime of the page. Partial updates that re-emit the same defer placeholder reuse the cached fragment instead of re-fetching. Cache is keyed by URL, so changing params produces a new entry; a full page reload clears it. The cache is bounded at 64 entries with simple LRU eviction so list-style pages that defer per-row fragments (`<CommentDeferred id={$id} />` × N) cannot grow it without limit.
+- **Two-tier defer cache (L1 in-memory + opt-in L2 `localStorage`).** Conservative persistence and a JS forced-reset API — see [Client-side cache & forced reset](#client-side-cache--forced-reset) above. Behaviour for the default `private, max-age=0` policy is unchanged from the previous in-memory-only cache.
 - **No-JS users see the fallback only.** This is the documented trade-off: the deferred component never renders without JavaScript.
 - **Framework integration:** call `UsePHP::handleDeferred()` from your controller; it returns the rendered HTML for `GET /_defer/...` requests, or `null` otherwise. Mirrors `handleAction()`. The prefix is configurable via `setDeferPrefix('/api/_d')`.
 
