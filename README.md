@@ -612,6 +612,7 @@ What happens at runtime:
 - **Deferred targets must be PSX components or `registerComponent()`-registered callables.** Class-based components (`BaseComponent` subclasses with `#[Component]`) are not yet supported as defer targets — wrap them in a `fc()` if you need this.
 - **Props must be JSON-serializable.** Closures, Elements, and resources cannot cross the boundary. Passing an `Element` as a prop on a deferred component throws at render time.
 - **Nested defer works.** A deferred component's output may itself contain `<X defer />` placeholders; `usephp.js` recursively hydrates them.
+- **Per-page defer cache.** `usephp.js` keeps an in-memory `Map<sig, DocumentFragment>` for the lifetime of the page. Partial updates that re-emit the same defer placeholder (e.g. the layout chrome around a state-driven component) reuse the cached fragment instead of re-fetching. Cache is keyed by HMAC signature, so changing props produces a new entry; a full page reload clears it. To force a refresh on the same page, change the component's props so the signature differs.
 - **No-JS users see the fallback only.** This is the documented trade-off: the deferred component never renders without JavaScript.
 - **Framework integration:** call `UsePHP::handleDeferred()` from your controller; it returns the rendered HTML or `null` if the current request is not a defer fetch. Mirrors `handleAction()`.
 

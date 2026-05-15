@@ -611,6 +611,7 @@ grammar / PHPStan extension はここでは扱わず、別リポジトリで提�
 - **deferの対象はPSXコンポーネントまたは `registerComponent()` で登録した callable のみ。** クラスベースコンポーネント（`BaseComponent` 継承＋ `#[Component]`）は現状未対応です。必要なら `fc()` でラップしてください。
 - **propsはJSONシリアライズ可能なものだけ。** Closure・Element・リソースは渡せません。deferコンポーネントの prop に Element を渡すとレンダリング時にエラーになります。
 - **入れ子のdeferも動作します。** deferしたコンポーネントの出力内にさらに `<X defer />` がある場合、`usephp.js` が再帰的に hydrate します。
+- **ページ単位の defer キャッシュ。** `usephp.js` は `Map<sig, DocumentFragment>` をページ生存期間中保持します。partial update が同じ defer placeholder を再出力した場合（state駆動コンポーネントの周囲にあるレイアウト chrome など）は、再 fetch せずキャッシュされた fragment を再利用します。キーは HMAC 署名なので、props を変えれば別エントリ。フルページリロードで消えます。同一ページ内で強制的に再取得したい場合は、props を変えて署名を変えてください。
 - **JSなしのユーザーはfallbackしか見えません。** これは仕様上のトレードオフです。
 - **フレームワーク統合:** コントローラから `UsePHP::handleDeferred()` を呼んでください。defer リクエストならレンダリング済みHTMLを返し、そうでなければ `null` を返します（`handleAction()` と同じパターン）。
 

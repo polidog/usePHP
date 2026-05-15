@@ -7,6 +7,14 @@
  * content comes from our own server endpoint, not from user input.
  */
 (function() {
+    // Cache of already-fetched defer fragments keyed by HMAC signature.
+    // `sig = HMAC(fqcn + props)`, so identical sigs imply identical server
+    // output — partial updates that re-emit the same defer placeholder
+    // (e.g. layout chrome around a state-driven component) can reuse the
+    // fragment instead of re-fetching. In-memory only; a full page reload
+    // clears it.
+    const deferCache = new Map();
+
     document.addEventListener('submit', async function(e) {
         const form = e.target;
         if (!form.matches('[data-usephp-form]')) return;
@@ -72,6 +80,19 @@
         const sig = placeholder.dataset.usephpDeferSig;
         if (!payload || !sig) return;
 
+        // Cache hit: skip the network round-trip and reuse the previously
+        // fetched fragment. Clone so each placeholder gets its own nodes,
+        // and re-run processDeferred so nested placeholders (which the
+        // cached fragment still carries) hydrate too — they will normally
+        // also hit the cache by their own sig.
+        const cached = deferCache.get(sig);
+        if (cached) {
+            const clone = cached.cloneNode(true);
+            processDeferred(clone);
+            placeholder.replaceWith(clone);
+            return;
+        }
+
         placeholder.setAttribute('aria-busy', 'true');
 
         try {
@@ -101,6 +122,12 @@
             // Server-rendered HTML is trusted content from our endpoint.
             const template = document.createElement('template');
             template.innerHTML = html;
+
+            // Store a pristine clone before the original fragment is
+            // consumed by replaceWith — moving children into the DOM would
+            // leave the cached entry empty otherwise.
+            deferCache.set(sig, template.content.cloneNode(true));
+
             // A deferred component's rendered output may itself contain
             // nested defer placeholders. Kick off their fetches before
             // moving the fragment into the DOM so they hydrate too.
