@@ -56,13 +56,18 @@ runtime! ftdetect/psx.vim
 
 ### Native packages (Vim 8+ / Neovim)
 
+Native packages auto-source `pack/<name>/start/*/ftdetect/*.vim` from the
+runtimepath, but only when the plugin's runtime root has `ftdetect/`,
+`syntax/` and `ftplugin/` directly under it. Since the bundled files
+live in `editors/nvim/` inside this repo, you have two options:
+
 ```bash
-git clone https://github.com/polidog/usePHP \
-  ~/.local/share/nvim/site/pack/psx/start/usePHP
-# Then either symlink the sub-tree:
-ln -s ~/.local/share/nvim/site/pack/psx/start/usePHP/editors/nvim/ftdetect \
-      ~/.config/nvim/ftdetect-psx
-# …or copy the three files below into your config (see "Manual").
+# (a) clone, then symlink the editors/nvim sub-tree as a package:
+git clone https://github.com/polidog/usePHP /tmp/usePHP
+ln -s /tmp/usePHP/editors/nvim \
+      ~/.local/share/nvim/site/pack/psx/start/usePHP-psx
+
+# (b) or copy the three files into your config — see "Manual" below.
 ```
 
 ### Manual

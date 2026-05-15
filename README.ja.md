@@ -581,8 +581,8 @@ return fn() => (
 
 `.psx`ファイル向けのシンタックスハイライト定義は [`editors/`](editors/README.md) に同梱しています:
 
-- **Neovim / Vim** — [`editors/nvim/`](editors/nvim/README.md)(lazy.nvim / packer / vim-plug / 手動インストール対応)
-- **VS Code** — [`editors/vscode/`](editors/vscode/README.md)(`.vsix`ビルド または ローカルsymlink）
+- **Neovim / Vim** — [`editors/nvim/`](editors/nvim/README.md) (lazy.nvim / packer / vim-plug / 手動インストール対応)
+- **VS Code** — [`editors/vscode/`](editors/vscode/README.md) (`.vsix` ビルド または ローカル symlink)
 
 各READMEにインストールと動作確認の手順をまとめています。LSP / tree-sitter
 grammar / PHPStan extension はここでは扱わず、別リポジトリで提供する予定です。

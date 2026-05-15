@@ -31,9 +31,8 @@ vsce package          # produces vscode-psx-0.1.0.vsix
 code --install-extension vscode-psx-0.1.0.vsix
 ```
 
-`vsce` will warn about a missing `LICENSE` and `repository`; that's
-fine — `--allow-missing-repository` and `--no-license` can silence it
-if it ever errors out.
+`vsce` may warn about a missing `LICENSE` file; that's fine for local
+installs. `--no-license` silences it if it ever errors out.
 
 ### Option B — Symlink into your extensions folder
 
