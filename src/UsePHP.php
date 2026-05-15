@@ -441,7 +441,16 @@ final class UsePHP
             return 'Invalid defer request';
         }
 
-        if (!$this->getSnapshotSerializer()->verifyString($payload, $sig)) {
+        // Without a secret, an empty-key HMAC would accept any payload from
+        // any client. Refuse rather than silently rendering attacker-chosen
+        // components.
+        $serializer = $this->getSnapshotSerializer();
+        if (!$serializer->hasSecretKey()) {
+            http_response_code(400);
+            return 'Defer endpoint disabled: snapshot secret not configured';
+        }
+
+        if (!$serializer->verifyString($payload, $sig)) {
             http_response_code(400);
             return 'Invalid defer signature';
         }

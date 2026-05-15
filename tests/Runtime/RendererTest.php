@@ -380,4 +380,27 @@ class RendererTest extends TestCase
 
         $this->assertTrue($serializer->verifyString($payload, $sig));
     }
+
+    public function testRenderDeferThrowsWhenSecretNotConfigured(): void
+    {
+        // No serializer at all → renderDeferred constructs an empty-key one
+        // internally and must refuse to emit a forgeable placeholder.
+        $renderer = new Renderer('test');
+        $element = H::defer('App\\Foo');
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('requires a snapshot secret');
+        $renderer->renderElement($element);
+    }
+
+    public function testRenderDeferThrowsWhenSecretIsEmpty(): void
+    {
+        // Empty-key serializer explicitly passed in.
+        $renderer = new Renderer('test', new SnapshotSerializer(''));
+        $element = H::defer('App\\Foo');
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('requires a snapshot secret');
+        $renderer->renderElement($element);
+    }
 }

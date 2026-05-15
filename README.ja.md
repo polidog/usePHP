@@ -607,9 +607,10 @@ grammar / PHPStan extension はここでは扱わず、別リポジトリで提�
 
 ### 要件と制約
 
-- **snapshot secret を必ず設定する。** `defer` は snapshot と同じHMAC鍵を使います。本番環境では必ず `UsePHP::setSnapshotSecret(...)` を呼び出してください。
+- **snapshot secret は必須。** `defer` は snapshot と同じHMAC鍵を使います。`UsePHP::setSnapshotSecret(...)` を呼んでいない状態でdefer placeholderをレンダリングすると例外、エンドポイントも secret 未設定時はdeferリクエストを拒否します（空鍵HMACだとクライアントから署名偽造できてしまうため）。
 - **deferの対象はPSXコンポーネントまたは `registerComponent()` で登録した callable のみ。** クラスベースコンポーネント（`BaseComponent` 継承＋ `#[Component]`）は現状未対応です。必要なら `fc()` でラップしてください。
 - **propsはJSONシリアライズ可能なものだけ。** Closure・Element・リソースは渡せません。deferコンポーネントの prop に Element を渡すとレンダリング時にエラーになります。
+- **入れ子のdeferも動作します。** deferしたコンポーネントの出力内にさらに `<X defer />` がある場合、`usephp.js` が再帰的に hydrate します。
 - **JSなしのユーザーはfallbackしか見えません。** これは仕様上のトレードオフです。
 - **フレームワーク統合:** コントローラから `UsePHP::handleDeferred()` を呼んでください。defer リクエストならレンダリング済みHTMLを返し、そうでなければ `null` を返します（`handleAction()` と同じパターン）。
 

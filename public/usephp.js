@@ -91,6 +91,10 @@
             // Server-rendered HTML is trusted content from our endpoint.
             const template = document.createElement('template');
             template.innerHTML = html;
+            // A deferred component's rendered output may itself contain
+            // nested defer placeholders. Kick off their fetches before
+            // moving the fragment into the DOM so they hydrate too.
+            processDeferred(template.content);
             placeholder.replaceWith(template.content);
         } catch {
             // Network/other error — leave the fallback in place.

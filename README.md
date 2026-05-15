@@ -608,9 +608,10 @@ What happens at runtime:
 
 ### Requirements & limitations
 
-- **Set a snapshot secret.** `defer` reuses the same HMAC key used for snapshots. Always call `UsePHP::setSnapshotSecret(...)` in production so attackers cannot forge payloads.
+- **Snapshot secret is required.** `defer` reuses the snapshot HMAC key. Rendering a defer placeholder without `UsePHP::setSnapshotSecret(...)` throws, and the endpoint refuses defer fetches when no secret is set — an empty-key HMAC would let any client forge payloads.
 - **Deferred targets must be PSX components or `registerComponent()`-registered callables.** Class-based components (`BaseComponent` subclasses with `#[Component]`) are not yet supported as defer targets — wrap them in a `fc()` if you need this.
 - **Props must be JSON-serializable.** Closures, Elements, and resources cannot cross the boundary. Passing an `Element` as a prop on a deferred component throws at render time.
+- **Nested defer works.** A deferred component's output may itself contain `<X defer />` placeholders; `usephp.js` recursively hydrates them.
 - **No-JS users see the fallback only.** This is the documented trade-off: the deferred component never renders without JavaScript.
 - **Framework integration:** call `UsePHP::handleDeferred()` from your controller; it returns the rendered HTML or `null` if the current request is not a defer fetch. Mirrors `handleAction()`.
 

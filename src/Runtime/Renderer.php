@@ -419,6 +419,21 @@ final class Renderer
         $props = $element->props['__props'] ?? [];
         $fallback = $element->props['__fallback'] ?? null;
 
+        // Defer must be cryptographically signed. An empty-key HMAC is
+        // computable by any client, which would let them forge a payload for
+        // any registered component and have the server render it with
+        // attacker-controlled props. Fail loudly at render time so a
+        // misconfigured app cannot ship defer placeholders an attacker can
+        // replay.
+        $serializer = $this->snapshotSerializer ?? new SnapshotSerializer();
+        if (!$serializer->hasSecretKey()) {
+            throw new \RuntimeException(
+                "Deferred component '$fqcn' requires a snapshot secret. "
+                . 'Call UsePHP::setSnapshotSecret(...) before rendering any defer placeholder — '
+                . 'an empty-key HMAC would let any client forge defer requests.'
+            );
+        }
+
         try {
             $payload = json_encode(
                 ['fqcn' => $fqcn, 'props' => $props],
@@ -432,7 +447,6 @@ final class Renderer
             );
         }
 
-        $serializer = $this->snapshotSerializer ?? new SnapshotSerializer();
         $sig = $serializer->signString($payload);
 
         $fallbackHtml = $fallback instanceof Element || is_string($fallback)

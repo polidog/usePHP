@@ -287,6 +287,48 @@ class RuntimeIntegrationTest extends TestCase
         }
     }
 
+    public function testHandleDeferredRejectsWhenSecretNotConfigured(): void
+    {
+        // No setSnapshotSecret() call → empty-key serializer → endpoint must
+        // refuse rather than verify against an attacker-computable HMAC.
+        $app = new UsePHP();
+        $app->registerComponent(
+            'App\\Header',
+            static fn(array $props): Element => new Element('header', [], ['x']),
+        );
+
+        // Payload + a signature computed with the (empty) default key — would
+        // pass verifyString() if the endpoint did not gate on hasSecretKey().
+        $payload = \json_encode(
+            ['fqcn' => 'App\\Header', 'props' => []],
+            \JSON_UNESCAPED_UNICODE | \JSON_UNESCAPED_SLASHES,
+        );
+        $forgedSig = \hash_hmac('sha256', $payload, '');
+
+        $savedPost = $_POST;
+        $savedMethod = $_SERVER['REQUEST_METHOD'] ?? null;
+        $savedStatus = \http_response_code();
+        try {
+            $_POST = [
+                '_usephp_defer_payload' => $payload,
+                '_usephp_defer_sig' => $forgedSig,
+            ];
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            $html = $app->handleDeferred();
+            self::assertNotNull($html);
+            self::assertStringContainsString('snapshot secret not configured', $html);
+            self::assertSame(400, \http_response_code());
+        } finally {
+            $_POST = $savedPost;
+            if ($savedMethod === null) {
+                unset($_SERVER['REQUEST_METHOD']);
+            } else {
+                $_SERVER['REQUEST_METHOD'] = $savedMethod;
+            }
+            \http_response_code($savedStatus === false ? 200 : $savedStatus);
+        }
+    }
+
     public function testInstallPsxErrorHandlerWritesRewrittenTrace(): void
     {
         $app = new UsePHP();
