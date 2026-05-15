@@ -508,6 +508,7 @@ final class Renderer
         /** @var array<string, mixed> $params */
         $params = $element->props['__params'] ?? [];
         $fallback = $element->props['__fallback'] ?? null;
+        $localCache = $element->props['__localCache'] ?? false;
 
         if (!UsePHP::isValidDeferName($name)) {
             throw new \RuntimeException(
@@ -542,9 +543,17 @@ final class Renderer
             ? $this->renderElement($fallback)
             : '';
 
+        // Opt-in client-side persistence. The component decides this
+        // explicitly via `Defer::$localCache`; usephp.js keys off the bare
+        // attribute's presence and never inspects the response's
+        // Cache-Control. A component that didn't opt in produces the exact
+        // same markup as before.
+        $cacheAttr = $localCache === true ? ' data-usephp-defer-cache' : '';
+
         return sprintf(
-            '<div data-usephp-defer-url="%s">%s</div>',
+            '<div data-usephp-defer-url="%s"%s>%s</div>',
             htmlspecialchars($url, ENT_QUOTES, 'UTF-8'),
+            $cacheAttr,
             $fallbackHtml,
         );
     }

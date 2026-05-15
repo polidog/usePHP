@@ -61,6 +61,31 @@ class DeferAttributeTest extends TestCase
         new Defer(name: 'not/url-safe');
     }
 
+    public function testLocalCacheDefaultsToFalseAndPropagatesAsFalse(): void
+    {
+        // The `__localCache` prop is always present on the placeholder;
+        // it carries `false` by default. (The renderer is what omits the
+        // data-usephp-defer-cache attribute when false — see RendererTest.)
+        $defer = new Defer(name: 'x');
+        self::assertFalse($defer->localCache);
+
+        $element = $defer->buildPlaceholder(['fallback' => H::span()]);
+        self::assertArrayHasKey('__localCache', $element->props);
+        self::assertFalse($element->props['__localCache']);
+    }
+
+    public function testLocalCachePropagatesIntoPlaceholder(): void
+    {
+        // The component decides client persistence explicitly; the opt-in
+        // flag must ride through buildPlaceholder() onto the H::defer
+        // element so the renderer can emit data-usephp-defer-cache.
+        $defer = new Defer(name: 'x', localCache: true);
+        self::assertTrue($defer->localCache);
+
+        $element = $defer->buildPlaceholder(['fallback' => H::span()]);
+        self::assertTrue($element->props['__localCache']);
+    }
+
     public function testRegisterAutoRendersClassEndpoint(): void
     {
         // Regression for Copilot review on PR #17: registering a #[Defer]
