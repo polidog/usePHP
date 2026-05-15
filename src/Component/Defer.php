@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Polidog\UsePhp\Component;
 
 use Attribute;
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\UsePHP;
 
 /**
@@ -40,5 +42,51 @@ final class Defer
                 'Deferred component name must match `' . UsePHP::DEFER_NAME_PATTERN . "`, got: '$name'",
             );
         }
+    }
+
+    /**
+     * Build the page-side placeholder element from a wrapping component's
+     * props. Pulls `fallback` out (must be an Element or null), strips
+     * framework-only keys, and forwards the remaining scalar props as
+     * query-string params on the eventual `/_defer/{name}` GET.
+     *
+     * Shared by {@see \Polidog\UsePhp\Runtime\FunctionComponent} (closure
+     * wrappers from `fc(..., defer: ...)`) and the class-component PSX
+     * bridge installed in `UsePHP::register()`, so the two paths can't
+     * drift on what counts as a valid prop or fallback.
+     *
+     * @param array<string, mixed> $props
+     */
+    public function buildPlaceholder(array $props): Element
+    {
+        $fallback = $props['fallback'] ?? null;
+        // `key` is a framework-level identifier for component-state
+        // separation, not a render-time prop. It must not leak into the
+        // query string of the defer endpoint.
+        unset($props['fallback'], $props['key']);
+
+        if ($fallback !== null && !$fallback instanceof Element) {
+            throw new \InvalidArgumentException(
+                "Defer target '{$this->name}' expected `fallback` prop to be an Element, got "
+                . \get_debug_type($fallback),
+            );
+        }
+
+        /** @var array<string, scalar> $scalarProps */
+        $scalarProps = [];
+        foreach ($props as $key => $value) {
+            if ($value === null) {
+                continue;
+            }
+            if (!\is_scalar($value)) {
+                throw new \InvalidArgumentException(
+                    "Defer target '{$this->name}' prop '" . (string) $key
+                    . "' must be scalar (forwarded via query string); got " . \get_debug_type($value),
+                );
+            }
+            $scalarProps[(string) $key] = $value;
+        }
+
+        return H::defer($this->name, $scalarProps, $fallback);
     }
 }

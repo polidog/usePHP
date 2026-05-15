@@ -8,7 +8,6 @@ use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\ComponentInterface;
 use Polidog\UsePhp\Component\ComponentRegistry;
 use Polidog\UsePhp\Component\Defer;
-use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Router\NullRouter;
 use Polidog\UsePhp\Router\RequestContext;
 use Polidog\UsePhp\Router\RouteMatch;
@@ -63,11 +62,11 @@ final class UsePHP
 
     /**
      * True while {@see doHandleDeferred()} is rendering an endpoint response.
-     * Read by {@see FunctionComponent} so the wrapper skips its placeholder
-     * branch and renders the inner component inline. Class-based defer
-     * targets don't need this flag — they're routed through the dedicated
-     * class-component path inside {@see renderDeferredTarget()} only on the
-     * endpoint side, so there is no placeholder branch to skip.
+     * Read by {@see \Polidog\UsePhp\Runtime\FunctionComponent} so the wrapper
+     * skips its placeholder branch and renders the inner component inline.
+     * Class-based defer targets don't need this flag — they're routed through
+     * the dedicated class-component path inside {@see renderDeferredTarget()}
+     * only on the endpoint side, so there is no placeholder branch to skip.
      */
     private bool $renderingDeferredEndpoint = false;
 
@@ -116,43 +115,19 @@ final class UsePHP
      * The bridge handles the *page* side: when PSX compiles
      * `<MyDeferredClass fallback={<X />} />` to
      * `renderPsxComponent($fqcn, $props)`, this closure runs and emits the
-     * `H::defer(...)` placeholder. The endpoint side bypasses this bridge —
-     * {@see renderDeferredTarget()} routes class components to
-     * {@see doCreateElement()} directly so state and snapshot wrapping line
-     * up with how the class would render on the page.
+     * `H::defer(...)` placeholder via {@see Defer::buildPlaceholder()} — the
+     * shared materialiser that the closure flow ({@see \Polidog\UsePhp\Runtime\FunctionComponent})
+     * also uses, so the two paths cannot drift on validation rules. The
+     * endpoint side bypasses this bridge — {@see renderDeferredTarget()}
+     * routes class components to {@see doCreateElement()} directly so state
+     * and snapshot wrapping line up with how the class would render on the
+     * page.
      *
-     * @return \Closure(array<string, mixed>): \Polidog\UsePhp\Runtime\Element
+     * @return \Closure(array<string, mixed>): Element
      */
     private function makeClassDeferPlaceholder(Defer $defer): \Closure
     {
-        return function (array $props) use ($defer): Element {
-            $fallback = $props['fallback'] ?? null;
-            unset($props['fallback'], $props['key']);
-
-            if ($fallback !== null && !$fallback instanceof Element) {
-                throw new \InvalidArgumentException(
-                    "Defer target '{$defer->name}' expected `fallback` prop to be an Element, got "
-                    . \get_debug_type($fallback),
-                );
-            }
-
-            /** @var array<string, scalar> $scalarProps */
-            $scalarProps = [];
-            foreach ($props as $key => $value) {
-                if ($value === null) {
-                    continue;
-                }
-                if (!\is_scalar($value)) {
-                    throw new \InvalidArgumentException(
-                        "Defer target '{$defer->name}' prop '" . (string) $key
-                        . "' must be scalar (forwarded via query string); got " . \get_debug_type($value),
-                    );
-                }
-                $scalarProps[(string) $key] = $value;
-            }
-
-            return H::defer($defer->name, $scalarProps, $fallback);
-        };
+        return static fn(array $props): Element => $defer->buildPlaceholder($props);
     }
 
     /**
