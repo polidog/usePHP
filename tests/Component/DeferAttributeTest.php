@@ -61,8 +61,11 @@ class DeferAttributeTest extends TestCase
         new Defer(name: 'not/url-safe');
     }
 
-    public function testLocalCacheDefaultsToFalseAndOmitsFromPlaceholder(): void
+    public function testLocalCacheDefaultsToFalseAndPropagatesAsFalse(): void
     {
+        // The `__localCache` prop is always present on the placeholder;
+        // it carries `false` by default. (The renderer is what omits the
+        // data-usephp-defer-cache attribute when false — see RendererTest.)
         $defer = new Defer(name: 'x');
         self::assertFalse($defer->localCache);
 
