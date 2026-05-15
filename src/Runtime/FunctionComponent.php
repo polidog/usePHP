@@ -74,9 +74,15 @@ final class FunctionComponent
         if ($this->storageType === StorageType::Snapshot) {
             $snapshot = $state->createSnapshot();
             $app = RenderContext::getApp();
-            $snapshotJson = $app !== null
-                ? $app->getSnapshotSerializer()->serialize($snapshot)
-                : $snapshot->toJson();
+            if ($app === null) {
+                throw new \LogicException(
+                    'Cannot render a Snapshot-storage component outside of UsePHP::run() '
+                    . '/ ::render() / ::renderElement() — no application context is set, '
+                    . 'so the snapshot cannot be HMAC-signed. Emitting an unsigned snapshot '
+                    . 'would let an attacker forge state on the round trip.'
+                );
+            }
+            $snapshotJson = $app->getSnapshotSerializer()->serialize($snapshot);
             $wrapperProps['data-usephp-snapshot'] = $snapshotJson;
         }
 

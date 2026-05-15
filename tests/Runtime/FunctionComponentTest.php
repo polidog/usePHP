@@ -20,6 +20,7 @@ use function Polidog\UsePhp\Runtime\useEffect;
 use function Polidog\UsePhp\Runtime\useState;
 
 use Polidog\UsePhp\Storage\StorageType;
+use Polidog\UsePhp\UsePHP;
 
 class FunctionComponentTest extends TestCase
 {
@@ -31,12 +32,20 @@ class FunctionComponentTest extends TestCase
         $_SESSION = [];
         ComponentState::clearInstances();
         RenderContext::beginRender();
+
+        // Snapshot-storage components require an HMAC key on the active
+        // app. Install a minimal app context with a test secret so the
+        // signing path can run.
+        $app = new UsePHP();
+        $app->setSnapshotSecret('test-secret-key-for-function-component-tests');
+        RenderContext::setApp($app);
     }
 
     protected function tearDown(): void
     {
         $_SESSION = [];
         ComponentState::clearInstances();
+        RenderContext::clearApp();
     }
 
     public function testSimpleFunctionComponentWithProps(): void

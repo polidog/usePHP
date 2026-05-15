@@ -28,9 +28,26 @@ final class SimpleRouter implements RouterInterface
 
     private string $snapshotParam = '_snapshot';
 
+    private ?SnapshotSerializer $serializer;
+
     public function __construct(
-        private readonly ?SnapshotSerializer $serializer = null,
-    ) {}
+        ?SnapshotSerializer $serializer = null,
+    ) {
+        $this->serializer = $serializer;
+    }
+
+    /**
+     * Update the serializer used to embed snapshots in redirect URLs.
+     *
+     * Lets {@see UsePHP::setSnapshotSecret()} configure the snapshot key
+     * after the router was already constructed (e.g. via `getRouter()`),
+     * so the call order between the two methods doesn't matter.
+     */
+    public function setSerializer(?SnapshotSerializer $serializer): self
+    {
+        $this->serializer = $serializer;
+        return $this;
+    }
 
     /**
      * Add a GET route.
@@ -178,17 +195,48 @@ final class SimpleRouter implements RouterInterface
 
     public function createRedirectUrl(string $url, ?Snapshot $snapshot = null): string
     {
-        if ($snapshot === null || $this->serializer === null) {
+        if ($snapshot === null) {
             return $url;
+        }
+        if ($this->serializer === null) {
+            throw new \LogicException(
+                'Cannot embed snapshot in redirect URL: no SnapshotSerializer is configured. '
+                . 'Call UsePHP::setSnapshotSecret($key) before using SnapshotBehavior::Persistent.'
+            );
         }
 
         $encoded = $this->serializer->serialize($snapshot);
 
-        // Parse URL and add snapshot parameter
+        // parse_url returns false on seriously malformed input. Fall back to
+        // treating the input as a bare path in that case rather than indexing
+        // into `false`.
         $parsedUrl = parse_url($url);
-        $path = $parsedUrl['path'] ?? '/';
-        $query = [];
+        if (!is_array($parsedUrl)) {
+            $parsedUrl = ['path' => '/'];
+        }
 
+        // Reject protocol-relative (`//host/path`) and absolute URLs entirely.
+        // The redirect target must stay same-origin — letting a caller pass
+        // an attacker-controlled `next=` through here would turn the framework
+        // into an open-redirect primitive. Same-origin same-path redirects
+        // (the PRG fallthrough in `doHandleAction`) are the only legitimate
+        // use; everything else is a bug in user code.
+        if (isset($parsedUrl['host']) || str_starts_with($url, '//')) {
+            throw new \InvalidArgumentException(
+                'Redirect URL must be same-origin (a path beginning with "/"). '
+                . 'Got: ' . $url
+            );
+        }
+
+        $path = $parsedUrl['path'] ?? '/';
+        // Reject scheme-prefixed paths just in case (e.g. `javascript:foo`).
+        if (isset($parsedUrl['scheme'])) {
+            throw new \InvalidArgumentException(
+                'Redirect URL must not carry a scheme. Got: ' . $url
+            );
+        }
+
+        $query = [];
         if (isset($parsedUrl['query'])) {
             parse_str($parsedUrl['query'], $query);
         }

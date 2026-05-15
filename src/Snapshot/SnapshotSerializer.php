@@ -9,16 +9,33 @@ use Polidog\UsePhp\Runtime\Snapshot;
 /**
  * Serializer for component snapshots.
  *
- * Handles serialization/deserialization with checksum verification
+ * Handles serialization/deserialization with HMAC-SHA256 verification
  * to prevent tampering of client-side state.
+ *
+ * A non-empty secret key is required. The library no longer accepts an
+ * empty key — earlier versions allowed it and silently disabled HMAC
+ * verification, which let an attacker replay arbitrary state through
+ * the snapshot round-trip. Callers should use a high-entropy key
+ * (e.g. `bin2hex(random_bytes(32))`) loaded from configuration.
  */
 final class SnapshotSerializer
 {
     private const CHECKSUM_ALGORITHM = 'sha256';
 
+    /**
+     * @throws \InvalidArgumentException If $secretKey is empty.
+     */
     public function __construct(
-        private readonly string $secretKey = '',
-    ) {}
+        private readonly string $secretKey,
+    ) {
+        if ($secretKey === '') {
+            throw new \InvalidArgumentException(
+                'SnapshotSerializer requires a non-empty secret key. '
+                . 'Generate one with bin2hex(random_bytes(32)) and pass it '
+                . 'via UsePHP::setSnapshotSecret().'
+            );
+        }
+    }
 
     /**
      * Serialize a snapshot to JSON with checksum.
@@ -75,12 +92,15 @@ final class SnapshotSerializer
 
     /**
      * Verify the checksum of a snapshot.
+     *
+     * Snapshots without a checksum are always rejected — the secret key is
+     * required at construction time, so there is no legitimate path that
+     * produces an unsigned snapshot.
      */
     public function verifyChecksum(Snapshot $snapshot): bool
     {
         if ($snapshot->checksum === null) {
-            // If no secret key is set, allow snapshots without checksum
-            return $this->secretKey === '';
+            return false;
         }
 
         $expectedChecksum = $this->calculateChecksum($snapshot);
@@ -90,10 +110,14 @@ final class SnapshotSerializer
 
     /**
      * Check if the serializer has a secret key configured.
+     *
+     * Always returns true now that an empty key is rejected by the
+     * constructor. Retained for backwards compatibility with callers that
+     * gated optional behavior on this.
      */
     public function hasSecretKey(): bool
     {
-        return $this->secretKey !== '';
+        return true;
     }
 
     /**

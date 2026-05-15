@@ -23,6 +23,25 @@ final class Renderer
     ];
 
     /**
+     * Attributes whose values are interpreted as URLs and therefore must
+     * not carry executable schemes like `javascript:`. Matches React's
+     * v16.9+ behavior, where any `javascript:` URL in these attributes is
+     * blocked rather than emitted. Names are the *post-JSX-map* canonical
+     * HTML attribute names (i.e. what's written into the HTML output).
+     */
+    private const URL_ATTRIBUTES = [
+        'href' => true,
+        'src' => true,
+        'action' => true,
+        'formaction' => true,
+        'srcdoc' => true,
+        'data' => true,
+        'poster' => true,
+        'background' => true,
+        'xlink:href' => true,
+    ];
+
+    /**
      * JSX-style prop names → HTML/SVG attribute names.
      *
      * PSX and H::xxx() preserve JSX casing on the PHP side (`class` and `for`
@@ -198,17 +217,20 @@ final class Renderer
     private ?SnapshotSerializer $snapshotSerializer;
     private ?StorageType $storageType;
     private string $deferPrefix;
+    private string $csrfToken;
 
     public function __construct(
         string $componentId,
         ?SnapshotSerializer $snapshotSerializer = null,
         ?StorageType $storageType = null,
         string $deferPrefix = self::DEFAULT_DEFER_PREFIX,
+        string $csrfToken = '',
     ) {
         $this->componentId = $componentId;
         $this->snapshotSerializer = $snapshotSerializer;
         $this->storageType = $storageType;
         $this->deferPrefix = $deferPrefix;
+        $this->csrfToken = $csrfToken;
     }
 
     /**
@@ -344,12 +366,23 @@ final class Renderer
             );
         }
 
+        // Embed the per-session CSRF token so doHandleAction() can
+        // synchronize-validate it. Empty when no session is active, in
+        // which case the server falls back to Origin/Referer alone.
+        $csrfField = '';
+        if ($this->csrfToken !== '') {
+            $csrfField = sprintf(
+                '<input type="hidden" name="_usephp_csrf" value="%s" />',
+                htmlspecialchars($this->csrfToken, ENT_QUOTES, 'UTF-8')
+            );
+        }
+
         // data-usephp-form enables JS enhancement, falls back to normal form if no JS
         return <<<HTML
             <form method="post" data-usephp-form style="display:inline;">
             <input type="hidden" name="_usephp_component" value="{$componentIdEscaped}" />
             <input type="hidden" name="_usephp_action" value="{$actionJson}" />
-            {$snapshotField}{$innerElement}
+            {$csrfField}{$snapshotField}{$innerElement}
             </form>
             HTML;
     }
@@ -379,17 +412,66 @@ final class Renderer
                 continue;
             }
 
-            // Skip non-scalar values
+            // Non-scalar values can't be serialized into an HTML attribute.
+            // Silently dropping them makes typos invisible — emit a notice
+            // so the operator sees the failure mode during development. The
+            // notice level (rather than warning/error) keeps production
+            // log output quiet for callers who knowingly do this.
             if (!is_scalar($value)) {
+                trigger_error(
+                    sprintf(
+                        'Non-scalar value for attribute "%s" (%s) was dropped.',
+                        $attrName,
+                        get_debug_type($value),
+                    ),
+                    E_USER_NOTICE,
+                );
+                continue;
+            }
+
+            $stringValue = (string) $value;
+
+            // Block dangerous URL schemes in URL-context attributes. React
+            // does this in v16.9+; we adopt the same default so a stringly
+            // typed user input doesn't become a one-liner XSS vector.
+            if (isset(self::URL_ATTRIBUTES[$attrName]) && self::isDangerousUrl($stringValue)) {
                 continue;
             }
 
             // Handle regular attributes
-            $escapedValue = htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+            $escapedValue = htmlspecialchars($stringValue, ENT_QUOTES, 'UTF-8');
             $attributes[] = sprintf('%s="%s"', $attrName, $escapedValue);
         }
 
         return $attributes ? ' ' . implode(' ', $attributes) : '';
+    }
+
+    /**
+     * Return true if $value is a URL that we refuse to emit into URL-context
+     * attributes (href/src/action/...). Matches the leading-whitespace and
+     * leading-control-character tolerance that browsers apply when parsing
+     * URLs, so an attacker cannot slip `\tjavascript:` past us.
+     */
+    private static function isDangerousUrl(string $value): bool
+    {
+        // Strip leading whitespace + ASCII control bytes the way browsers do
+        // when resolving a URL. \0..\x20 covers TAB, LF, CR, NUL etc.
+        $trimmed = ltrim($value, "\x00..\x20");
+        if ($trimmed === '') {
+            return false;
+        }
+        $colon = strpos($trimmed, ':');
+        if ($colon === false || $colon === 0) {
+            return false;
+        }
+        $scheme = strtolower(substr($trimmed, 0, $colon));
+        // Allow only the scheme characters that RFC 3986 permits in a scheme
+        // (ALPHA *(ALPHA / DIGIT / "+" / "-" / ".")). Anything else means
+        // the colon isn't actually delimiting a scheme — it's part of a path.
+        if (preg_match('/^[a-z][a-z0-9+\-.]*$/', $scheme) !== 1) {
+            return false;
+        }
+        return $scheme === 'javascript' || $scheme === 'vbscript' || $scheme === 'data';
     }
 
     /**
@@ -478,16 +560,23 @@ final class Renderer
 
     /**
      * Serialize the current state as a snapshot JSON.
+     *
+     * Requires a configured serializer. The earlier fallback that produced
+     * an unsigned snapshot when no key was set has been removed — the
+     * client round-trips the snapshot and an unsigned one would be trivially
+     * forgeable. Callers should configure `UsePHP::setSnapshotSecret()`
+     * before rendering Snapshot-storage components.
      */
     private function serializeSnapshot(ComponentState $state): string
     {
-        $snapshot = $state->createSnapshot();
-
-        if ($this->snapshotSerializer !== null) {
-            return $this->snapshotSerializer->serialize($snapshot);
+        if ($this->snapshotSerializer === null) {
+            throw new \LogicException(
+                'Cannot serialize snapshot: no SnapshotSerializer is configured. '
+                . 'Call UsePHP::setSnapshotSecret($key) with a high-entropy key '
+                . 'before rendering components that use Snapshot storage.'
+            );
         }
-
-        // Use default serializer without secret key
-        return $snapshot->toJson();
+        $snapshot = $state->createSnapshot();
+        return $this->snapshotSerializer->serialize($snapshot);
     }
 }

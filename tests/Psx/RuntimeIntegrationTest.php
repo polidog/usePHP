@@ -293,14 +293,20 @@ class RuntimeIntegrationTest extends TestCase
             'storageType' => StorageType::Memory->value,
         ];
 
+        // Simulate a same-origin browser submission so the built-in CSRF
+        // check passes — the regression under test is the defer placeholder
+        // emission, not CSRF behavior.
         $savedPost = $_POST;
         $savedServer = $_SERVER;
         try {
             $_SERVER['REQUEST_METHOD'] = 'POST';
             $_SERVER['HTTP_X_USEPHP_PARTIAL'] = '1';
+            $_SERVER['HTTP_HOST'] = 'example.test';
+            $_SERVER['HTTP_ORIGIN'] = 'http://example.test';
             $_POST = [
                 '_usephp_component' => 'memory-with-defer#0',
                 '_usephp_action' => \json_encode($action, \JSON_THROW_ON_ERROR),
+                '_usephp_csrf' => $app->getCsrfToken(),
             ];
 
             $html = $app->handleAction();
