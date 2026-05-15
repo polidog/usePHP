@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Runtime;
 
+use Polidog\UsePhp\Component\Defer;
+
 use function Polidog\UsePhp\Html\getFunctionComponentName;
 
-use Polidog\UsePhp\Component\Defer;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Storage\StorageType;
 

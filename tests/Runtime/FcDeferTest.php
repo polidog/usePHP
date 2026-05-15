@@ -10,11 +10,11 @@ use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Router\RequestContext;
 use Polidog\UsePhp\Runtime\ComponentState;
 use Polidog\UsePhp\Runtime\Element;
-use Polidog\UsePhp\Runtime\FunctionComponent;
-use Polidog\UsePhp\Runtime\RenderContext;
 
 use function Polidog\UsePhp\Runtime\fc;
 
+use Polidog\UsePhp\Runtime\FunctionComponent;
+use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\UsePHP;
 
 class FcDeferTest extends TestCase
@@ -127,15 +127,15 @@ class FcDeferTest extends TestCase
             \file_put_contents(
                 $compiled,
                 <<<'PHP'
-                <?php
-                use Polidog\UsePhp\Component\Defer;
-                use Polidog\UsePhp\Html\H;
-                use function Polidog\UsePhp\Runtime\fc;
-                return fc(
-                    fn(array $props) => H::header(children: 'real-' . ($props['who'] ?? 'guest')),
-                    defer: new Defer(name: 'header-q', cacheControl: 'private, max-age=10'),
-                );
-                PHP,
+                    <?php
+                    use Polidog\UsePhp\Component\Defer;
+                    use Polidog\UsePhp\Html\H;
+                    use function Polidog\UsePhp\Runtime\fc;
+                    return fc(
+                        fn(array $props) => H::header(children: 'real-' . ($props['who'] ?? 'guest')),
+                        defer: new Defer(name: 'header-q', cacheControl: 'private, max-age=10'),
+                    );
+                    PHP,
             );
             $manifest = $workDir . '/manifest.php';
             \file_put_contents(

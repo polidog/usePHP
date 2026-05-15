@@ -215,7 +215,7 @@ final class CompileCommand
             } catch (\Throwable $e) {
                 $this->println(
                     "\033[31mError: failed to load compiled $compiledPath while scanning for "
-                    . "deferred components: " . $e->getMessage() . "\033[0m",
+                    . 'deferred components: ' . $e->getMessage() . "\033[0m",
                 );
                 return null;
             }
