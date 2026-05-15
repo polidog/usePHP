@@ -86,6 +86,32 @@ class DeferAttributeTest extends TestCase
         self::assertTrue($element->props['__localCache']);
     }
 
+    public function testReloadableDefaultsToFalseAndPropagatesAsFalse(): void
+    {
+        // Mirrors localCache: the `__reloadable` prop is always present and
+        // defaults to false, so a component that didn't opt in renders the
+        // pre-feature markup (no data-usephp-defer-name, replaced on
+        // resolve).
+        $defer = new Defer(name: 'x');
+        self::assertFalse($defer->reloadable);
+
+        $element = $defer->buildPlaceholder(['fallback' => H::span()]);
+        self::assertArrayHasKey('__reloadable', $element->props);
+        self::assertFalse($element->props['__reloadable']);
+    }
+
+    public function testReloadablePropagatesIntoPlaceholder(): void
+    {
+        // The explicit reload opt-in must ride through buildPlaceholder()
+        // onto the H::defer element so the renderer can emit
+        // data-usephp-defer-name and usephp.js keeps the wrapper.
+        $defer = new Defer(name: 'x', reloadable: true);
+        self::assertTrue($defer->reloadable);
+
+        $element = $defer->buildPlaceholder(['fallback' => H::span()]);
+        self::assertTrue($element->props['__reloadable']);
+    }
+
     public function testRegisterAutoRendersClassEndpoint(): void
     {
         // Regression for Copilot review on PR #17: registering a #[Defer]

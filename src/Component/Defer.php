@@ -42,11 +42,25 @@ final class Defer
      *        `DEFER_CACHE_VERSION` bump or `clearDeferCache()` drops it.
      *        The component decides this explicitly; usephp.js does not
      *        infer it from the `Cache-Control` header.
+     * @param bool $reloadable Opt-in explicit reload. `false` (default)
+     *        keeps the historical behaviour: usephp.js fetches the fragment
+     *        once and `replaceWith()`s the placeholder away, leaving no
+     *        re-targetable anchor in the DOM and producing byte-identical
+     *        markup to before this option existed. `true` makes usephp.js
+     *        keep the wrapper element after the fragment resolves and tag
+     *        it with `data-usephp-defer-name`, so the region can be
+     *        re-fetched later via `window.usePHP.reloadDefer('<name>')` or
+     *        a form's `data-usephp-reload-defer` attribute (e.g. reloading
+     *        a deferred list after a form mutates its data). The reload
+     *        always busts both cache tiers for that URL and hits the
+     *        network. Independent of {@see self::$localCache} and
+     *        {@see self::$cacheControl}.
      */
     public function __construct(
         public string $name,
         public ?string $cacheControl = null,
         public bool $localCache = false,
+        public bool $reloadable = false,
     ) {
         if (!UsePHP::isValidDeferName($name)) {
             throw new \InvalidArgumentException(
@@ -98,6 +112,6 @@ final class Defer
             $scalarProps[(string) $key] = $value;
         }
 
-        return H::defer($this->name, $scalarProps, $fallback, $this->localCache);
+        return H::defer($this->name, $scalarProps, $fallback, $this->localCache, $this->reloadable);
     }
 }

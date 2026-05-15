@@ -1210,18 +1210,26 @@ final class H
      *        `false` keeps the fragment in the per-page in-memory cache
      *        only — usephp.js never reads the HTTP `Cache-Control` header
      *        to make this decision, and there is no time expiry.
+     * @param bool $reloadable Opt-in explicit reload. When `true` the
+     *        rendered placeholder also carries `data-usephp-defer-name`, so
+     *        usephp.js keeps the wrapper after resolving and the region can
+     *        be re-fetched via `window.usePHP.reloadDefer()` or a form's
+     *        `data-usephp-reload-defer`. `false` is byte-identical to the
+     *        pre-feature markup (placeholder is replaced away on resolve).
      */
     public static function defer(
         string $name,
         array $params = [],
         ?Element $fallback = null,
         bool $localCache = false,
+        bool $reloadable = false,
     ): Element {
         return new Element('__defer__', [
             '__name' => $name,
             '__params' => $params,
             '__fallback' => $fallback,
             '__localCache' => $localCache,
+            '__reloadable' => $reloadable,
         ], []);
     }
 

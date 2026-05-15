@@ -433,4 +433,54 @@ class RendererTest extends TestCase
             $renderer->renderElement(H::defer('y', [], null, false)),
         );
     }
+
+    public function testRenderDeferEmitsNameAttributeWhenReloadable(): void
+    {
+        $renderer = new Renderer('test');
+
+        // reloadable is the explicit, component-side opt-in for keeping a
+        // re-targetable wrapper. usephp.js keys off the presence of
+        // data-usephp-defer-name (and uses its value as the reload handle).
+        $element = H::defer('todo-list', [], null, false, true);
+        $html = $renderer->renderElement($element);
+
+        $this->assertSame(
+            '<div data-usephp-defer-url="/_defer/todo-list" data-usephp-defer-name="todo-list"></div>',
+            $html,
+        );
+    }
+
+    public function testRenderDeferOmitsNameAttributeWhenNotReloadable(): void
+    {
+        $renderer = new Renderer('test');
+
+        // No reloadable → byte-for-byte identical to the pre-feature
+        // markup, so the placeholder is still replaced away on resolve.
+        $this->assertSame(
+            '<div data-usephp-defer-url="/_defer/x"></div>',
+            $renderer->renderElement(H::defer('x')),
+        );
+        $this->assertStringNotContainsString(
+            'data-usephp-defer-name',
+            $renderer->renderElement(H::defer('y', [], null, false, false)),
+        );
+    }
+
+    public function testRenderDeferEmitsCacheAndNameTogether(): void
+    {
+        $renderer = new Renderer('test');
+
+        // The two opt-ins are independent and must compose without
+        // clobbering each other or the query string. Attribute order is
+        // url, cache, name (asserted exactly so the markup contract is
+        // pinned).
+        $element = H::defer('todo-list', ['page' => 2], null, true, true);
+        $html = $renderer->renderElement($element);
+
+        $this->assertSame(
+            '<div data-usephp-defer-url="/_defer/todo-list?page=2"'
+            . ' data-usephp-defer-cache data-usephp-defer-name="todo-list"></div>',
+            $html,
+        );
+    }
 }

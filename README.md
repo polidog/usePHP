@@ -723,6 +723,52 @@ still resolves. If `localStorage` is unavailable (Safari private mode, quota
 exceeded, disabled) the L2 tier silently no-ops and L1 keeps serving the
 page.
 
+### Explicit reload
+
+By default a deferred fragment is fetched **once**: `usephp.js` replaces the
+placeholder with the response and the wrapper is gone, so there is nothing
+to re-target. Opt into `Defer::$reloadable` to keep a re-fetchable wrapper
+in the DOM:
+
+```php
+// Class component
+#[Defer(name: 'todo-list', reloadable: true)]
+
+// Closure component in a .psx
+fc($render, defer: new Defer(name: 'todo-list', reloadable: true));
+```
+
+This renders the placeholder with `data-usephp-defer-name="todo-list"`.
+`usephp.js` then swaps content *inside* that wrapper instead of replacing it
+away, so the region can be re-fetched later. Every reload **busts both
+cache tiers for that URL first**, so it always reflects current server
+state. Three ways to trigger it, all over one core API:
+
+```js
+// 1. Imperative — call from anywhere (no form required):
+window.usePHP.reloadDefer();                       // every reloadable region
+window.usePHP.reloadDefer('todo-list');            // by defer name
+window.usePHP.reloadDefer('/_defer/todo-list?p=2'); // by exact URL
+// returns the number of regions reloaded (0 ⇒ nothing matched)
+```
+
+```psx
+// 2. After a partial form submit — the canonical "form mutates data,
+//    reload the list" wiring. Fires only once the mutation response is
+//    applied, so the re-fetch sees the new state:
+<form data-usephp-form data-usephp-reload-defer="todo-list"> … </form>
+
+// 3. On click of any element outside a usephp form — a standalone
+//    Refresh button/link, a toolbar control, etc.:
+<button data-usephp-reload-defer="todo-list">Refresh</button>
+```
+
+The attribute value is a space/comma-separated list of defer names (or
+exact URLs); an empty value reloads every reloadable region. Reload is a
+distinct concern from `clearDeferCache()` — the latter only invalidates,
+it never re-fetches. Components that don't set `reloadable` are unchanged:
+replaced away on resolve, byte-identical markup.
+
 ### Requirements & limitations
 
 - **One component per mode.** Use a base component for inline rendering and a wrapper carrying `Defer` for the deferred endpoint. Don't try to switch modes on the same component at the call site.
@@ -732,6 +778,7 @@ page.
 - **Authorization is the component's responsibility.** The name and params are visible in the URL — for endpoints that surface sensitive data, check session/permissions inside the component. (HMAC signing is no longer needed; the name is a public entry-point identifier.)
 - **Nested defer works.** A deferred component's output may itself contain `<...Deferred />` placeholders; `usephp.js` recursively hydrates them.
 - **Two-tier defer cache (L1 in-memory + opt-in L2 `localStorage`).** Component-decided persistence (`Defer::$localCache`, not the HTTP `Cache-Control`; no time expiry) and a JS forced-reset API — see [Client-side cache & forced reset](#client-side-cache--forced-reset) above. Components that don't opt in behave exactly like the previous in-memory-only cache.
+- **Opt-in explicit reload (`Defer::$reloadable`).** Keeps a re-targetable wrapper so a deferred region can be re-fetched via `window.usePHP.reloadDefer()`, a form's `data-usephp-reload-defer`, or a click on any element — see [Explicit reload](#explicit-reload) above. Each reload busts both cache tiers for that URL first. Components that don't opt in are replaced away on resolve, byte-identical markup.
 - **No-JS users see the fallback only.** This is the documented trade-off: the deferred component never renders without JavaScript.
 - **Framework integration:** call `UsePHP::handleDeferred()` from your controller; it returns the rendered HTML for `GET /_defer/...` requests, or `null` otherwise. Mirrors `handleAction()`. The prefix is configurable via `setDeferPrefix('/api/_d')`.
 
