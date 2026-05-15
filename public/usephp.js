@@ -82,6 +82,26 @@
 
     const deferCache = new Map();
 
+    // Per-placeholder fetch coordination, keyed by the element so entries
+    // vanish with the node (WeakMap/WeakSet, no manual cleanup):
+    //
+    //   deferInFlight  the element currently has a fetch running. A second
+    //                  generic fetch (e.g. processDeferred re-scanning after
+    //                  a partial submit) is dropped — single-flight — while
+    //                  a *forced* fetch (reloadDefer) is allowed to
+    //                  supersede it instead of being dropped.
+    //   deferGen       monotonically increasing token per fetch attempt. A
+    //                  superseded (older) response checks its token before
+    //                  placing and bails, so the wrapper always settles on
+    //                  the newest requested state — no double placement, no
+    //                  stale-then-fresh flicker.
+    //   deferAbort     AbortController for the in-flight network request, so
+    //                  a supersede also cancels the wasted round-trip rather
+    //                  than just discarding its result.
+    const deferInFlight = new WeakSet();
+    const deferGen = new WeakMap();
+    const deferAbort = new WeakMap();
+
     function rememberDeferFragment(url, fragment) {
         if (deferCache.has(url)) {
             deferCache.delete(url);
@@ -368,7 +388,10 @@
             wrapper.removeAttribute('data-usephp-defer-loaded');
             wrapper.setAttribute('aria-busy', 'true');
             count++;
-            fetchDeferred(wrapper);
+            // force: this is an explicit user/app request for fresh data —
+            // supersede any fetch already running for this wrapper rather
+            // than yielding to it (which would leave stale content).
+            fetchDeferred(wrapper, { force: true });
         });
         return count;
     }
@@ -414,7 +437,14 @@
     // form's own attribute drives the post-submit reload; firing on click
     // would race the async submit and re-fetch stale data).
     document.addEventListener('click', function(e) {
-        const trigger = e.target.closest('[data-usephp-reload-defer]');
+        // e.target can be a non-Element (text node, document) for some
+        // synthetic/edge events; Element.closest only exists on Elements,
+        // so normalise first or a stray click would throw and break all JS.
+        const start = e.target instanceof Element
+            ? e.target
+            : (e.target && e.target.parentElement) || null;
+        if (!start) return;
+        const trigger = start.closest('[data-usephp-reload-defer]');
         if (!trigger) return;
         if (trigger.tagName === 'FORM') return;
         if (trigger.closest('[data-usephp-form]')) return;
@@ -476,17 +506,23 @@
                     snapshotField.remove();
                 }
 
-                // Newly injected HTML may contain deferred placeholders.
-                processDeferred(component);
-
-                // Declarative post-submit reload. The canonical
-                // "form mutates data → reload the deferred list" wiring:
-                // the form names the deferred region(s) to refresh and we
-                // fire it only now, after the mutation's partial response
-                // has been applied, so the re-fetch sees the new state.
+                // Declarative post-submit reload, dispatched *before* the
+                // generic processDeferred() scan. The canonical "form
+                // mutates data → reload the deferred list" wiring: the form
+                // names the deferred region(s) to refresh. Running it first
+                // means a forced, cache-busted fetch is already in flight
+                // for those wrappers, so the processDeferred() scan below
+                // single-flight-yields instead of racing it with a second
+                // (possibly cache-stale) fetch. The mutation's partial
+                // response is already applied (innerHTML above), so the
+                // re-fetch reflects the new state.
                 if (form.hasAttribute('data-usephp-reload-defer')) {
                     dispatchReloadDefer(form.getAttribute('data-usephp-reload-defer'));
                 }
+
+                // Newly injected HTML may contain (other, non-reload-target)
+                // deferred placeholders that still need their initial fetch.
+                processDeferred(component);
             } else {
                 form.submit();
             }
@@ -538,7 +574,12 @@
         processDeferred(placeholder);
     }
 
-    async function fetchDeferred(placeholder) {
+    // `force` is set only by reloadDefer(): it means "supersede whatever is
+    // running for this wrapper" (the user explicitly asked for fresh data).
+    // Unforced callers (processDeferred) instead yield to an in-flight
+    // fetch, so a partial-submit re-scan can't pile a second request on top
+    // of a reload already running for the same wrapper.
+    async function fetchDeferred(placeholder, { force = false } = {}) {
         const url = placeholder.dataset.usephpDeferUrl;
         if (!url) return;
 
@@ -546,6 +587,29 @@
         // reloadDefer(), which clears this marker first. Any other caller
         // (a stray direct invocation) is a no-op.
         if (placeholder.hasAttribute('data-usephp-defer-loaded')) return;
+
+        // Single-flight. An unforced caller bows out if a fetch is already
+        // running; a forced one falls through and supersedes it (older
+        // generation's response is discarded and its request aborted).
+        if (deferInFlight.has(placeholder) && !force) return;
+
+        const myGen = (deferGen.get(placeholder) || 0) + 1;
+        deferGen.set(placeholder, myGen);
+        deferInFlight.add(placeholder);
+        const superseded = deferAbort.get(placeholder);
+        if (superseded) superseded.abort();
+        deferAbort.delete(placeholder);
+        // Only the newest generation may place its result; an older,
+        // superseded call returns silently. settle() releases the shared
+        // in-flight/abort bookkeeping, but only if no newer generation has
+        // taken ownership of it.
+        const isCurrent = () => deferGen.get(placeholder) === myGen;
+        const settle = () => {
+            if (isCurrent()) {
+                deferInFlight.delete(placeholder);
+                deferAbort.delete(placeholder);
+            }
+        };
 
         // Component-declared opt-in. false → this component did not opt
         // into localStorage persistence, so L2 is bypassed for both reads
@@ -563,8 +627,8 @@
             // as recently used. Cloning is needed so the cached copy stays
             // pristine for future hits.
             rememberDeferFragment(url, cached);
-            const clone = cached.cloneNode(true);
-            placeDeferredFragment(placeholder, clone);
+            if (isCurrent()) placeDeferredFragment(placeholder, cached.cloneNode(true));
+            settle();
             return;
         }
 
@@ -576,18 +640,23 @@
             const persisted = readPersisted(url);
             if (persisted) {
                 rememberDeferFragment(url, persisted.cloneNode(true));
-                placeDeferredFragment(placeholder, persisted);
+                if (isCurrent()) placeDeferredFragment(placeholder, persisted);
+                settle();
                 return;
             }
         }
 
         placeholder.setAttribute('aria-busy', 'true');
 
+        const ctrl = new AbortController();
+        deferAbort.set(placeholder, ctrl);
+
         try {
             const response = await fetch(url, {
                 method: 'GET',
                 headers: { 'X-UsePHP-Defer': '1' },
                 credentials: 'same-origin',
+                signal: ctrl.signal,
             });
 
             if (!response.ok) {
@@ -608,9 +677,11 @@
             const template = document.createElement('template');
             template.innerHTML = html;
 
-            // Store a pristine clone in L1 before the original fragment is
-            // consumed by replaceWith — moving children into the DOM would
-            // leave the cached entry empty otherwise.
+            // Warm L1/L2 even if this generation ends up superseded — the
+            // fragment is still valid for the URL and a later reader
+            // benefits. Store a pristine clone before the original is
+            // consumed by placement, which would otherwise leave the cached
+            // entry empty.
             rememberDeferFragment(url, template.content.cloneNode(true));
 
             // Persist to L2 only when the component opted in via
@@ -620,14 +691,22 @@
                 persistFragment(url, html);
             }
 
+            // A newer reload may have superseded this response while it was
+            // in flight; if so, discard it (the newer one will place) so
+            // there is no double placement or stale-then-fresh flicker.
+            if (!isCurrent()) return;
             // Placement (and nested-defer hydration) is centralised so the
             // reloadable wrapper-retention decision stays consistent with
             // the cache-hit paths above.
             placeDeferredFragment(placeholder, template.content);
         } catch (error) {
+            // A supersede aborts the request on purpose — not a failure.
+            if (error && error.name === 'AbortError') return;
             // Network/other error — leave the fallback in place but log so
             // the failure mode is visible to developers.
             console.warn('[usePHP] defer fetch failed:', error, url);
+        } finally {
+            settle();
         }
     }
 
@@ -638,9 +717,12 @@
         // re-fetched by a generic scan (initial load, or a partial form
         // submit that re-renders surrounding chrome). The resolved marker
         // excludes it; reloadDefer() clears that marker to re-arm.
+        // Wrap rather than pass fetchDeferred directly: forEach would
+        // otherwise hand it (element, index, array), and the numeric index
+        // would land in the options arg. A generic scan is never forced.
         scope
             .querySelectorAll('[data-usephp-defer-url]:not([data-usephp-defer-loaded])')
-            .forEach(fetchDeferred);
+            .forEach((el) => fetchDeferred(el));
     }
 
     // Reconcile the persisted-cache version before the first read so a
