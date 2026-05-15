@@ -199,7 +199,11 @@
                 removePersisted(url);
                 continue;
             }
-            if (!rec || typeof rec.html !== 'string') {
+            if (
+                !rec ||
+                typeof rec.html !== 'string' ||
+                rec.v !== DEFER_CACHE_VERSION
+            ) {
                 removePersisted(url);
                 continue;
             }
@@ -215,7 +219,13 @@
 
     function persistFragment(url, html) {
         if (!lsAvailable) return;
+        // Stamp the record with this build's version. A tab still running
+        // the previous build can write here *after* a newer tab purged the
+        // namespace and re-stamped the version key — the key alone would
+        // then mark that stale fragment as current. Carrying the version
+        // per record (and rejecting mismatches on read) closes that race.
         const record = JSON.stringify({
+            v: DEFER_CACHE_VERSION,
             html,
             storedAt: Date.now(),
         });
@@ -236,8 +246,10 @@
     }
 
     // Return a fresh DocumentFragment for a persisted entry, or null on
-    // miss / corruption (pruning the bad entry). No time check — entries
-    // are valid until a version bump or clearDeferCache() removes them.
+    // miss / corruption / version mismatch (pruning the bad entry). No
+    // time check — entries are valid until a version bump or
+    // clearDeferCache() removes them. The per-record version guards
+    // against a stale write landing from an older still-open tab.
     function readPersisted(url) {
         if (!lsAvailable) return null;
         let raw;
@@ -254,7 +266,11 @@
             removePersisted(url);
             return null;
         }
-        if (!rec || typeof rec.html !== 'string') {
+        if (
+            !rec ||
+            typeof rec.html !== 'string' ||
+            rec.v !== DEFER_CACHE_VERSION
+        ) {
             removePersisted(url);
             return null;
         }
