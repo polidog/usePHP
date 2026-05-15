@@ -1205,16 +1205,23 @@ final class H
      * @param array<string, scalar> $params URL-safe params forwarded to the
      *        deferred endpoint as query string. Values are stringified.
      * @param Element|null $fallback Fallback element rendered immediately.
+     * @param int|null $localCacheTtl Opt-in client-side (localStorage) cache
+     *        lifetime in seconds, surfaced to usephp.js via a placeholder
+     *        data attribute. `null` keeps the fragment in the per-page
+     *        in-memory cache only — usephp.js never reads the HTTP
+     *        `Cache-Control` header to make this decision.
      */
     public static function defer(
         string $name,
         array $params = [],
         ?Element $fallback = null,
+        ?int $localCacheTtl = null,
     ): Element {
         return new Element('__defer__', [
             '__name' => $name,
             '__params' => $params,
             '__fallback' => $fallback,
+            '__localCacheTtl' => $localCacheTtl,
         ], []);
     }
 

@@ -31,15 +31,31 @@ final class Defer
      *        in client URLs and must be unique across the application.
      * @param string|null $cacheControl Optional Cache-Control header for the
      *        defer endpoint response. Omit to fall back to the framework
-     *        default (`private, max-age=0`).
+     *        default (`private, max-age=0`). This governs server/CDN caching
+     *        only and is intentionally decoupled from the client-side
+     *        localStorage cache below.
+     * @param int|null $localCacheTtl Opt-in client-side (localStorage)
+     *        cache lifetime in seconds. `null` (default) means usephp.js
+     *        never persists this component across reloads — it stays in the
+     *        per-page in-memory cache only. A positive value tells the
+     *        client to persist the fetched fragment for that many seconds.
+     *        The component decides this explicitly; usephp.js does not infer
+     *        it from the `Cache-Control` header.
      */
     public function __construct(
         public string $name,
         public ?string $cacheControl = null,
+        public ?int $localCacheTtl = null,
     ) {
         if (!UsePHP::isValidDeferName($name)) {
             throw new \InvalidArgumentException(
                 'Deferred component name must match `' . UsePHP::DEFER_NAME_PATTERN . "`, got: '$name'",
+            );
+        }
+        if ($localCacheTtl !== null && $localCacheTtl <= 0) {
+            throw new \InvalidArgumentException(
+                "Deferred component '$name' localCacheTtl must be a positive number of seconds "
+                . "or null to disable client persistence; got: $localCacheTtl",
             );
         }
     }
@@ -87,6 +103,6 @@ final class Defer
             $scalarProps[(string) $key] = $value;
         }
 
-        return H::defer($this->name, $scalarProps, $fallback);
+        return H::defer($this->name, $scalarProps, $fallback, $this->localCacheTtl);
     }
 }

@@ -661,24 +661,36 @@ $app->register(UserHeaderDeferred::class); // defer エンドポイントも自�
 
 - **L1 — インメモリ** `Map<URL, DocumentFragment>`。ページ生存期間中のみ。
   常に有効で、フルリロードで消えます。従来挙動と同一です。
-- **L2 — `localStorage`**。リロードをまたぎ、タブ間で共有されます。opt-in:
-  defer エンドポイントのレスポンスが `Cache-Control: public` かつ正の
-  `max-age=N` を持つ場合**のみ**保存します。`private` / `no-store` /
-  `no-cache`（フレームワーク既定の `private, max-age=0` を含む）はメモリ
-  のみに留まるため、共有端末で前ユーザーのセッション依存 defer 内容が
-  次のユーザーに漏れることはありません。保存エントリの TTL はサーバの
-  `max-age` に一致します（`s-maxage` は共有キャッシュ向けなので無視）。
+- **L2 — `localStorage`**。リロードをまたぎ、タブ間で共有されます。
+  **完全に opt-in で、コンポーネントが決めます** — `usephp.js` は HTTP の
+  `Cache-Control` を一切見ません。コンポーネントが `Defer::$localCacheTtl`
+  （秒）を指定した場合**のみ**保存します。指定が無ければメモリのみに留まる
+  ため、共有端末で前ユーザーのセッション依存 defer 内容が次のユーザーに
+  漏れることはありません。保存エントリは宣言した TTL 秒で失効します。
+  エンドポイントの `cacheControl`（サーバ / CDN キャッシュ）は**別の関心事**
+  で、このクライアント側の判断とは意図的に切り離されています。
 
-参照順は L1 → L2 → ネットワークで、L2 ヒット時は L1 に昇格します。両層とも
-URL をキーにし、**64 エントリ上限**（L1 は簡易 LRU、L2 は古い順に退避）なので、
-一覧ページで行ごとに defer しても無限には成長しません。
+参照順は L1 → L2 → ネットワークで、L2 を見るのは opt-in したコンポーネント
+のみ。L2 ヒット時は L1 に昇格します。両層とも URL をキーにし、**64 エントリ
+上限**（L1 は簡易 LRU、L2 は古い順に退避）なので、一覧ページで行ごとに defer
+しても無限には成長しません。
 
-defer コンポーネントを L2 キャッシュ可能にするには、エンドポイントに明示的な
-クライアント TTL を与えます:
+defer コンポーネントをクライアントキャッシュ可能にするには、`#[Defer]` 属性
+または `Defer` 値オブジェクトに明示的なローカル TTL を与えます:
 
 ```php
-#[Defer(name: 'announcement-bar', cacheControl: 'public, max-age=60')]
+// クラスコンポーネント
+#[Defer(name: 'announcement-bar', localCacheTtl: 60)]
+
+// .psx のクロージャコンポーネント
+fc($render, defer: new Defer(name: 'announcement-bar', localCacheTtl: 60));
 ```
+
+これは `<div data-usephp-defer-url="…" data-usephp-defer-cache="60">` を
+出力し、`usephp.js` はその属性（だけ）を見て永続化を判断します。
+`localCacheTtl` と `cacheControl` は独立です。エンドポイントには
+`cacheControl: 'private, no-store'` を出しつつ短いクライアントキャッシュを
+許可する、あるいはその逆も可能です。
 
 **強制リセットは JS で対応します:**
 
@@ -707,7 +719,7 @@ window.usePHP.DEFER_CACHE_VERSION;                                // 現ビル�
 - **paramsはスカラのみ。** クエリ文字列を経由するため、`int`/`string`/`float`/`bool` のみ。`bool` は `'1'/'0'` に変換。配列・Element・Closure・リソースは渡せません。
 - **認可はコンポーネント側の責務。** 名前と params は URL に露出するため、敏感な情報を取得するエンドポイントでは、コンポーネント側でセッションや権限を確認してください（HMAC 署名は不要になりました — 名前はあくまで「公開された入口名」）。
 - **入れ子のdeferも動作します。** deferしたコンポーネントの出力内にさらに `<...Deferred />` がある場合、`usephp.js` が再帰的に hydrate します。
-- **2 段構成の defer キャッシュ（L1 インメモリ + opt-in な L2 `localStorage`）。** 保守的な永続化と JS の強制リセット API は上記 [クライアントキャッシュと強制リセット](#クライアントキャッシュと強制リセット) を参照。既定の `private, max-age=0` ポリシーでの挙動は従来のインメモリのみキャッシュと変わりません。
+- **2 段構成の defer キャッシュ（L1 インメモリ + opt-in な L2 `localStorage`）。** 永続化はコンポーネントが決め（HTTP `Cache-Control` ではなく `Defer::$localCacheTtl`）、JS の強制リセット API があります — 上記 [クライアントキャッシュと強制リセット](#クライアントキャッシュと強制リセット) を参照。opt-in しないコンポーネントは従来のインメモリのみキャッシュと全く同じ挙動です。
 - **JSなしのユーザーはfallbackしか見えません。** これは仕様上のトレードオフです。
 - **フレームワーク統合:** コントローラから `UsePHP::handleDeferred()` を呼んでください。defer ルート（GET `/_defer/...`）ならレンダリング済みHTMLを返し、そうでなければ `null` を返します（`handleAction()` と同じパターン）。プレフィックスは `setDeferPrefix('/api/_d')` で変更可。
 

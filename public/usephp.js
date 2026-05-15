@@ -21,18 +21,21 @@
     //       it. Bounded with LRU eviction (see below).
     //
     //   L2  `localStorage` keyed by URL, persisting across reloads and
-    //       tabs. Only populated when the defer endpoint's response is
-    //       explicitly shareable AND time-bounded — `Cache-Control: public`
-    //       with a positive `max-age=N`. Session-coupled endpoints
-    //       (`private` / `no-store` / `no-cache`, which includes the
-    //       framework default `private, max-age=0`) never touch
-    //       localStorage, so a shared terminal cannot leak one user's
-    //       deferred content to the next. The stored entry expires after
-    //       `max-age` seconds, mirroring the server's own cache policy.
+    //       tabs. Strictly opt-in and decided by the component, not
+    //       inferred from HTTP caching: the placeholder carries
+    //       `data-usephp-defer-cache="<seconds>"` when (and only when) the
+    //       component sets `Defer::$localCacheTtl`. No attribute → the
+    //       fragment never touches localStorage and stays L1-only, so a
+    //       session-coupled component (the default) can't leak one user's
+    //       content to the next on a shared terminal. The stored entry
+    //       expires after that many seconds. The endpoint's
+    //       `Cache-Control` header is deliberately ignored here — it
+    //       governs server/CDN caching, a separate concern.
     //
-    // Read order is L1 → L2 → network. An L2 hit is promoted into L1 so the
-    // rest of the page shares one code path (cloning, LRU, nested-defer
-    // hydration) regardless of where the fragment came from.
+    // Read order is L1 → L2 → network. L2 is consulted only when the
+    // placeholder opts in. An L2 hit is promoted into L1 so the rest of
+    // the page shares one code path (cloning, LRU, nested-defer hydration)
+    // regardless of where the fragment came from.
     //
     // Forced reset is exposed two ways:
     //   - `DEFER_CACHE_VERSION`: bump on deploy (or whenever a deferred
@@ -164,32 +167,17 @@
         }
     }
 
-    // Decide whether a defer response may be persisted across sessions and
-    // for how long. Only `public` + a positive `max-age` qualifies; any of
-    // `private` / `no-store` / `no-cache` (and the absence of an explicit
-    // `max-age`) keeps the fragment memory-only. `s-maxage` is deliberately
-    // ignored: it bounds shared/CDN caches, not a private browser store.
-    function parseCacheControl(value) {
-        if (!value) return { persistable: false, maxAge: null };
-        const directives = value
-            .toLowerCase()
-            .split(',')
-            .map((s) => s.trim());
-        if (
-            directives.includes('no-store') ||
-            directives.includes('no-cache') ||
-            directives.includes('private')
-        ) {
-            return { persistable: false, maxAge: null };
-        }
-        let maxAge = null;
-        for (const d of directives) {
-            const m = /^max-age=(\d+)$/.exec(d);
-            if (m) maxAge = parseInt(m[1], 10);
-        }
-        const persistable =
-            directives.includes('public') && maxAge !== null && maxAge > 0;
-        return { persistable, maxAge };
+    // Read the component-declared client cache TTL off a placeholder.
+    // Returns a positive integer second-count when the component opted in
+    // via `Defer::$localCacheTtl` (rendered as `data-usephp-defer-cache`),
+    // or null when it didn't — in which case L2 is skipped entirely for
+    // this placeholder (no read, no write). This is the single source of
+    // truth for client persistence; the HTTP response is never inspected.
+    function placeholderCacheTtl(placeholder) {
+        const raw = placeholder.dataset.usephpDeferCache;
+        if (!raw) return null;
+        const ttl = parseInt(raw, 10);
+        return Number.isFinite(ttl) && ttl > 0 ? ttl : null;
     }
 
     // Evict expired entries first, then oldest-`storedAt` until under the
@@ -232,12 +220,12 @@
         }
     }
 
-    function persistFragment(url, html, maxAge) {
+    function persistFragment(url, html, ttlSeconds) {
         if (!lsAvailable) return;
         const now = Date.now();
         const record = JSON.stringify({
             html,
-            expires: now + maxAge * 1000,
+            expires: now + ttlSeconds * 1000,
             storedAt: now,
         });
         try {
@@ -407,6 +395,11 @@
         const url = placeholder.dataset.usephpDeferUrl;
         if (!url) return;
 
+        // Component-declared client cache lifetime. null → this component
+        // did not opt into localStorage persistence, so L2 is bypassed for
+        // both reads and writes and behaviour matches the old L1-only cache.
+        const localCacheTtl = placeholderCacheTtl(placeholder);
+
         // L1 hit: skip the network round-trip and reuse the previously
         // fetched fragment. Clone so each placeholder gets its own nodes,
         // and re-run processDeferred so nested placeholders (which the
@@ -424,16 +417,18 @@
             return;
         }
 
-        // L2 hit: a previous page/tab persisted this fragment and it's
-        // still within its max-age window. Promote it into L1 (pristine
-        // clone) so subsequent same-page hits and LRU bookkeeping go
-        // through the shared in-memory path.
-        const persisted = readPersisted(url);
-        if (persisted) {
-            rememberDeferFragment(url, persisted.cloneNode(true));
-            processDeferred(persisted);
-            placeholder.replaceWith(persisted);
-            return;
+        // L2 hit: only when this component opted in. A previous page/tab
+        // persisted this fragment and it's still within its TTL window.
+        // Promote it into L1 (pristine clone) so subsequent same-page hits
+        // and LRU bookkeeping go through the shared in-memory path.
+        if (localCacheTtl !== null) {
+            const persisted = readPersisted(url);
+            if (persisted) {
+                rememberDeferFragment(url, persisted.cloneNode(true));
+                processDeferred(persisted);
+                placeholder.replaceWith(persisted);
+                return;
+            }
         }
 
         placeholder.setAttribute('aria-busy', 'true');
@@ -468,12 +463,11 @@
             // leave the cached entry empty otherwise.
             rememberDeferFragment(url, template.content.cloneNode(true));
 
-            // Persist to L2 only when the endpoint declares the response
-            // shareable and time-bounded. Session-coupled defers (the
-            // common case, incl. the framework default) stay memory-only.
-            const cc = parseCacheControl(response.headers.get('Cache-Control'));
-            if (cc.persistable) {
-                persistFragment(url, html, cc.maxAge);
+            // Persist to L2 only when the component opted in via
+            // `Defer::$localCacheTtl`. The HTTP response (Cache-Control or
+            // otherwise) is intentionally not consulted for this decision.
+            if (localCacheTtl !== null) {
+                persistFragment(url, html, localCacheTtl);
             }
 
             // A deferred component's rendered output may itself contain

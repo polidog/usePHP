@@ -61,6 +61,35 @@ class DeferAttributeTest extends TestCase
         new Defer(name: 'not/url-safe');
     }
 
+    public function testLocalCacheTtlDefaultsToNullAndOmitsFromPlaceholder(): void
+    {
+        $defer = new Defer(name: 'x');
+        self::assertNull($defer->localCacheTtl);
+
+        $element = $defer->buildPlaceholder(['fallback' => H::span()]);
+        self::assertArrayHasKey('__localCacheTtl', $element->props);
+        self::assertNull($element->props['__localCacheTtl']);
+    }
+
+    public function testLocalCacheTtlPropagatesIntoPlaceholder(): void
+    {
+        // The component decides client persistence explicitly; the TTL must
+        // ride through buildPlaceholder() onto the H::defer element so the
+        // renderer can emit data-usephp-defer-cache.
+        $defer = new Defer(name: 'x', localCacheTtl: 30);
+        self::assertSame(30, $defer->localCacheTtl);
+
+        $element = $defer->buildPlaceholder(['fallback' => H::span()]);
+        self::assertSame(30, $element->props['__localCacheTtl']);
+    }
+
+    public function testRejectsNonPositiveLocalCacheTtl(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('localCacheTtl');
+        new Defer(name: 'x', localCacheTtl: 0);
+    }
+
     public function testRegisterAutoRendersClassEndpoint(): void
     {
         // Regression for Copilot review on PR #17: registering a #[Defer]

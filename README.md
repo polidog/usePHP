@@ -668,25 +668,37 @@ the URL boundary. All values arrive as **strings** on the server.
 
 - **L1 — in-memory** `Map<URL, DocumentFragment>`, per page lifetime. Always
   on; a full reload clears it. Identical to the previous behaviour.
-- **L2 — `localStorage`**, surviving reloads and shared across tabs. Opt-in:
-  a fragment is persisted **only** when the defer endpoint's response carries
-  `Cache-Control: public` with a positive `max-age=N`. Anything `private` /
-  `no-store` / `no-cache` — including the framework default
-  `private, max-age=0` — stays memory-only, so a shared terminal can't leak
-  one user's session-coupled deferred content to the next. The persisted
-  entry's TTL mirrors the server's `max-age` (`s-maxage` is ignored — it
-  bounds shared caches, not a private browser store).
+- **L2 — `localStorage`**, surviving reloads and shared across tabs.
+  **Strictly opt-in, and the component decides** — `usephp.js` never looks
+  at the HTTP `Cache-Control` header for this. A fragment is persisted
+  **only** when the component sets `Defer::$localCacheTtl` (seconds);
+  without it the fragment stays memory-only, so a session-coupled component
+  (the default) can't leak one user's content to the next on a shared
+  terminal. The persisted entry expires after the declared TTL. The
+  endpoint's `cacheControl` is a **separate** concern (server/CDN caching)
+  and is intentionally decoupled from this client decision.
 
-Read order is L1 → L2 → network; an L2 hit is promoted into L1. Both tiers
-are keyed by URL and bounded at 64 entries (L1 LRU, L2 oldest-first), so a
-list page that defers per-row fragments can't grow them without limit.
+Read order is L1 → L2 → network; L2 is consulted only for components that
+opted in. An L2 hit is promoted into L1. Both tiers are keyed by URL and
+bounded at 64 entries (L1 LRU, L2 oldest-first), so a list page that defers
+per-row fragments can't grow them without limit.
 
-Make a deferred component L2-cacheable by giving its endpoint an explicit
-client TTL:
+Make a deferred component client-cacheable by giving it an explicit local
+TTL — on the `#[Defer]` attribute or the `Defer` value object:
 
 ```php
-#[Defer(name: 'announcement-bar', cacheControl: 'public, max-age=60')]
+// Class component
+#[Defer(name: 'announcement-bar', localCacheTtl: 60)]
+
+// Closure component in a .psx
+fc($render, defer: new Defer(name: 'announcement-bar', localCacheTtl: 60));
 ```
+
+This renders `<div data-usephp-defer-url="…" data-usephp-defer-cache="60">`;
+`usephp.js` reads that attribute (and nothing else) to decide persistence.
+`localCacheTtl` and `cacheControl` are independent: you can ship
+`cacheControl: 'private, no-store'` for the endpoint while still allowing a
+short client cache, or vice versa.
 
 **Forced reset is handled in JS:**
 
@@ -716,7 +728,7 @@ page.
 - **Params must be scalar.** They travel through the URL query string, so `int`/`string`/`float`/`bool` only (bools are coerced to `'1'/'0'`). Arrays, Elements, Closures, and resources are rejected at render time.
 - **Authorization is the component's responsibility.** The name and params are visible in the URL — for endpoints that surface sensitive data, check session/permissions inside the component. (HMAC signing is no longer needed; the name is a public entry-point identifier.)
 - **Nested defer works.** A deferred component's output may itself contain `<...Deferred />` placeholders; `usephp.js` recursively hydrates them.
-- **Two-tier defer cache (L1 in-memory + opt-in L2 `localStorage`).** Conservative persistence and a JS forced-reset API — see [Client-side cache & forced reset](#client-side-cache--forced-reset) above. Behaviour for the default `private, max-age=0` policy is unchanged from the previous in-memory-only cache.
+- **Two-tier defer cache (L1 in-memory + opt-in L2 `localStorage`).** Component-decided persistence (`Defer::$localCacheTtl`, not the HTTP `Cache-Control`) and a JS forced-reset API — see [Client-side cache & forced reset](#client-side-cache--forced-reset) above. Components that don't opt in behave exactly like the previous in-memory-only cache.
 - **No-JS users see the fallback only.** This is the documented trade-off: the deferred component never renders without JavaScript.
 - **Framework integration:** call `UsePHP::handleDeferred()` from your controller; it returns the rendered HTML for `GET /_defer/...` requests, or `null` otherwise. Mirrors `handleAction()`. The prefix is configurable via `setDeferPrefix('/api/_d')`.
 

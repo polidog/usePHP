@@ -401,4 +401,36 @@ class RendererTest extends TestCase
         $this->expectExceptionMessage('must be scalar');
         $renderer->renderElement($element);
     }
+
+    public function testRenderDeferEmitsClientCacheAttributeWhenOptedIn(): void
+    {
+        $renderer = new Renderer('test');
+
+        // localCacheTtl is the explicit, component-side opt-in. usephp.js
+        // reads this attribute (and never the Cache-Control header) to
+        // decide localStorage persistence.
+        $element = H::defer('announcement-bar', [], null, 60);
+        $html = $renderer->renderElement($element);
+
+        $this->assertSame(
+            '<div data-usephp-defer-url="/_defer/announcement-bar" data-usephp-defer-cache="60"></div>',
+            $html,
+        );
+    }
+
+    public function testRenderDeferOmitsClientCacheAttributeWhenNotOptedIn(): void
+    {
+        $renderer = new Renderer('test');
+
+        // No localCacheTtl → byte-for-byte identical to the pre-feature
+        // markup, so non-opted-in components keep the old L1-only behaviour.
+        $this->assertSame(
+            '<div data-usephp-defer-url="/_defer/x"></div>',
+            $renderer->renderElement(H::defer('x')),
+        );
+        $this->assertStringNotContainsString(
+            'data-usephp-defer-cache',
+            $renderer->renderElement(H::defer('y', [], null, null)),
+        );
+    }
 }
