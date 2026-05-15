@@ -510,6 +510,7 @@ final class Renderer
         $fallback = $element->props['__fallback'] ?? null;
         $localCache = $element->props['__localCache'] ?? false;
         $reloadable = $element->props['__reloadable'] ?? false;
+        $localCacheTtl = (int) ($element->props['__localCacheTtl'] ?? 0);
 
         if (!UsePHP::isValidDeferName($name)) {
             throw new \RuntimeException(
@@ -551,6 +552,23 @@ final class Renderer
         // same markup as before.
         $cacheAttr = $localCache === true ? ' data-usephp-defer-cache' : '';
 
+        // Optional hard-discard lifetime for the L2 (localStorage) entry.
+        // A separate attribute (rather than a value on the bare opt-in
+        // above) keeps the default — and every non-opted-in placeholder —
+        // byte-identical to the pre-feature markup, mirroring how
+        // `reloadable` adds its own `data-usephp-defer-name`. Emitted only
+        // when positive and persistence is actually on; `localCacheTtl: 0`
+        // (or `localCache: false`) leaves no trace. A non-positive value
+        // reaching here via a raw `H::defer()` (the `Defer` constructor
+        // normalises it away) is deliberately treated as "no bound", not
+        // an error — the `> 0` test below is the single place that decides
+        // it, so a stray negative simply omits the attribute rather than
+        // emitting one usephp.js would ignore. (`Defer` still throws on a
+        // *positive* TTL without `localCache`, the real misconfiguration.)
+        $cacheTtlAttr = ($localCache === true && $localCacheTtl > 0)
+            ? ' data-usephp-defer-cache-ttl="' . $localCacheTtl . '"'
+            : '';
+
         // Opt-in explicit reload (`Defer::$reloadable`). Carrying the
         // registered name on the placeholder is the single signal usephp.js
         // uses to (a) keep the wrapper in the DOM after the fragment
@@ -562,9 +580,10 @@ final class Renderer
             : '';
 
         return sprintf(
-            '<div data-usephp-defer-url="%s"%s%s>%s</div>',
+            '<div data-usephp-defer-url="%s"%s%s%s>%s</div>',
             htmlspecialchars($url, ENT_QUOTES, 'UTF-8'),
             $cacheAttr,
+            $cacheTtlAttr,
             $nameAttr,
             $fallbackHtml,
         );

@@ -38,10 +38,24 @@ final class Defer
      *        `false` (default) means usephp.js never persists this
      *        component across reloads — it stays in the per-page in-memory
      *        cache only. `true` tells the client to persist the fetched
-     *        fragment; there is no time expiry, the entry lives until a
-     *        `DEFER_CACHE_VERSION` bump or `clearDeferCache()` drops it.
-     *        The component decides this explicitly; usephp.js does not
-     *        infer it from the `Cache-Control` header.
+     *        fragment; by default there is no time expiry, the entry lives
+     *        until a `DEFER_CACHE_VERSION` bump or `clearDeferCache()`
+     *        drops it (see {@see self::$localCacheTtl} to bound it by
+     *        time). The component decides this explicitly; usephp.js does
+     *        not infer it from the `Cache-Control` header.
+     * @param int $localCacheTtl Optional client-side (localStorage) cache
+     *        lifetime in seconds. Any value `<= 0` (the `0` default
+     *        included) means no time expiry and is normalised to `0` —
+     *        byte-identical behaviour to a plain `localCache: true`; a
+     *        nonsensical negative is read as "no bound", not an error. A
+     *        positive value bounds the persisted entry's age: once it is
+     *        older than this many seconds usephp.js discards it on the
+     *        next read and re-fetches from the network (the fallback shows
+     *        briefly, then the fresh fragment). This is a hard discard,
+     *        not stale-while-revalidate. Governs the L2 localStorage tier
+     *        only — the per-page L1 in-memory cache has no time bound.
+     *        Meaningless without persistence, so passing a *positive* TTL
+     *        with `localCache: false` throws.
      * @param bool $reloadable Opt-in explicit reload. `false` (default)
      *        keeps the historical behaviour: usephp.js fetches the fragment
      *        once and `replaceWith()`s the placeholder away, leaving no
@@ -61,10 +75,22 @@ final class Defer
         public ?string $cacheControl = null,
         public bool $localCache = false,
         public bool $reloadable = false,
+        public int $localCacheTtl = 0,
     ) {
         if (!UsePHP::isValidDeferName($name)) {
             throw new \InvalidArgumentException(
                 'Deferred component name must match `' . UsePHP::DEFER_NAME_PATTERN . "`, got: '$name'",
+            );
+        }
+        // A non-positive TTL just means "no time bound" — the same as the
+        // 0 default — rather than an error. Normalise so $localCacheTtl
+        // always reads back as its effective value (0), and so the guard
+        // and renderer below only ever see a clean >= 0.
+        $this->localCacheTtl = max(0, $this->localCacheTtl);
+        if ($this->localCacheTtl > 0 && $localCache === false) {
+            throw new \InvalidArgumentException(
+                "Defer target '$name': localCacheTtl has no effect without localCache: true "
+                . '(it bounds the localStorage entry, which is only written when localCache is opted in).',
             );
         }
     }
@@ -112,6 +138,6 @@ final class Defer
             $scalarProps[(string) $key] = $value;
         }
 
-        return H::defer($this->name, $scalarProps, $fallback, $this->localCache, $this->reloadable);
+        return H::defer($this->name, $scalarProps, $fallback, $this->localCache, $this->reloadable, $this->localCacheTtl);
     }
 }
