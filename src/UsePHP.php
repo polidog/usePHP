@@ -704,7 +704,7 @@ final class UsePHP
 
         $renderer = new Renderer(
             $instanceId,
-            $storageType === StorageType::Snapshot ? $this->getSnapshotSerializer() : null,
+            $this->getSnapshotSerializer(),
             $storageType,
         );
 

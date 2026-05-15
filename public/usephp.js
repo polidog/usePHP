@@ -85,7 +85,17 @@
                 body: formData,
             });
 
-            if (!response.ok) return;
+            if (!response.ok) {
+                // Log so misconfiguration (route only handles GET, server
+                // returns 400 because of bad signature, etc.) is discoverable
+                // — otherwise the user just sees the skeleton stay forever.
+                console.warn(
+                    '[usePHP] defer fetch returned non-OK status:',
+                    response.status,
+                    response.statusText,
+                );
+                return;
+            }
 
             const html = await response.text();
             // Server-rendered HTML is trusted content from our endpoint.
@@ -96,8 +106,10 @@
             // moving the fragment into the DOM so they hydrate too.
             processDeferred(template.content);
             placeholder.replaceWith(template.content);
-        } catch {
-            // Network/other error — leave the fallback in place.
+        } catch (error) {
+            // Network/other error — leave the fallback in place but log so
+            // the failure mode is visible to developers.
+            console.warn('[usePHP] defer fetch failed:', error);
         }
     }
 

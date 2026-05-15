@@ -5,11 +5,34 @@ declare(strict_types=1);
 namespace Polidog\UsePhp\Tests\Psx;
 
 use PHPUnit\Framework\TestCase;
+use Polidog\UsePhp\Component\BaseComponent;
+use Polidog\UsePhp\Component\Component;
+use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Psx\Compiler;
 use Polidog\UsePhp\Psx\StackTraceRewriter;
 use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\RenderContext;
+use Polidog\UsePhp\Storage\StorageType;
 use Polidog\UsePhp\UsePHP;
+
+/**
+ * Memory-storage class component whose render() output contains a defer
+ * placeholder. Used by the regression test that exercises the partial render
+ * path: when a non-Snapshot component is re-rendered via handleAction(),
+ * Renderer must still receive the configured SnapshotSerializer so the defer
+ * placeholder can be signed.
+ */
+#[Component(name: 'memory-with-defer', storage: 'memory')]
+class MemoryComponentWithDefer extends BaseComponent
+{
+    public function render(): Element
+    {
+        return H::div(children: [
+            H::span(children: 'wrapper'),
+            H::defer('App\\DeferredHeader', [], H::span(children: 'loading')),
+        ]);
+    }
+}
 
 class RuntimeIntegrationTest extends TestCase
 {
@@ -327,6 +350,50 @@ class RuntimeIntegrationTest extends TestCase
             }
             \http_response_code($savedStatus === false ? 200 : $savedStatus);
         }
+    }
+
+    public function testPartialRenderOfNonSnapshotComponentEmitsDeferPlaceholder(): void
+    {
+        // Regression: a class component using non-Snapshot storage that
+        // renders a defer placeholder used to throw "snapshot secret required"
+        // from inside doRenderComponentPartialWithInstanceId because the
+        // serializer was conditionally passed only for Snapshot storage.
+        $app = new UsePHP();
+        $app->setSnapshotSecret('partial-defer-secret');
+        $app->registerComponent(
+            'App\\DeferredHeader',
+            static fn(array $props): Element => new Element('header', [], ['hi']),
+        );
+        $app->register(MemoryComponentWithDefer::class);
+
+        $action = [
+            'type' => 'setState',
+            'payload' => ['index' => 0, 'value' => 'x'],
+            'componentId' => 'memory-with-defer#0',
+            'storageType' => StorageType::Memory->value,
+        ];
+
+        $savedPost = $_POST;
+        $savedServer = $_SERVER;
+        try {
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            $_SERVER['HTTP_X_USEPHP_PARTIAL'] = '1';
+            $_POST = [
+                '_usephp_component' => 'memory-with-defer#0',
+                '_usephp_action' => \json_encode($action, \JSON_THROW_ON_ERROR),
+            ];
+
+            $html = $app->handleAction();
+        } finally {
+            $_POST = $savedPost;
+            $_SERVER = $savedServer;
+        }
+
+        self::assertNotNull($html);
+        // Must contain the signed placeholder, not an error.
+        self::assertStringContainsString('data-usephp-defer-payload="', $html);
+        self::assertStringContainsString('data-usephp-defer-sig="', $html);
+        self::assertStringNotContainsString('requires a snapshot secret', $html);
     }
 
     public function testInstallPsxErrorHandlerWritesRewrittenTrace(): void

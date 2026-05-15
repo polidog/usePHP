@@ -429,8 +429,9 @@ final class Renderer
         if (!$serializer->hasSecretKey()) {
             throw new \RuntimeException(
                 "Deferred component '$fqcn' requires a snapshot secret. "
-                . 'Call UsePHP::setSnapshotSecret(...) before rendering any defer placeholder — '
-                . 'an empty-key HMAC would let any client forge defer requests.'
+                . 'Call UsePHP::setSnapshotSecret(...), or pass a SnapshotSerializer '
+                . 'constructed with a secret key directly to Renderer. '
+                . 'An empty-key HMAC would let any client forge defer requests.'
             );
         }
 
