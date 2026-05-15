@@ -16,9 +16,27 @@ require_once __DIR__ . '/../vendor/autoload.php';
 use Polidog\UsePhp\Psx\CompileCommand;
 use Polidog\UsePhp\UsePHP;
 
+session_start();
+
 if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
     header('Content-Type: application/javascript');
     readfile(__DIR__ . '/../public/usephp.js');
+    exit;
+}
+
+// Toy login / logout endpoints used by the defer demo on '/'. The UserHeader
+// component reads $_SESSION at render time — because it is loaded via `defer`,
+// that lookup happens in a separate POST request, so the cacheable main page
+// never varies by session.
+$path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
+if ($path === '/login') {
+    $_SESSION['user'] = ['name' => 'Alice'];
+    header('Location: /', true, 303);
+    exit;
+}
+if ($path === '/logout') {
+    unset($_SESSION['user']);
+    header('Location: /', true, 303);
     exit;
 }
 
@@ -82,6 +100,10 @@ $content = ob_get_clean();
         .btn { padding: 8px 16px; font-size: 0.95rem; border: none; border-radius: 6px; cursor: pointer; background: #4a90e2; color: white; }
         .btn:hover { background: #357abd; }
         .btn-reset { background: #888; }
+        .user-header { padding: 10px 16px; border-radius: 6px; background: #eef4ff; color: #345; display: flex; justify-content: space-between; align-items: center; }
+        .user-header a { color: #4a90e2; }
+        .user-header--skeleton { background: #e6e6e6; color: transparent; animation: pulse 1.2s ease-in-out infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
     </style>
 </head>
 <body>

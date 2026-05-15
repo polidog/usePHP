@@ -273,6 +273,13 @@ final class UsePHP
                 return;
             }
 
+            // Handle deferred component requests
+            if ($request->isPost() && isset($_POST['_usephp_defer_payload'])) {
+                $html = $this->doHandleDeferred();
+                echo $html;
+                return;
+            }
+
             $router = $this->getRouter();
             $match = $router->match($request);
 
@@ -397,6 +404,85 @@ final class UsePHP
         } finally {
             RenderContext::clearApp();
         }
+    }
+
+    /**
+     * Handle a deferred component fetch and return the rendered HTML.
+     * Returns null if the request is not a valid defer request.
+     *
+     * Use this from inside a framework integration so the defer endpoint
+     * works without going through UsePHP::run().
+     */
+    public function handleDeferred(): ?string
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !isset($_POST['_usephp_defer_payload'])) {
+            return null;
+        }
+
+        RenderContext::setApp($this);
+
+        try {
+            return $this->doHandleDeferred();
+        } finally {
+            RenderContext::clearApp();
+        }
+    }
+
+    /**
+     * Render a deferred component request.
+     */
+    private function doHandleDeferred(): string
+    {
+        $payload = $_POST['_usephp_defer_payload'] ?? null;
+        $sig = $_POST['_usephp_defer_sig'] ?? null;
+
+        if (!is_string($payload) || !is_string($sig)) {
+            http_response_code(400);
+            return 'Invalid defer request';
+        }
+
+        // Without a secret, an empty-key HMAC would accept any payload from
+        // any client. Refuse rather than silently rendering attacker-chosen
+        // components.
+        $serializer = $this->getSnapshotSerializer();
+        if (!$serializer->hasSecretKey()) {
+            http_response_code(400);
+            return 'Defer endpoint disabled: snapshot secret not configured';
+        }
+
+        if (!$serializer->verifyString($payload, $sig)) {
+            http_response_code(400);
+            return 'Invalid defer signature';
+        }
+
+        try {
+            /** @var array{fqcn?: mixed, props?: mixed} $data */
+            $data = json_decode($payload, true, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            http_response_code(400);
+            return 'Invalid defer payload';
+        }
+
+        $fqcn = $data['fqcn'] ?? null;
+        $props = $data['props'] ?? [];
+
+        if (!is_string($fqcn) || !is_array($props)) {
+            http_response_code(400);
+            return 'Invalid defer payload';
+        }
+
+        // Reset render context state — this is a fresh sub-render, not a
+        // continuation of any page-level render pass.
+        RenderContext::beginRender();
+
+        try {
+            $element = $this->renderPsxComponent($fqcn, $props);
+        } catch (\RuntimeException $e) {
+            http_response_code(404);
+            return 'Deferred component not found: ' . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8');
+        }
+
+        return $this->renderElement($element);
     }
 
     /**
@@ -587,7 +673,7 @@ final class UsePHP
 
             $renderer = new Renderer(
                 $instanceId,
-                $storageType === StorageType::Snapshot ? $this->getSnapshotSerializer() : null,
+                $this->getSnapshotSerializer(),
                 $storageType,
             );
 
@@ -618,7 +704,7 @@ final class UsePHP
 
         $renderer = new Renderer(
             $instanceId,
-            $storageType === StorageType::Snapshot ? $this->getSnapshotSerializer() : null,
+            $this->getSnapshotSerializer(),
             $storageType,
         );
 

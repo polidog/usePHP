@@ -169,4 +169,31 @@ class SnapshotSerializerTest extends TestCase
 
         $this->assertNotEquals($checksum1, $checksum2);
     }
+
+    public function testSignStringIsDeterministicAndVerifies(): void
+    {
+        $serializer = new SnapshotSerializer('my-secret-key');
+        $sig1 = $serializer->signString('hello');
+        $sig2 = $serializer->signString('hello');
+
+        $this->assertSame($sig1, $sig2);
+        $this->assertTrue($serializer->verifyString('hello', $sig1));
+    }
+
+    public function testVerifyStringRejectsTamperedPayload(): void
+    {
+        $serializer = new SnapshotSerializer('my-secret-key');
+        $sig = $serializer->signString('hello');
+
+        $this->assertFalse($serializer->verifyString('hello-tampered', $sig));
+    }
+
+    public function testVerifyStringRejectsWrongSecret(): void
+    {
+        $signer = new SnapshotSerializer('secret-a');
+        $verifier = new SnapshotSerializer('secret-b');
+        $sig = $signer->signString('hello');
+
+        $this->assertFalse($verifier->verifyString('hello', $sig));
+    }
 }

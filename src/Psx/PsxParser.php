@@ -494,8 +494,25 @@ final class PsxParser implements PsxParserInterface
             ? $this->namespaceContext->resolve($tagName)
             : $tagName;
 
-        $propsEntries = [];
+        // Pull off the magic `defer` and `fallback` attributes if present so
+        // they don't end up in the props bag.
+        $isDeferred = false;
+        $fallbackExpr = null;
+        $remainingAttrs = [];
         foreach ($attrs as $attr) {
+            if ($attr['name'] === 'defer') {
+                $isDeferred = true;
+                continue;
+            }
+            if ($attr['name'] === 'fallback') {
+                $fallbackExpr = $attr['value'];
+                continue;
+            }
+            $remainingAttrs[] = $attr;
+        }
+
+        $propsEntries = [];
+        foreach ($remainingAttrs as $attr) {
             $name = $attr['name'];
             $value = $attr['value'];
             $propsEntries[] = "'$name' => $value";
@@ -505,6 +522,12 @@ final class PsxParser implements PsxParserInterface
         }
         $props = '[' . \implode(', ', $propsEntries) . ']';
         $escapedFqcn = \str_replace('\\', '\\\\', $fqcn);
+
+        if ($isDeferred) {
+            $fallbackArg = $fallbackExpr ?? 'null';
+            return "\\Polidog\\UsePhp\\Html\\H::defer('$escapedFqcn', $props, $fallbackArg)";
+        }
+
         return "\\Polidog\\UsePhp\\Runtime\\RenderContext::getApp()->renderPsxComponent('$escapedFqcn', $props)";
     }
 

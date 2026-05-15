@@ -11,6 +11,8 @@ use Polidog\UsePhp\Runtime\Renderer;
 
 use function Polidog\UsePhp\Runtime\useState;
 
+use Polidog\UsePhp\Snapshot\SnapshotSerializer;
+
 class RendererTest extends TestCase
 {
     public function testRenderSimpleElement(): void
@@ -325,5 +327,80 @@ class RendererTest extends TestCase
         // Should not contain "null" or "false" as text
         $this->assertStringNotContainsString('null', $html);
         $this->assertStringNotContainsString('false', $html);
+    }
+
+    public function testRenderDeferEmitsPlaceholderWithFallback(): void
+    {
+        $serializer = new SnapshotSerializer('test-secret');
+        $renderer = new Renderer('test', $serializer);
+
+        $element = H::defer(
+            'App\\Components\\UserHeader',
+            ['initial' => 1],
+            H::div(className: 'skeleton', children: 'Loading...'),
+        );
+
+        $html = $renderer->renderElement($element);
+
+        // Placeholder wrapper carries the signed payload.
+        $this->assertStringContainsString('data-usephp-defer-payload="', $html);
+        $this->assertStringContainsString('data-usephp-defer-sig="', $html);
+        // FQCN appears in the (JSON-escaped) payload.
+        $this->assertStringContainsString('App\\\\Components\\\\UserHeader', $html);
+        // Fallback is rendered inline.
+        $this->assertStringContainsString('<div class="skeleton">Loading...</div>', $html);
+    }
+
+    public function testRenderDeferEmptyFallback(): void
+    {
+        $renderer = new Renderer('test', new SnapshotSerializer('test-secret'));
+
+        $element = H::defer('App\\Components\\Foo');
+
+        $html = $renderer->renderElement($element);
+
+        $this->assertStringContainsString('data-usephp-defer-payload="', $html);
+        // No inner content.
+        $this->assertMatchesRegularExpression('/data-usephp-defer-sig="[a-f0-9]+"><\/div>$/', $html);
+    }
+
+    public function testRenderDeferSignatureMatchesSerializer(): void
+    {
+        $serializer = new SnapshotSerializer('test-secret');
+        $renderer = new Renderer('test', $serializer);
+
+        $element = H::defer('App\\Foo', ['x' => 1]);
+        $html = $renderer->renderElement($element);
+
+        // Extract payload and sig from the placeholder attributes.
+        \preg_match('/data-usephp-defer-payload="([^"]+)"/', $html, $payloadMatch);
+        \preg_match('/data-usephp-defer-sig="([^"]+)"/', $html, $sigMatch);
+        $payload = \htmlspecialchars_decode($payloadMatch[1], ENT_QUOTES);
+        $sig = $sigMatch[1];
+
+        $this->assertTrue($serializer->verifyString($payload, $sig));
+    }
+
+    public function testRenderDeferThrowsWhenSecretNotConfigured(): void
+    {
+        // No serializer at all → renderDeferred constructs an empty-key one
+        // internally and must refuse to emit a forgeable placeholder.
+        $renderer = new Renderer('test');
+        $element = H::defer('App\\Foo');
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('requires a snapshot secret');
+        $renderer->renderElement($element);
+    }
+
+    public function testRenderDeferThrowsWhenSecretIsEmpty(): void
+    {
+        // Empty-key serializer explicitly passed in.
+        $renderer = new Renderer('test', new SnapshotSerializer(''));
+        $element = H::defer('App\\Foo');
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('requires a snapshot secret');
+        $renderer->renderElement($element);
     }
 }

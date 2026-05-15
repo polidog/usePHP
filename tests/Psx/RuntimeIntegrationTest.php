@@ -5,11 +5,34 @@ declare(strict_types=1);
 namespace Polidog\UsePhp\Tests\Psx;
 
 use PHPUnit\Framework\TestCase;
+use Polidog\UsePhp\Component\BaseComponent;
+use Polidog\UsePhp\Component\Component;
+use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Psx\Compiler;
 use Polidog\UsePhp\Psx\StackTraceRewriter;
 use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\RenderContext;
+use Polidog\UsePhp\Storage\StorageType;
 use Polidog\UsePhp\UsePHP;
+
+/**
+ * Memory-storage class component whose render() output contains a defer
+ * placeholder. Used by the regression test that exercises the partial render
+ * path: when a non-Snapshot component is re-rendered via handleAction(),
+ * Renderer must still receive the configured SnapshotSerializer so the defer
+ * placeholder can be signed.
+ */
+#[Component(name: 'memory-with-defer', storage: 'memory')]
+class MemoryComponentWithDefer extends BaseComponent
+{
+    public function render(): Element
+    {
+        return H::div(children: [
+            H::span(children: 'wrapper'),
+            H::defer('App\\DeferredHeader', [], H::span(children: 'loading')),
+        ]);
+    }
+}
 
 class RuntimeIntegrationTest extends TestCase
 {
@@ -159,6 +182,218 @@ class RuntimeIntegrationTest extends TestCase
         RenderContext::beginRender();
         $element = $app->renderPsxComponent('App\\Inline', ['text' => 'hello']);
         self::assertSame('p', $element->type);
+    }
+
+    public function testHandleDeferredReturnsNullWhenNotADeferRequest(): void
+    {
+        $app = new UsePHP();
+        $savedPost = $_POST;
+        $savedMethod = $_SERVER['REQUEST_METHOD'] ?? null;
+        try {
+            $_POST = [];
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            self::assertNull($app->handleDeferred());
+
+            $_SERVER['REQUEST_METHOD'] = 'GET';
+            self::assertNull($app->handleDeferred());
+        } finally {
+            $_POST = $savedPost;
+            if ($savedMethod === null) {
+                unset($_SERVER['REQUEST_METHOD']);
+            } else {
+                $_SERVER['REQUEST_METHOD'] = $savedMethod;
+            }
+        }
+    }
+
+    public function testHandleDeferredRendersComponentForValidSignedPayload(): void
+    {
+        $app = new UsePHP();
+        $app->setSnapshotSecret('defer-test-secret');
+        $app->registerComponent(
+            'App\\Header',
+            static fn(array $props): Element => new Element('header', [], [($props['name'] ?? 'guest')]),
+        );
+
+        $payload = \json_encode(
+            ['fqcn' => 'App\\Header', 'props' => ['name' => 'alice']],
+            \JSON_UNESCAPED_UNICODE | \JSON_UNESCAPED_SLASHES,
+        );
+        $sig = $app->getSnapshotSerializer()->signString($payload);
+
+        $savedPost = $_POST;
+        $savedMethod = $_SERVER['REQUEST_METHOD'] ?? null;
+        try {
+            $_POST = [
+                '_usephp_defer_payload' => $payload,
+                '_usephp_defer_sig' => $sig,
+            ];
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            $html = $app->handleDeferred();
+        } finally {
+            $_POST = $savedPost;
+            if ($savedMethod === null) {
+                unset($_SERVER['REQUEST_METHOD']);
+            } else {
+                $_SERVER['REQUEST_METHOD'] = $savedMethod;
+            }
+        }
+
+        self::assertNotNull($html);
+        self::assertStringContainsString('<header>alice</header>', $html);
+    }
+
+    public function testHandleDeferredRejectsTamperedSignature(): void
+    {
+        $app = new UsePHP();
+        $app->setSnapshotSecret('defer-test-secret');
+        $app->registerComponent(
+            'App\\Header',
+            static fn(array $props): Element => new Element('header', [], ['x']),
+        );
+
+        $savedPost = $_POST;
+        $savedMethod = $_SERVER['REQUEST_METHOD'] ?? null;
+        $savedStatus = \http_response_code();
+        try {
+            $_POST = [
+                '_usephp_defer_payload' => '{"fqcn":"App\\\\Header","props":{}}',
+                '_usephp_defer_sig' => 'not-a-valid-sig',
+            ];
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            $html = $app->handleDeferred();
+            self::assertSame('Invalid defer signature', $html);
+            self::assertSame(400, \http_response_code());
+        } finally {
+            $_POST = $savedPost;
+            if ($savedMethod === null) {
+                unset($_SERVER['REQUEST_METHOD']);
+            } else {
+                $_SERVER['REQUEST_METHOD'] = $savedMethod;
+            }
+            \http_response_code($savedStatus === false ? 200 : $savedStatus);
+        }
+    }
+
+    public function testHandleDeferredRejectsUnregisteredComponent(): void
+    {
+        $app = new UsePHP();
+        $app->setSnapshotSecret('defer-test-secret');
+
+        $payload = \json_encode(
+            ['fqcn' => 'App\\NotRegistered', 'props' => []],
+            \JSON_UNESCAPED_UNICODE | \JSON_UNESCAPED_SLASHES,
+        );
+        $sig = $app->getSnapshotSerializer()->signString($payload);
+
+        $savedPost = $_POST;
+        $savedMethod = $_SERVER['REQUEST_METHOD'] ?? null;
+        $savedStatus = \http_response_code();
+        try {
+            $_POST = [
+                '_usephp_defer_payload' => $payload,
+                '_usephp_defer_sig' => $sig,
+            ];
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            $html = $app->handleDeferred();
+            self::assertNotNull($html);
+            self::assertStringContainsString('not registered', $html);
+            self::assertSame(404, \http_response_code());
+        } finally {
+            $_POST = $savedPost;
+            if ($savedMethod === null) {
+                unset($_SERVER['REQUEST_METHOD']);
+            } else {
+                $_SERVER['REQUEST_METHOD'] = $savedMethod;
+            }
+            \http_response_code($savedStatus === false ? 200 : $savedStatus);
+        }
+    }
+
+    public function testHandleDeferredRejectsWhenSecretNotConfigured(): void
+    {
+        // No setSnapshotSecret() call → empty-key serializer → endpoint must
+        // refuse rather than verify against an attacker-computable HMAC.
+        $app = new UsePHP();
+        $app->registerComponent(
+            'App\\Header',
+            static fn(array $props): Element => new Element('header', [], ['x']),
+        );
+
+        // Payload + a signature computed with the (empty) default key — would
+        // pass verifyString() if the endpoint did not gate on hasSecretKey().
+        $payload = \json_encode(
+            ['fqcn' => 'App\\Header', 'props' => []],
+            \JSON_UNESCAPED_UNICODE | \JSON_UNESCAPED_SLASHES,
+        );
+        $forgedSig = \hash_hmac('sha256', $payload, '');
+
+        $savedPost = $_POST;
+        $savedMethod = $_SERVER['REQUEST_METHOD'] ?? null;
+        $savedStatus = \http_response_code();
+        try {
+            $_POST = [
+                '_usephp_defer_payload' => $payload,
+                '_usephp_defer_sig' => $forgedSig,
+            ];
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            $html = $app->handleDeferred();
+            self::assertNotNull($html);
+            self::assertStringContainsString('snapshot secret not configured', $html);
+            self::assertSame(400, \http_response_code());
+        } finally {
+            $_POST = $savedPost;
+            if ($savedMethod === null) {
+                unset($_SERVER['REQUEST_METHOD']);
+            } else {
+                $_SERVER['REQUEST_METHOD'] = $savedMethod;
+            }
+            \http_response_code($savedStatus === false ? 200 : $savedStatus);
+        }
+    }
+
+    public function testPartialRenderOfNonSnapshotComponentEmitsDeferPlaceholder(): void
+    {
+        // Regression: a class component using non-Snapshot storage that
+        // renders a defer placeholder used to throw "snapshot secret required"
+        // from inside doRenderComponentPartialWithInstanceId because the
+        // serializer was conditionally passed only for Snapshot storage.
+        $app = new UsePHP();
+        $app->setSnapshotSecret('partial-defer-secret');
+        $app->registerComponent(
+            'App\\DeferredHeader',
+            static fn(array $props): Element => new Element('header', [], ['hi']),
+        );
+        $app->register(MemoryComponentWithDefer::class);
+
+        $action = [
+            'type' => 'setState',
+            'payload' => ['index' => 0, 'value' => 'x'],
+            'componentId' => 'memory-with-defer#0',
+            'storageType' => StorageType::Memory->value,
+        ];
+
+        $savedPost = $_POST;
+        $savedServer = $_SERVER;
+        try {
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            $_SERVER['HTTP_X_USEPHP_PARTIAL'] = '1';
+            $_POST = [
+                '_usephp_component' => 'memory-with-defer#0',
+                '_usephp_action' => \json_encode($action, \JSON_THROW_ON_ERROR),
+            ];
+
+            $html = $app->handleAction();
+        } finally {
+            $_POST = $savedPost;
+            $_SERVER = $savedServer;
+        }
+
+        self::assertNotNull($html);
+        // Must contain the signed placeholder, not an error.
+        self::assertStringContainsString('data-usephp-defer-payload="', $html);
+        self::assertStringContainsString('data-usephp-defer-sig="', $html);
+        self::assertStringNotContainsString('requires a snapshot secret', $html);
     }
 
     public function testInstallPsxErrorHandlerWritesRewrittenTrace(): void

@@ -588,6 +588,33 @@ Each editor's README walks through install + verify steps. An LSP /
 tree-sitter grammar / PHPStan extension are intentionally out of scope
 here and will land in dedicated repositories.
 
+## Deferred rendering (CDN-friendly partial hydration)
+
+Some components depend on per-user state (logged-in name, cart count, A/B
+bucket) and would otherwise force the entire page out of the CDN cache. Mark
+those components `defer` and only the fallback is included in the cacheable
+HTML — the real component is fetched in a separate POST after the page loads.
+
+```psx
+<UserHeader defer fallback={<HeaderSkeleton />} />
+```
+
+What happens at runtime:
+
+1. SSR emits a placeholder `<div data-usephp-defer-payload="..." data-usephp-defer-sig="...">` containing the rendered fallback element. The payload is HMAC-signed with the snapshot secret so the client cannot forge requests for other components.
+2. The main HTML is independent of the user — safe to cache at the CDN edge.
+3. `usephp.js` finds all `[data-usephp-defer-payload]` elements after `DOMContentLoaded` and `POST`s the payload back. The server verifies the signature, calls `renderPsxComponent($fqcn, $props)`, and returns the rendered HTML.
+4. The placeholder is replaced in place with the real component.
+
+### Requirements & limitations
+
+- **Snapshot secret is required.** `defer` reuses the snapshot HMAC key. Rendering a defer placeholder without `UsePHP::setSnapshotSecret(...)` throws, and the endpoint refuses defer fetches when no secret is set — an empty-key HMAC would let any client forge payloads.
+- **Deferred targets must be PSX components or `registerComponent()`-registered callables.** Class-based components (`BaseComponent` subclasses with `#[Component]`) are not yet supported as defer targets — wrap them in a `fc()` if you need this.
+- **Props must be JSON-serializable.** Closures, Elements, and resources cannot cross the boundary. Passing an `Element` as a prop on a deferred component throws at render time.
+- **Nested defer works.** A deferred component's output may itself contain `<X defer />` placeholders; `usephp.js` recursively hydrates them.
+- **No-JS users see the fallback only.** This is the documented trade-off: the deferred component never renders without JavaScript.
+- **Framework integration:** call `UsePHP::handleDeferred()` from your controller; it returns the rendered HTML or `null` if the current request is not a defer fetch. Mirrors `handleAction()`.
+
 ## Generated HTML
 
 ```php
