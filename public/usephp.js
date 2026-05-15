@@ -22,13 +22,14 @@
     //
     //   L2  `localStorage` keyed by URL, persisting across reloads and
     //       tabs. Strictly opt-in and decided by the component, not
-    //       inferred from HTTP caching: the placeholder carries
-    //       `data-usephp-defer-cache="<seconds>"` when (and only when) the
-    //       component sets `Defer::$localCacheTtl`. No attribute → the
+    //       inferred from HTTP caching: the placeholder carries a bare
+    //       `data-usephp-defer-cache` attribute when (and only when) the
+    //       component sets `Defer::$localCache`. No attribute → the
     //       fragment never touches localStorage and stays L1-only, so a
     //       session-coupled component (the default) can't leak one user's
-    //       content to the next on a shared terminal. The stored entry
-    //       expires after that many seconds. The endpoint's
+    //       content to the next on a shared terminal. There is no time
+    //       expiry: a persisted entry lives until a `DEFER_CACHE_VERSION`
+    //       bump or `clearDeferCache()` drops it. The endpoint's
     //       `Cache-Control` header is deliberately ignored here — it
     //       governs server/CDN caching, a separate concern.
     //
@@ -167,25 +168,21 @@
         }
     }
 
-    // Read the component-declared client cache TTL off a placeholder.
-    // Returns a positive integer second-count when the component opted in
-    // via `Defer::$localCacheTtl` (rendered as `data-usephp-defer-cache`),
-    // or null when it didn't — in which case L2 is skipped entirely for
-    // this placeholder (no read, no write). This is the single source of
-    // truth for client persistence; the HTTP response is never inspected.
-    function placeholderCacheTtl(placeholder) {
-        const raw = placeholder.dataset.usephpDeferCache;
-        if (!raw) return null;
-        const ttl = parseInt(raw, 10);
-        return Number.isFinite(ttl) && ttl > 0 ? ttl : null;
+    // Whether the component opted into client persistence. True iff the
+    // placeholder carries the bare `data-usephp-defer-cache` attribute
+    // (rendered when `Defer::$localCache` is set). When false, L2 is
+    // skipped entirely for this placeholder (no read, no write). This is
+    // the single source of truth; the HTTP response is never inspected.
+    function placeholderWantsLocalCache(placeholder) {
+        return placeholder.hasAttribute('data-usephp-defer-cache');
     }
 
-    // Evict expired entries first, then oldest-`storedAt` until under the
-    // cap, so a long-lived page that keeps deferring fresh URLs can't grow
-    // localStorage unbounded.
+    // Evict oldest-`storedAt`-first until under the cap, so a long-lived
+    // page that keeps deferring fresh URLs can't grow localStorage
+    // unbounded. This is a storage bound, not a validity policy — entries
+    // never expire by time.
     function enforcePersistedCap() {
         if (!lsAvailable) return;
-        const now = Date.now();
         const entries = [];
         for (const url of persistedUrls()) {
             let raw;
@@ -202,11 +199,7 @@
                 removePersisted(url);
                 continue;
             }
-            if (
-                !rec ||
-                typeof rec.expires !== 'number' ||
-                rec.expires <= now
-            ) {
+            if (!rec || typeof rec.html !== 'string') {
                 removePersisted(url);
                 continue;
             }
@@ -220,13 +213,11 @@
         }
     }
 
-    function persistFragment(url, html, ttlSeconds) {
+    function persistFragment(url, html) {
         if (!lsAvailable) return;
-        const now = Date.now();
         const record = JSON.stringify({
             html,
-            expires: now + ttlSeconds * 1000,
-            storedAt: now,
+            storedAt: Date.now(),
         });
         try {
             enforcePersistedCap();
@@ -244,8 +235,9 @@
         }
     }
 
-    // Return a fresh DocumentFragment for a still-valid persisted entry,
-    // or null on miss / expiry / corruption (pruning the bad entry).
+    // Return a fresh DocumentFragment for a persisted entry, or null on
+    // miss / corruption (pruning the bad entry). No time check — entries
+    // are valid until a version bump or clearDeferCache() removes them.
     function readPersisted(url) {
         if (!lsAvailable) return null;
         let raw;
@@ -262,12 +254,7 @@
             removePersisted(url);
             return null;
         }
-        if (
-            !rec ||
-            typeof rec.html !== 'string' ||
-            typeof rec.expires !== 'number' ||
-            rec.expires <= Date.now()
-        ) {
+        if (!rec || typeof rec.html !== 'string') {
             removePersisted(url);
             return null;
         }
@@ -395,10 +382,10 @@
         const url = placeholder.dataset.usephpDeferUrl;
         if (!url) return;
 
-        // Component-declared client cache lifetime. null → this component
-        // did not opt into localStorage persistence, so L2 is bypassed for
-        // both reads and writes and behaviour matches the old L1-only cache.
-        const localCacheTtl = placeholderCacheTtl(placeholder);
+        // Component-declared opt-in. false → this component did not opt
+        // into localStorage persistence, so L2 is bypassed for both reads
+        // and writes and behaviour matches the old L1-only cache.
+        const wantsLocalCache = placeholderWantsLocalCache(placeholder);
 
         // L1 hit: skip the network round-trip and reuse the previously
         // fetched fragment. Clone so each placeholder gets its own nodes,
@@ -418,10 +405,10 @@
         }
 
         // L2 hit: only when this component opted in. A previous page/tab
-        // persisted this fragment and it's still within its TTL window.
-        // Promote it into L1 (pristine clone) so subsequent same-page hits
-        // and LRU bookkeeping go through the shared in-memory path.
-        if (localCacheTtl !== null) {
+        // persisted this fragment. Promote it into L1 (pristine clone) so
+        // subsequent same-page hits and LRU bookkeeping go through the
+        // shared in-memory path.
+        if (wantsLocalCache) {
             const persisted = readPersisted(url);
             if (persisted) {
                 rememberDeferFragment(url, persisted.cloneNode(true));
@@ -464,10 +451,10 @@
             rememberDeferFragment(url, template.content.cloneNode(true));
 
             // Persist to L2 only when the component opted in via
-            // `Defer::$localCacheTtl`. The HTTP response (Cache-Control or
+            // `Defer::$localCache`. The HTTP response (Cache-Control or
             // otherwise) is intentionally not consulted for this decision.
-            if (localCacheTtl !== null) {
-                persistFragment(url, html, localCacheTtl);
+            if (wantsLocalCache) {
+                persistFragment(url, html);
             }
 
             // A deferred component's rendered output may itself contain

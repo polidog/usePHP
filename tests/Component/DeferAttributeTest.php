@@ -61,33 +61,26 @@ class DeferAttributeTest extends TestCase
         new Defer(name: 'not/url-safe');
     }
 
-    public function testLocalCacheTtlDefaultsToNullAndOmitsFromPlaceholder(): void
+    public function testLocalCacheDefaultsToFalseAndOmitsFromPlaceholder(): void
     {
         $defer = new Defer(name: 'x');
-        self::assertNull($defer->localCacheTtl);
+        self::assertFalse($defer->localCache);
 
         $element = $defer->buildPlaceholder(['fallback' => H::span()]);
-        self::assertArrayHasKey('__localCacheTtl', $element->props);
-        self::assertNull($element->props['__localCacheTtl']);
+        self::assertArrayHasKey('__localCache', $element->props);
+        self::assertFalse($element->props['__localCache']);
     }
 
-    public function testLocalCacheTtlPropagatesIntoPlaceholder(): void
+    public function testLocalCachePropagatesIntoPlaceholder(): void
     {
-        // The component decides client persistence explicitly; the TTL must
-        // ride through buildPlaceholder() onto the H::defer element so the
-        // renderer can emit data-usephp-defer-cache.
-        $defer = new Defer(name: 'x', localCacheTtl: 30);
-        self::assertSame(30, $defer->localCacheTtl);
+        // The component decides client persistence explicitly; the opt-in
+        // flag must ride through buildPlaceholder() onto the H::defer
+        // element so the renderer can emit data-usephp-defer-cache.
+        $defer = new Defer(name: 'x', localCache: true);
+        self::assertTrue($defer->localCache);
 
         $element = $defer->buildPlaceholder(['fallback' => H::span()]);
-        self::assertSame(30, $element->props['__localCacheTtl']);
-    }
-
-    public function testRejectsNonPositiveLocalCacheTtl(): void
-    {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('localCacheTtl');
-        new Defer(name: 'x', localCacheTtl: 0);
+        self::assertTrue($element->props['__localCache']);
     }
 
     public function testRegisterAutoRendersClassEndpoint(): void

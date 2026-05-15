@@ -406,14 +406,14 @@ class RendererTest extends TestCase
     {
         $renderer = new Renderer('test');
 
-        // localCacheTtl is the explicit, component-side opt-in. usephp.js
-        // reads this attribute (and never the Cache-Control header) to
-        // decide localStorage persistence.
-        $element = H::defer('announcement-bar', [], null, 60);
+        // localCache is the explicit, component-side opt-in. usephp.js keys
+        // off the bare attribute's presence (no value, no TTL) and never
+        // reads the Cache-Control header.
+        $element = H::defer('announcement-bar', [], null, true);
         $html = $renderer->renderElement($element);
 
         $this->assertSame(
-            '<div data-usephp-defer-url="/_defer/announcement-bar" data-usephp-defer-cache="60"></div>',
+            '<div data-usephp-defer-url="/_defer/announcement-bar" data-usephp-defer-cache></div>',
             $html,
         );
     }
@@ -422,7 +422,7 @@ class RendererTest extends TestCase
     {
         $renderer = new Renderer('test');
 
-        // No localCacheTtl → byte-for-byte identical to the pre-feature
+        // No localCache → byte-for-byte identical to the pre-feature
         // markup, so non-opted-in components keep the old L1-only behaviour.
         $this->assertSame(
             '<div data-usephp-defer-url="/_defer/x"></div>',
@@ -430,7 +430,7 @@ class RendererTest extends TestCase
         );
         $this->assertStringNotContainsString(
             'data-usephp-defer-cache',
-            $renderer->renderElement(H::defer('y', [], null, null)),
+            $renderer->renderElement(H::defer('y', [], null, false)),
         );
     }
 }
