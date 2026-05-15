@@ -7,6 +7,7 @@ namespace Polidog\UsePhp;
 use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\ComponentInterface;
 use Polidog\UsePhp\Component\ComponentRegistry;
+use Polidog\UsePhp\Component\Defer;
 use Polidog\UsePhp\Router\NullRouter;
 use Polidog\UsePhp\Router\RequestContext;
 use Polidog\UsePhp\Router\RouteMatch;
@@ -60,6 +61,14 @@ final class UsePHP
     private string $deferPrefix = Renderer::DEFAULT_DEFER_PREFIX;
 
     /**
+     * True while {@see doHandleDeferred()} is rendering an endpoint response.
+     * Read by {@see FunctionComponent} (and the class-component path in
+     * {@see doCreateElement()}/{@see doRenderComponent()}) to decide whether
+     * to emit a defer placeholder or to actually invoke the inner component.
+     */
+    private bool $renderingDeferredEndpoint = false;
+
+    /**
      * Optional header sink used by tests to capture headers without depending
      * on xdebug. In production this stays null and we go through `\header()`.
      *
@@ -75,17 +84,32 @@ final class UsePHP
     /**
      * Register a component class.
      *
+     * If the class carries a `#[Defer]` attribute, the deferred endpoint is
+     * auto-registered too — callers don't need a separate
+     * `registerDeferred()` call.
+     *
      * @param class-string<ComponentInterface> $className
      */
     public function register(string $className): self
     {
         $this->registry->register($className);
+
+        $defer = $this->registry->getDefer($className::getComponentName());
+        if ($defer !== null) {
+            $this->autoRegisterDeferred($defer->name, $className, $defer->cacheControl);
+        }
+
         return $this;
     }
 
     /**
      * Load a PSX component manifest. The manifest is a PHP file that returns
      * an array mapping FQCN to compiled .psx.php file paths.
+     *
+     * If a sibling `deferred-manifest.php` exists in the same directory, its
+     * `name => ['component' => FQCN, 'cacheControl' => ...]` entries are
+     * auto-registered as deferred endpoints — produced by
+     * `usephp compile` for any .psx that returned `fc(..., defer: ...)`.
      */
     public function loadComponentManifest(string $path): self
     {
@@ -99,6 +123,30 @@ final class UsePHP
         foreach ($manifest as $fqcn => $filePath) {
             $this->psxManifest[(string) $fqcn] = (string) $filePath;
         }
+
+        $deferredPath = \dirname($path) . \DIRECTORY_SEPARATOR
+            . \Polidog\UsePhp\Psx\CompileCommand::DEFERRED_MANIFEST_FILENAME;
+        if (\file_exists($deferredPath)) {
+            $deferred = require $deferredPath;
+            if (!\is_array($deferred)) {
+                throw new \RuntimeException("PSX deferred manifest must return an array: $deferredPath");
+            }
+            foreach ($deferred as $name => $entry) {
+                if (!\is_array($entry) || !isset($entry['component']) || !\is_string($entry['component'])) {
+                    throw new \RuntimeException(
+                        "PSX deferred manifest entry for '$name' is malformed in $deferredPath",
+                    );
+                }
+                $cacheControl = $entry['cacheControl'] ?? null;
+                if ($cacheControl !== null && !\is_string($cacheControl)) {
+                    throw new \RuntimeException(
+                        "PSX deferred manifest cacheControl for '$name' must be string|null in $deferredPath",
+                    );
+                }
+                $this->autoRegisterDeferred((string) $name, $entry['component'], $cacheControl);
+            }
+        }
+
         return $this;
     }
 
@@ -153,6 +201,40 @@ final class UsePHP
             'cacheControl' => $cacheControl,
         ];
         return $this;
+    }
+
+    /**
+     * Internal counterpart to {@see registerDeferred()} used by the auto-wire
+     * paths (`#[Defer]` on classes, the deferred manifest produced by
+     * `usephp compile`). Re-registering the *same* component with the *same*
+     * cacheControl is a no-op so dev-mode rebuilds (e.g., re-loading the
+     * manifest on every request) stay silent — but a conflicting redefine
+     * surfaces as an error the same way as a user-driven double-register.
+     */
+    private function autoRegisterDeferred(
+        string $name,
+        string $component,
+        ?string $cacheControl,
+    ): void {
+        if (isset($this->deferredRegistry[$name])) {
+            $existing = $this->deferredRegistry[$name];
+            if ($existing['component'] === $component && $existing['cacheControl'] === $cacheControl) {
+                return;
+            }
+        }
+        $this->registerDeferred($name, $component, $cacheControl);
+    }
+
+    /**
+     * Whether a defer endpoint render is currently in flight. The wrapping
+     * `FunctionComponent` (and the class-component path) consults this to
+     * decide between emitting a placeholder and actually rendering inline.
+     *
+     * @internal Not part of the public stable API.
+     */
+    public function isRenderingDeferredEndpoint(): bool
+    {
+        return $this->renderingDeferredEndpoint;
     }
 
     /**
@@ -600,6 +682,11 @@ final class UsePHP
         // continuation of any page-level render pass.
         RenderContext::beginRender();
 
+        // Flip the endpoint-render flag so deferred wrappers (FunctionComponent
+        // and `#[Defer]` class components) skip their placeholder branch and
+        // actually render the inner component here.
+        $this->renderingDeferredEndpoint = true;
+
         try {
             $element = $this->renderPsxComponent($registration['component'], $props);
         } catch (\Throwable $e) {
@@ -617,6 +704,8 @@ final class UsePHP
             \http_response_code(500);
             $this->emitHeader('Cache-Control: no-store');
             return 'Failed to render deferred component.';
+        } finally {
+            $this->renderingDeferredEndpoint = false;
         }
 
         return $this->renderElement($element);

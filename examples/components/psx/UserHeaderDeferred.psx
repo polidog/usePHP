@@ -1,0 +1,21 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Components\Psx;
+
+use Polidog\UsePhp\Component\Defer;
+use Polidog\UsePhp\Html\H;
+
+use function Polidog\UsePhp\Runtime\fc;
+
+// Deferred wrapper around UserHeader. fc(..., defer: ...) makes this component
+// emit a placeholder when used on the page (CDN-cacheable), and render the
+// inner UserHeader when the browser hits /_defer/user-header. The Defer config
+// travels with the component, so `usephp compile` writes it into the
+// deferred-manifest sidecar and the framework auto-registers the endpoint —
+// no separate `registerDeferred()` call needed.
+return fc(
+    fn(array $props) => <UserHeader />,
+    defer: new Defer(name: 'user-header', cacheControl: 'private, no-store'),
+);

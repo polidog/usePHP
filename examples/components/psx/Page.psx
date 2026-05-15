@@ -9,11 +9,11 @@ use Polidog\UsePhp\Html\H;
 use App\Components\Psx\Card;
 use App\Components\Psx\Counter;
 use App\Components\Psx\HeaderSkeleton;
-use App\Components\Psx\UserHeader;
+use App\Components\Psx\UserHeaderDeferred;
 
 return fn(array $props) => (
     <div className="page">
-        <UserHeader defer="user-header" fallback={<HeaderSkeleton />} />
+        <UserHeaderDeferred fallback={<HeaderSkeleton />} />
         <h1>PSX demo</h1>
         <Card title="Stateful counter">
             <Counter initial={10} />
