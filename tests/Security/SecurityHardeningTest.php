@@ -242,6 +242,126 @@ final class SecurityHardeningTest extends TestCase
         self::assertSame('/ok', $router->createRedirectUrl('/ok'));
     }
 
+    public function testCreateRedirectUrlThrowsOnMalformedUrl(): void
+    {
+        $router = new SimpleRouter(new SnapshotSerializer('test-secret'));
+        $snapshot = new Snapshot('Counter', 'main', [0 => 1]);
+
+        // parse_url returns false for inputs containing a bare port etc.
+        // A silent fallback to "/" would mask the caller's bug — make it loud.
+        $this->expectException(\InvalidArgumentException::class);
+        $router->createRedirectUrl('http://:80', $snapshot);
+    }
+
+    // ------------------------------------------------------------------
+    // H-2 (proxy headers): CSRF origin check honors X-Forwarded-Proto/Host
+    // when trustProxyHeaders() is enabled, ignores them otherwise.
+    // ------------------------------------------------------------------
+
+    public function testCsrfRejectsForwardedProtoByDefault(): void
+    {
+        // By default, X-Forwarded-Proto is ignored. The expected origin is
+        // computed from $_SERVER['HTTPS'] (unset → http), so an Origin of
+        // https://example.test does not match http://example.test.
+        $app = $this->buildAppWithCounter();
+
+        $savedServer = $_SERVER;
+        $savedPost = $_POST;
+        try {
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            $_SERVER['HTTP_HOST'] = 'example.test';
+            $_SERVER['HTTP_X_FORWARDED_PROTO'] = 'https';
+            $_SERVER['HTTP_ORIGIN'] = 'https://example.test';
+            $_POST = [
+                '_usephp_component' => 'Counter#0',
+                '_usephp_action' => json_encode([
+                    'type' => 'setState',
+                    'payload' => ['index' => 0, 'value' => 1],
+                    'componentId' => 'Counter#0',
+                ], JSON_THROW_ON_ERROR),
+                '_usephp_csrf' => $app->getCsrfToken(),
+            ];
+
+            http_response_code(200);
+            $html = $app->handleAction();
+            self::assertSame('Forbidden', $html);
+        } finally {
+            $_POST = $savedPost;
+            $_SERVER = $savedServer;
+        }
+    }
+
+    public function testCsrfHonorsForwardedProtoWhenEnabled(): void
+    {
+        $app = $this->buildAppWithCounter();
+        $app->trustProxyHeaders();
+
+        $savedServer = $_SERVER;
+        $savedPost = $_POST;
+        try {
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            $_SERVER['HTTP_HOST'] = 'example.test';
+            $_SERVER['HTTP_X_FORWARDED_PROTO'] = 'https';
+            $_SERVER['HTTP_ORIGIN'] = 'https://example.test';
+            $_SERVER['HTTP_X_USEPHP_PARTIAL'] = '1'; // avoid PRG exit
+            $_POST = [
+                '_usephp_component' => 'Counter#0',
+                '_usephp_action' => json_encode([
+                    'type' => 'setState',
+                    'payload' => ['index' => 0, 'value' => 1],
+                    'componentId' => 'Counter#0',
+                ], JSON_THROW_ON_ERROR),
+                '_usephp_csrf' => $app->getCsrfToken(),
+            ];
+
+            http_response_code(200);
+            $html = $app->handleAction();
+            // CSRF gate passed (would be "Forbidden" otherwise). The action
+            // itself targets an unregistered component, so the partial-render
+            // path returns an empty string — what matters here is that we got
+            // past the CSRF check.
+            self::assertNotSame('Forbidden', $html);
+        } finally {
+            $_POST = $savedPost;
+            $_SERVER = $savedServer;
+        }
+    }
+
+    public function testCsrfHonorsForwardedHostWhenEnabled(): void
+    {
+        $app = $this->buildAppWithCounter();
+        $app->trustProxyHeaders();
+
+        $savedServer = $_SERVER;
+        $savedPost = $_POST;
+        try {
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            // The FPM-side Host is the internal one; the browser-visible
+            // Host is in X-Forwarded-Host. When proxy headers are trusted
+            // the latter wins.
+            $_SERVER['HTTP_HOST'] = 'internal.lb';
+            $_SERVER['HTTP_X_FORWARDED_HOST'] = 'public.example';
+            $_SERVER['HTTP_ORIGIN'] = 'http://public.example';
+            $_SERVER['HTTP_X_USEPHP_PARTIAL'] = '1';
+            $_POST = [
+                '_usephp_component' => 'Counter#0',
+                '_usephp_action' => json_encode([
+                    'type' => 'setState',
+                    'payload' => ['index' => 0, 'value' => 1],
+                    'componentId' => 'Counter#0',
+                ], JSON_THROW_ON_ERROR),
+                '_usephp_csrf' => $app->getCsrfToken(),
+            ];
+
+            http_response_code(200);
+            $html = $app->handleAction();
+            self::assertNotSame('Forbidden', $html);
+        } finally {
+            $_POST = $savedPost;
+            $_SERVER = $savedServer;
+        }
+    }
+
     // ------------------------------------------------------------------
     // H-4: Session ブランチで未検証 snapshot を $_SESSION に書かない。
     // ------------------------------------------------------------------

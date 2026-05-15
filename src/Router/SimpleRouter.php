@@ -207,12 +207,16 @@ final class SimpleRouter implements RouterInterface
 
         $encoded = $this->serializer->serialize($snapshot);
 
-        // parse_url returns false on seriously malformed input. Fall back to
-        // treating the input as a bare path in that case rather than indexing
-        // into `false`.
+        // parse_url returns false on seriously malformed input. The surrounding
+        // method is strict about what it accepts (it throws on cross-origin or
+        // scheme-prefixed inputs) so be strict here too — a silent fallback to
+        // "/" would redirect away from the intended path and discard whatever
+        // bug led the caller to pass a malformed URL in the first place.
         $parsedUrl = parse_url($url);
         if (!is_array($parsedUrl)) {
-            $parsedUrl = ['path' => '/'];
+            throw new \InvalidArgumentException(
+                'Redirect URL is malformed: ' . $url
+            );
         }
 
         // Reject protocol-relative (`//host/path`) and absolute URLs entirely.

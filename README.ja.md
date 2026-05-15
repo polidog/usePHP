@@ -734,6 +734,23 @@ $app = new UsePHP();
 $app->disableCsrfProtection();
 ```
 
+#### TLS 終端プロキシ配下で動かす場合
+
+nginx / ALB / Cloudflare のような TLS 終端リバースプロキシ配下で usePHP を動かす場合、ブラウザは `https://` を見ているのに PHP-FPM 側では `$_SERVER['HTTPS']` が未設定のままになります。このままだと期待 origin が `http://...` で計算され、正常な POST がすべて 403 になります。
+
+対処は 2 通り:
+
+1. **usePHP 実行前に `$_SERVER` へスキームを渡す**。nginx の場合:
+   ```nginx
+   fastcgi_param HTTPS on;
+   fastcgi_param HTTP_HOST $http_host;
+   ```
+2. **プロキシヘッダの信頼を opt-in する** — `X-Forwarded-Proto` / `X-Forwarded-Host` / `X-Forwarded-Port` を尊重:
+   ```php
+   $app->trustProxyHeaders();
+   ```
+   これは「すべてのリクエストが自分が管理するプロキシを経由し、かつクライアント由来のこれらヘッダをプロキシが除去・上書きする」と保証できる構成でのみ有効化してください。さもないと攻撃者がヘッダを偽装して origin チェックを回避できます。
+
 ### セッション Cookie の堅牢化
 
 usePHP は `Session` / `Shared` snapshot 挙動と CSRF トークンの保存に `$_SESSION` を使います。Cookie フラグは設定しないので、`php.ini` か `session_start()` のオプションで指定してください:

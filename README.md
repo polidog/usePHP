@@ -741,6 +741,23 @@ $app = new UsePHP();
 $app->disableCsrfProtection();
 ```
 
+#### Behind a TLS-terminating proxy
+
+When usePHP runs behind a reverse proxy that terminates TLS (nginx, an ALB, Cloudflare, etc.), `$_SERVER['HTTPS']` is unset on the PHP-FPM side even though the browser sees `https://`. The expected origin would then be computed as `http://...` and every legitimate POST would fail the same-origin check with a 403.
+
+You have two options:
+
+1. **Pass the scheme into `$_SERVER`** before usePHP runs, e.g. in nginx:
+   ```nginx
+   fastcgi_param HTTPS on;
+   fastcgi_param HTTP_HOST $http_host;
+   ```
+2. **Opt into proxy-header trust** — usePHP will honor `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-Port`:
+   ```php
+   $app->trustProxyHeaders();
+   ```
+   Only enable this when every request reaches PHP through a proxy that you control and that strips or overwrites these headers from the client side. Otherwise an attacker can spoof them and bypass the origin check.
+
 ### Session cookie hardening
 
 usePHP uses `$_SESSION` for the `Session` and `Shared` snapshot behaviors and for its CSRF token. The library does not set cookie flags for you — configure them in `php.ini` or `session_start()` options:

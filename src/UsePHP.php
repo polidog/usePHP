@@ -82,6 +82,20 @@ final class UsePHP
     private bool $csrfProtectionEnabled = true;
 
     /**
+     * When true, the CSRF origin check honors `X-Forwarded-Proto` /
+     * `X-Forwarded-Host` (and the older `X-Forwarded-Port`) so the
+     * expected origin matches what the browser saw — necessary behind
+     * TLS-terminating proxies (nginx, ALB, Cloudflare) that leave the
+     * PHP-FPM side speaking plain HTTP.
+     *
+     * Defaults to false because these headers are trivially spoofable
+     * when traffic can reach the app without first traversing the
+     * proxy. Operators must guarantee that the proxy strips or
+     * overwrites them before enabling this.
+     */
+    private bool $trustProxyHeaders = false;
+
+    /**
      * Optional header sink used by tests to capture headers without depending
      * on xdebug. In production this stays null and we go through `\header()`.
      *
@@ -545,6 +559,21 @@ final class UsePHP
     }
 
     /**
+     * Honor `X-Forwarded-Proto` / `X-Forwarded-Host` / `X-Forwarded-Port`
+     * when computing the expected origin for the CSRF check.
+     *
+     * ENABLE THIS ONLY when every request reaches PHP through a proxy
+     * that you control and that strips or overwrites these headers from
+     * the client side. Otherwise an attacker can spoof the headers and
+     * defeat the same-origin check.
+     */
+    public function trustProxyHeaders(bool $trust = true): self
+    {
+        $this->trustProxyHeaders = $trust;
+        return $this;
+    }
+
+    /**
      * Return (and lazily generate) the per-session CSRF token used to
      * cross-check the hidden form field in {@see doHandleAction()}.
      *
@@ -619,15 +648,79 @@ final class UsePHP
 
     private function computeExpectedOrigin(): ?string
     {
-        /** @var mixed $hostRaw */
-        $hostRaw = $_SERVER['HTTP_HOST'] ?? null;
-        if (!is_string($hostRaw) || strlen($hostRaw) === 0) {
+        $host = $this->resolveTrustedHeader('HTTP_X_FORWARDED_HOST', 'HTTP_HOST');
+        if ($host === null) {
             return null;
+        }
+
+        $scheme = $this->resolveExpectedScheme();
+        $origin = $scheme . '://' . $host;
+
+        // Some proxies pass the public port via X-Forwarded-Port instead of
+        // appending it to X-Forwarded-Host. Honor it only when the host
+        // doesn't already carry a port and the port is non-default for the
+        // chosen scheme.
+        if ($this->trustProxyHeaders && !str_contains($host, ':')) {
+            /** @var mixed $portRaw */
+            $portRaw = $_SERVER['HTTP_X_FORWARDED_PORT'] ?? null;
+            if (is_string($portRaw) && $portRaw !== ''
+                && !(($scheme === 'https' && $portRaw === '443')
+                  || ($scheme === 'http'  && $portRaw === '80'))) {
+                $origin .= ':' . $portRaw;
+            }
+        }
+
+        return $origin;
+    }
+
+    /**
+     * Compute the expected URL scheme. Falls back to plain HTTP unless we
+     * see a TLS marker — either `$_SERVER['HTTPS']` set directly (mod_php,
+     * fastcgi_param HTTPS on) or, when proxy headers are trusted,
+     * `X-Forwarded-Proto: https`.
+     */
+    private function resolveExpectedScheme(): string
+    {
+        if ($this->trustProxyHeaders) {
+            /** @var mixed $proto */
+            $proto = $_SERVER['HTTP_X_FORWARDED_PROTO'] ?? null;
+            if (is_string($proto) && $proto !== '') {
+                return strtolower(trim($proto)) === 'https' ? 'https' : 'http';
+            }
         }
         /** @var mixed $httpsRaw */
         $httpsRaw = $_SERVER['HTTPS'] ?? '';
-        $scheme = (is_string($httpsRaw) && $httpsRaw !== '' && strtolower($httpsRaw) !== 'off') ? 'https' : 'http';
-        return $scheme . '://' . $hostRaw;
+        if (is_string($httpsRaw) && $httpsRaw !== '' && strtolower($httpsRaw) !== 'off') {
+            return 'https';
+        }
+        return 'http';
+    }
+
+    /**
+     * Read `$forwardedKey` when proxy headers are trusted, otherwise
+     * `$directKey`. Returns null when neither yields a non-empty string.
+     * Only the first comma-separated value of an X-Forwarded-* header is
+     * used — that's the originating client's value as set by the closest
+     * trusted proxy.
+     */
+    private function resolveTrustedHeader(string $forwardedKey, string $directKey): ?string
+    {
+        if ($this->trustProxyHeaders) {
+            /** @var mixed $forwarded */
+            $forwarded = $_SERVER[$forwardedKey] ?? null;
+            if (is_string($forwarded) && $forwarded !== '') {
+                $first = trim(explode(',', $forwarded)[0]);
+                if ($first !== '') {
+                    return $first;
+                }
+            }
+        }
+        /** @var mixed $direct */
+        $direct = $_SERVER[$directKey] ?? null;
+        if (is_string($direct) && strlen($direct) !== 0) {
+            return $direct;
+        }
+        return null;
     }
 
     private function extractSourceOrigin(): ?string
@@ -743,7 +836,7 @@ final class UsePHP
                     $snapshot = $this->getSnapshotSerializer()->deserialize($snapshotData);
                     ComponentState::fromSnapshot($snapshot);
                 } catch (SnapshotVerificationException $e) {
-                    // Invalid snapshot, ignore
+                    $this->logSnapshotRejection('Persistent', $e);
                 }
                 break;
 
@@ -761,8 +854,7 @@ final class UsePHP
                         $snapshot = $this->getSnapshotSerializer()->deserialize($snapshotData);
                         $_SESSION['_usephp_snapshot'] = $this->getSnapshotSerializer()->serialize($snapshot);
                     } catch (SnapshotVerificationException $e) {
-                        // Invalid snapshot — drop it on the floor rather than
-                        // letting a tampered payload reach $_SESSION.
+                        $this->logSnapshotRejection('Session', $e);
                     }
                 }
                 break;
@@ -776,7 +868,7 @@ final class UsePHP
                             $snapshot = $this->getSnapshotSerializer()->deserialize($_SESSION[$sessionKey]);
                             ComponentState::fromSnapshot($snapshot);
                         } catch (SnapshotVerificationException $e) {
-                            // Invalid snapshot, ignore
+                            $this->logSnapshotRejection('Shared', $e);
                         }
                     }
                 }
@@ -787,6 +879,21 @@ final class UsePHP
                 // No restoration for isolated pages
                 break;
         }
+    }
+
+    /**
+     * Surface a snapshot HMAC rejection to error_log so operators can tell
+     * the difference between a key-rotation event, an attacker probe, and
+     * a bug in their own code. The exception message itself is generic so
+     * we include the snapshot behavior tag to make the entry searchable.
+     */
+    private function logSnapshotRejection(string $behavior, SnapshotVerificationException $e): void
+    {
+        \error_log(sprintf(
+            '[usePHP] Snapshot rejected (behavior=%s): %s',
+            $behavior,
+            $e->getMessage(),
+        ));
     }
 
     /**
