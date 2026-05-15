@@ -71,6 +71,31 @@ final class UsePHP
     private bool $renderingDeferredEndpoint = false;
 
     /**
+     * Whether the built-in CSRF check runs in {@see doHandleAction()}.
+     *
+     * Defaults to true so a usePHP-only deployment (without an upstream
+     * framework) is protected out of the box. Disable when the host
+     * framework already enforces CSRF (e.g. Laravel's VerifyCsrfToken
+     * middleware), so the two layers don't double-validate and reject
+     * legitimate submissions.
+     */
+    private bool $csrfProtectionEnabled = true;
+
+    /**
+     * When true, the CSRF origin check honors `X-Forwarded-Proto` /
+     * `X-Forwarded-Host` (and the older `X-Forwarded-Port`) so the
+     * expected origin matches what the browser saw — necessary behind
+     * TLS-terminating proxies (nginx, ALB, Cloudflare) that leave the
+     * PHP-FPM side speaking plain HTTP.
+     *
+     * Defaults to false because these headers are trivially spoofable
+     * when traffic can reach the app without first traversing the
+     * proxy. Operators must guarantee that the proxy strips or
+     * overwrites them before enabling this.
+     */
+    private bool $trustProxyHeaders = false;
+
+    /**
      * Optional header sink used by tests to capture headers without depending
      * on xdebug. In production this stays null and we go through `\header()`.
      *
@@ -418,22 +443,60 @@ final class UsePHP
     /**
      * Configure the snapshot serializer with a secret key.
      *
-     * @param string $secretKey The secret key for snapshot verification
+     * Required before using Snapshot storage. The key must be high-entropy
+     * and stable across requests (and across worker processes in production)
+     * so HMACs computed by one request are verifiable by the next. Generate
+     * one with `bin2hex(random_bytes(32))` and load it from configuration.
+     *
+     * If a router has already been constructed, its serializer reference is
+     * updated so calls made before `setSnapshotSecret()` still see the new
+     * key.
+     *
+     * @param string $secretKey The secret key for snapshot HMAC.
+     * @throws \InvalidArgumentException If $secretKey is empty.
      */
     public function setSnapshotSecret(string $secretKey): self
     {
         $this->snapshotSerializer = new SnapshotSerializer($secretKey);
+        if ($this->router instanceof SimpleRouter) {
+            $this->router->setSerializer($this->snapshotSerializer);
+        }
         return $this;
     }
 
     /**
-     * Get the snapshot serializer.
+     * Get the snapshot serializer. Throws if no secret has been configured —
+     * snapshots round-trip through the client and must be HMAC-signed, so
+     * silently constructing a serializer without a key would let an attacker
+     * forge state.
+     *
+     * @throws \LogicException If `setSnapshotSecret()` was not called.
      */
     public function getSnapshotSerializer(): SnapshotSerializer
     {
         if ($this->snapshotSerializer === null) {
-            $this->snapshotSerializer = new SnapshotSerializer();
+            throw new \LogicException(
+                'Snapshot serializer secret is not configured. '
+                . 'Call UsePHP::setSnapshotSecret($key) with a high-entropy key '
+                . '(e.g. bin2hex(random_bytes(32))) before using Snapshot storage. '
+                . 'Snapshots round-trip through the client and must be HMAC-signed '
+                . 'to prevent tampering.'
+            );
         }
+        return $this->snapshotSerializer;
+    }
+
+    /**
+     * Return the snapshot serializer if configured, or null otherwise.
+     *
+     * Used for code paths that thread the serializer into helpers that may
+     * legitimately operate without one (e.g. the Renderer, when the active
+     * component is not using Snapshot storage). Hot paths that actually need
+     * to serialize/verify state must call {@see getSnapshotSerializer()}
+     * which fails loudly.
+     */
+    private function tryGetSnapshotSerializer(): ?SnapshotSerializer
+    {
         return $this->snapshotSerializer;
     }
 
@@ -448,11 +511,16 @@ final class UsePHP
 
     /**
      * Get the current router, creating a SimpleRouter if none set.
+     *
+     * The router is constructed with whatever serializer is configured at
+     * this point — possibly `null` if `setSnapshotSecret()` hasn't been
+     * called yet. Calling `setSnapshotSecret()` later updates the router's
+     * serializer too, so the order doesn't matter for non-snapshot routes.
      */
     public function getRouter(): RouterInterface
     {
         if ($this->router === null) {
-            $this->router = new SimpleRouter($this->getSnapshotSerializer());
+            $this->router = new SimpleRouter($this->tryGetSnapshotSerializer());
         }
         return $this->router;
     }
@@ -465,6 +533,215 @@ final class UsePHP
     {
         $this->router = new NullRouter();
         return $this;
+    }
+
+    /**
+     * Disable the built-in CSRF check. Use when an upstream framework
+     * (Laravel, Symfony, ...) already enforces CSRF on POST handlers —
+     * leaving usePHP's check enabled would either double-validate (rejecting
+     * legitimate submissions) or hide the framework's failure mode.
+     *
+     * Disabling here does NOT remove the hidden `_usephp_csrf` field from
+     * rendered forms; that field is harmless when the server doesn't read it.
+     */
+    public function disableCsrfProtection(): self
+    {
+        $this->csrfProtectionEnabled = false;
+        return $this;
+    }
+
+    /**
+     * Whether built-in CSRF protection is active.
+     */
+    public function isCsrfProtectionEnabled(): bool
+    {
+        return $this->csrfProtectionEnabled;
+    }
+
+    /**
+     * Honor `X-Forwarded-Proto` / `X-Forwarded-Host` / `X-Forwarded-Port`
+     * when computing the expected origin for the CSRF check.
+     *
+     * ENABLE THIS ONLY when every request reaches PHP through a proxy
+     * that you control and that strips or overwrites these headers from
+     * the client side. Otherwise an attacker can spoof the headers and
+     * defeat the same-origin check.
+     */
+    public function trustProxyHeaders(bool $trust = true): self
+    {
+        $this->trustProxyHeaders = $trust;
+        return $this;
+    }
+
+    /**
+     * Return (and lazily generate) the per-session CSRF token used to
+     * cross-check the hidden form field in {@see doHandleAction()}.
+     *
+     * When no session is active the token is empty — `verifyCsrf()` then
+     * falls back to Origin/Referer alone, which is still sufficient against
+     * cross-site form submissions from a modern browser. Sessions add a
+     * second, state-bound layer.
+     */
+    public function getCsrfToken(): string
+    {
+        if (!$this->csrfProtectionEnabled) {
+            return '';
+        }
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            return '';
+        }
+        $existing = $_SESSION['_usephp_csrf'] ?? null;
+        if (!is_string($existing) || $existing === '') {
+            $existing = bin2hex(random_bytes(32));
+            $_SESSION['_usephp_csrf'] = $existing;
+        }
+        return $existing;
+    }
+
+    /**
+     * Verify the current POST request against CSRF rules. Returns null when
+     * the request is acceptable, or a short reason string when it should be
+     * rejected. Combines two layers:
+     *
+     *  1. Origin/Referer same-origin check — primary defense, no state
+     *     required, works for both Session and Snapshot storage.
+     *  2. Session-bound synchronizer token — additional defense, only
+     *     enforced when a session is active (so the snapshot-only mode
+     *     doesn't need a session just to submit a form).
+     *
+     * The check is intentionally strict on the source-origin side: a
+     * request with neither Origin nor Referer is rejected, because modern
+     * browsers always send at least one on POST. CLI / test code that
+     * bypasses this should disable CSRF explicitly.
+     */
+    private function verifyCsrf(): ?string
+    {
+        if (!$this->csrfProtectionEnabled) {
+            return null;
+        }
+
+        $expectedOrigin = $this->computeExpectedOrigin();
+        if ($expectedOrigin === null) {
+            return 'CSRF check failed: cannot determine expected origin (missing Host header)';
+        }
+
+        $sourceOrigin = $this->extractSourceOrigin();
+        if ($sourceOrigin === null) {
+            return 'CSRF check failed: request has no Origin or Referer header';
+        }
+        if (!hash_equals($expectedOrigin, $sourceOrigin)) {
+            return 'CSRF check failed: source origin does not match this host';
+        }
+
+        // Session-bound token layer — only enforced when a session is active.
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            $sessionToken = $_SESSION['_usephp_csrf'] ?? null;
+            $postToken = $_POST['_usephp_csrf'] ?? null;
+            if (!is_string($sessionToken) || $sessionToken === ''
+                || !is_string($postToken) || !hash_equals($sessionToken, $postToken)) {
+                return 'CSRF check failed: token missing or mismatched';
+            }
+        }
+
+        return null;
+    }
+
+    private function computeExpectedOrigin(): ?string
+    {
+        $host = $this->resolveTrustedHeader('HTTP_X_FORWARDED_HOST', 'HTTP_HOST');
+        if ($host === null) {
+            return null;
+        }
+
+        $scheme = $this->resolveExpectedScheme();
+        $origin = $scheme . '://' . $host;
+
+        // Some proxies pass the public port via X-Forwarded-Port instead of
+        // appending it to X-Forwarded-Host. Honor it only when the host
+        // doesn't already carry a port and the port is non-default for the
+        // chosen scheme.
+        if ($this->trustProxyHeaders && !str_contains($host, ':')) {
+            /** @var mixed $portRaw */
+            $portRaw = $_SERVER['HTTP_X_FORWARDED_PORT'] ?? null;
+            if (is_string($portRaw) && $portRaw !== ''
+                && !(($scheme === 'https' && $portRaw === '443')
+                  || ($scheme === 'http'  && $portRaw === '80'))) {
+                $origin .= ':' . $portRaw;
+            }
+        }
+
+        return $origin;
+    }
+
+    /**
+     * Compute the expected URL scheme. Falls back to plain HTTP unless we
+     * see a TLS marker — either `$_SERVER['HTTPS']` set directly (mod_php,
+     * fastcgi_param HTTPS on) or, when proxy headers are trusted,
+     * `X-Forwarded-Proto: https`.
+     */
+    private function resolveExpectedScheme(): string
+    {
+        if ($this->trustProxyHeaders) {
+            /** @var mixed $proto */
+            $proto = $_SERVER['HTTP_X_FORWARDED_PROTO'] ?? null;
+            if (is_string($proto) && $proto !== '') {
+                return strtolower(trim($proto)) === 'https' ? 'https' : 'http';
+            }
+        }
+        /** @var mixed $httpsRaw */
+        $httpsRaw = $_SERVER['HTTPS'] ?? '';
+        if (is_string($httpsRaw) && $httpsRaw !== '' && strtolower($httpsRaw) !== 'off') {
+            return 'https';
+        }
+        return 'http';
+    }
+
+    /**
+     * Read `$forwardedKey` when proxy headers are trusted, otherwise
+     * `$directKey`. Returns null when neither yields a non-empty string.
+     * Only the first comma-separated value of an X-Forwarded-* header is
+     * used — that's the originating client's value as set by the closest
+     * trusted proxy.
+     */
+    private function resolveTrustedHeader(string $forwardedKey, string $directKey): ?string
+    {
+        if ($this->trustProxyHeaders) {
+            /** @var mixed $forwarded */
+            $forwarded = $_SERVER[$forwardedKey] ?? null;
+            if (is_string($forwarded) && $forwarded !== '') {
+                $first = trim(explode(',', $forwarded)[0]);
+                if ($first !== '') {
+                    return $first;
+                }
+            }
+        }
+        /** @var mixed $direct */
+        $direct = $_SERVER[$directKey] ?? null;
+        if (is_string($direct) && strlen($direct) !== 0) {
+            return $direct;
+        }
+        return null;
+    }
+
+    private function extractSourceOrigin(): ?string
+    {
+        $origin = $_SERVER['HTTP_ORIGIN'] ?? null;
+        if (is_string($origin) && $origin !== '' && $origin !== 'null') {
+            return $origin;
+        }
+        $referer = $_SERVER['HTTP_REFERER'] ?? null;
+        if (!is_string($referer) || $referer === '') {
+            return null;
+        }
+        $parsed = parse_url($referer);
+        if (!is_array($parsed) || !isset($parsed['scheme'], $parsed['host'])) {
+            return null;
+        }
+        $result = $parsed['scheme'] . '://' . $parsed['host'];
+        if (isset($parsed['port'])) {
+            $result .= ':' . $parsed['port'];
+        }
+        return $result;
     }
 
     /**
@@ -559,14 +836,26 @@ final class UsePHP
                     $snapshot = $this->getSnapshotSerializer()->deserialize($snapshotData);
                     ComponentState::fromSnapshot($snapshot);
                 } catch (SnapshotVerificationException $e) {
-                    // Invalid snapshot, ignore
+                    $this->logSnapshotRejection('Persistent', $e);
                 }
                 break;
 
             case SnapshotBehavior::Session:
-                // Store snapshot in session for later use
+                // Verify the snapshot's HMAC *before* storing it in the
+                // session. The data here was extracted from the request
+                // (query string / etc.), so it is attacker-controlled — if
+                // we wrote it verbatim, a later restoration would either
+                // trust it without a re-check or pollute the session with
+                // arbitrary attacker text. Re-serialize from the verified
+                // Snapshot object so the bytes in $_SESSION are guaranteed
+                // to have come out of our own serializer.
                 if (session_status() === PHP_SESSION_ACTIVE) {
-                    $_SESSION['_usephp_snapshot'] = $snapshotData;
+                    try {
+                        $snapshot = $this->getSnapshotSerializer()->deserialize($snapshotData);
+                        $_SESSION['_usephp_snapshot'] = $this->getSnapshotSerializer()->serialize($snapshot);
+                    } catch (SnapshotVerificationException $e) {
+                        $this->logSnapshotRejection('Session', $e);
+                    }
                 }
                 break;
 
@@ -579,7 +868,7 @@ final class UsePHP
                             $snapshot = $this->getSnapshotSerializer()->deserialize($_SESSION[$sessionKey]);
                             ComponentState::fromSnapshot($snapshot);
                         } catch (SnapshotVerificationException $e) {
-                            // Invalid snapshot, ignore
+                            $this->logSnapshotRejection('Shared', $e);
                         }
                     }
                 }
@@ -593,13 +882,38 @@ final class UsePHP
     }
 
     /**
-     * Redirect to a URL with optional snapshot preservation.
+     * Surface a snapshot HMAC rejection to error_log so operators can tell
+     * the difference between a key-rotation event, an attacker probe, and
+     * a bug in their own code. The exception message itself is generic so
+     * we include the snapshot behavior tag to make the entry searchable.
+     */
+    private function logSnapshotRejection(string $behavior, SnapshotVerificationException $e): void
+    {
+        \error_log(sprintf(
+            '[usePHP] Snapshot rejected (behavior=%s): %s',
+            $behavior,
+            $e->getMessage(),
+        ));
+    }
+
+    /**
+     * Redirect to a same-origin URL with optional snapshot preservation.
      *
-     * @param string $url The URL to redirect to
-     * @param Snapshot|null $snapshot Optional snapshot to pass
+     * Only same-origin paths are allowed. Absolute URLs (`https://...`) and
+     * protocol-relative URLs (`//example.com/...`) are rejected to prevent
+     * this method from being chained into an open-redirect primitive — a
+     * caller that needs to redirect off-site should write the `Location`
+     * header itself, after running the value through its own allow-list.
+     *
+     * @param string $url Same-origin path (must start with `/`).
+     * @param Snapshot|null $snapshot Optional snapshot to encode into the URL
+     *        when the current route uses {@see SnapshotBehavior::Persistent}.
+     * @throws \InvalidArgumentException If $url is not same-origin.
      */
     public function redirect(string $url, ?Snapshot $snapshot = null): never
     {
+        self::assertSameOriginPath($url);
+
         $router = $this->getRouter();
 
         if ($snapshot !== null && $this->currentMatch?->snapshotBehavior === SnapshotBehavior::Persistent) {
@@ -608,6 +922,30 @@ final class UsePHP
 
         header('Location: ' . $url, true, 303);
         exit;
+    }
+
+    /**
+     * Reject URLs that would let `redirect()` jump off-site. Mirrors the
+     * rules used by {@see SimpleRouter::createRedirectUrl()} so the two
+     * code paths can't drift.
+     */
+    private static function assertSameOriginPath(string $url): void
+    {
+        if (str_starts_with($url, '//')) {
+            throw new \InvalidArgumentException(
+                'Redirect URL must be same-origin (a path beginning with "/" and not "//"). '
+                . 'Got: ' . $url
+            );
+        }
+        $parsed = parse_url($url);
+        if (!is_array($parsed)) {
+            throw new \InvalidArgumentException('Redirect URL is malformed: ' . $url);
+        }
+        if (isset($parsed['scheme']) || isset($parsed['host'])) {
+            throw new \InvalidArgumentException(
+                'Redirect URL must be same-origin (no scheme or host). Got: ' . $url
+            );
+        }
     }
 
     /**
@@ -692,16 +1030,26 @@ final class UsePHP
         // key missing and the failure mode is invisible. This also mirrors
         // the parent-side check in Renderer::renderDeferred, where non-scalar
         // params throw at render time.
+        //
+        // Reserved framework keys (`key`, `fallback`) are stripped: `key`
+        // is the component-instance identity that controls which slot of
+        // Session/Snapshot state the component reads — letting it come
+        // from the URL would let an attacker target another user's state
+        // key. `fallback` is page-side only.
         /** @var array<string, mixed> $props */
         $props = [];
         foreach ($request->query as $key => $value) {
+            $keyStr = (string) $key;
+            if ($keyStr === 'key' || $keyStr === 'fallback') {
+                continue;
+            }
             if (!\is_scalar($value)) {
                 \http_response_code(400);
                 $this->emitHeader('Cache-Control: no-store');
-                return 'Deferred component param "' . \htmlspecialchars((string) $key, \ENT_QUOTES, 'UTF-8')
+                return 'Deferred component param "' . \htmlspecialchars($keyStr, \ENT_QUOTES, 'UTF-8')
                     . '" must be a scalar; arrays and other types are not supported.';
             }
-            $props[$key] = $value;
+            $props[$keyStr] = $value;
         }
 
         $this->emitHeader('Cache-Control: ' . ($registration['cacheControl'] ?? 'private, max-age=0'));
@@ -783,6 +1131,17 @@ final class UsePHP
      */
     private function doHandleAction(): string
     {
+        $csrfReason = $this->verifyCsrf();
+        if ($csrfReason !== null) {
+            http_response_code(403);
+            $this->emitHeader('Cache-Control: no-store');
+            // Generic message to the client — the specific reason goes to
+            // error_log so an operator can debug without leaking the
+            // distinction (token vs origin) to a probing attacker.
+            \error_log('[usePHP] ' . $csrfReason);
+            return 'Forbidden';
+        }
+
         $instanceId = $_POST['_usephp_component'] ?? null;
         $actionJson = $_POST['_usephp_action'] ?? null;
         $snapshotJson = $_POST['_usephp_snapshot'] ?? null;
@@ -933,8 +1292,9 @@ final class UsePHP
         try {
             $renderer = new Renderer(
                 '_root_',
-                $this->getSnapshotSerializer(),
+                $this->tryGetSnapshotSerializer(),
                 deferPrefix: $this->deferPrefix,
+                csrfToken: $this->getCsrfToken(),
             );
             return $renderer->renderElement($element);
         } finally {
@@ -970,9 +1330,10 @@ final class UsePHP
 
             $renderer = new Renderer(
                 $instanceId,
-                $this->getSnapshotSerializer(),
+                $this->tryGetSnapshotSerializer(),
                 $storageType,
                 $this->deferPrefix,
+                $this->getCsrfToken(),
             );
 
             return $renderer->render(fn() => $component->render());
@@ -1002,9 +1363,10 @@ final class UsePHP
 
         $renderer = new Renderer(
             $instanceId,
-            $this->getSnapshotSerializer(),
+            $this->tryGetSnapshotSerializer(),
             $storageType,
             $this->deferPrefix,
+            $this->getCsrfToken(),
         );
 
         return $renderer->renderPartial(fn() => $component->render());

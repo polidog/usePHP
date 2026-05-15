@@ -701,6 +701,91 @@ Transforms to:
 ./vendor/bin/usephp help                  # Show help
 ```
 
+## Security
+
+usePHP ships with several built-in defenses. The notes below cover the parts an application author still has to wire up correctly.
+
+### Snapshot HMAC secret (required for Snapshot storage)
+
+`SnapshotBehavior::Persistent|Session|Shared` and components declared with `#[Component(storage: 'snapshot')]` round-trip state through the client, so the framework HMAC-signs every snapshot. You must configure a high-entropy secret before rendering a snapshot-using component or you'll get a `LogicException` at render time.
+
+```php
+$app = new UsePHP();
+$app->setSnapshotSecret(getenv('USEPHP_SNAPSHOT_SECRET'));
+```
+
+Generate the key once and load it from configuration:
+
+```php
+// One-time generation — store the result, do NOT regenerate each request.
+echo bin2hex(random_bytes(32));
+```
+
+The key must be **stable across requests and across worker processes** (PHP-FPM, multi-server). If different workers have different keys, snapshots produced by one worker will fail verification on the next. Rotating the key invalidates every outstanding snapshot.
+
+Never commit the secret to git. The placeholders used in `examples/` (`'your-secret-key-here'`, `'phase-1-demo-secret'`) are deliberately weak — replace them before deploying anything.
+
+### CSRF protection
+
+`UsePHP::run()` and `UsePHP::handleAction()` enforce two layers on every POST:
+
+1. **Origin / Referer same-origin check** (always). A request with neither header, or with an origin that doesn't match the current `Host`, is rejected with `403 Forbidden`.
+2. **Session-bound synchronizer token** (when a session is active). `Renderer::renderWithForm` embeds a per-session token as `<input type="hidden" name="_usephp_csrf" value="...">`; `doHandleAction` validates it with `hash_equals`.
+
+The token is exposed via `UsePHP::getCsrfToken()` if you render forms yourself.
+
+If the surrounding framework (Laravel `VerifyCsrfToken`, Symfony's CSRF component, etc.) already enforces CSRF on POST handlers, opt out of usePHP's check so the two layers don't double-validate:
+
+```php
+$app = new UsePHP();
+$app->disableCsrfProtection();
+```
+
+#### Behind a TLS-terminating proxy
+
+When usePHP runs behind a reverse proxy that terminates TLS (nginx, an ALB, Cloudflare, etc.), `$_SERVER['HTTPS']` is unset on the PHP-FPM side even though the browser sees `https://`. The expected origin would then be computed as `http://...` and every legitimate POST would fail the same-origin check with a 403.
+
+You have two options:
+
+1. **Pass the scheme into `$_SERVER`** before usePHP runs, e.g. in nginx:
+   ```nginx
+   fastcgi_param HTTPS on;
+   fastcgi_param HTTP_HOST $http_host;
+   ```
+2. **Opt into proxy-header trust** — usePHP will honor `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-Port`:
+   ```php
+   $app->trustProxyHeaders();
+   ```
+   Only enable this when every request reaches PHP through a proxy that you control and that strips or overwrites these headers from the client side. Otherwise an attacker can spoof them and bypass the origin check.
+
+### Session cookie hardening
+
+usePHP uses `$_SESSION` for the `Session` and `Shared` snapshot behaviors and for its CSRF token. The library does not set cookie flags for you — configure them in `php.ini` or `session_start()` options:
+
+```ini
+session.cookie_httponly = 1
+session.cookie_secure   = 1     ; set when serving over HTTPS
+session.cookie_samesite = Lax   ; or Strict
+```
+
+Call `session_regenerate_id(true)` after authentication to defeat session fixation.
+
+### Same-origin redirects
+
+`UsePHP::redirect($url)` and `SimpleRouter::createRedirectUrl()` reject absolute URLs (`https://...`), protocol-relative URLs (`//host/path`), and scheme-prefixed paths (`javascript:...`). Pass only same-origin paths starting with `/`. If you need to redirect off-site, write the `Location` header yourself after running the target through your own allow-list.
+
+### URL-attribute XSS guard
+
+`href`, `src`, `action`, `formaction`, `srcdoc`, `data`, `poster`, `background`, and `xlink:href` are URL-context attributes. The renderer drops any value whose scheme resolves to `javascript:`, `vbscript:`, or `data:` (after stripping leading whitespace and control characters, the way browsers parse URLs). Regular relative or absolute HTTP(S) URLs pass through unchanged.
+
+### PSX compilation cache
+
+`usephp compile` writes generated PHP files into `var/cache/psx/` and `UsePHP::loadComponentManifest()` `require`s them. The cache directory must be **writable only by the build/deployment role, not by HTTP request handlers**. Never call `loadComponentManifest()` with a request-derived path.
+
+### Reporting issues
+
+If you find a security issue, please email the maintainer rather than opening a public issue.
+
 ## Requirements
 
 - PHP 8.5+

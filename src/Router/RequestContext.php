@@ -31,8 +31,13 @@ final readonly class RequestContext
         $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
         $uri = $_SERVER['REQUEST_URI'] ?? '/';
 
-        // Parse path and query string
+        // Parse path and query string. parse_url returns false on seriously
+        // malformed input — fall back to root so an attacker can't poison
+        // the request context by sending an invalid URI.
         $parsedUrl = parse_url($uri);
+        if (!is_array($parsedUrl)) {
+            $parsedUrl = [];
+        }
         $path = $parsedUrl['path'] ?? '/';
         $queryString = $parsedUrl['query'] ?? '';
 

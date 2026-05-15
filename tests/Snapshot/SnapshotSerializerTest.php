@@ -11,19 +11,10 @@ use Polidog\UsePhp\Snapshot\SnapshotVerificationException;
 
 class SnapshotSerializerTest extends TestCase
 {
-    public function testSerializeWithoutSecretKey(): void
+    public function testConstructorRejectsEmptySecretKey(): void
     {
-        $serializer = new SnapshotSerializer();
-        $snapshot = new Snapshot('Counter', 'main', [0 => 5]);
-
-        $json = $serializer->serialize($snapshot);
-        $data = json_decode($json, true);
-
-        $this->assertEquals('Counter', $data['memo']['name']);
-        $this->assertEquals('main', $data['memo']['key']);
-        $this->assertEquals([0 => 5], $data['state']);
-        // Without secret key, checksum is empty HMAC
-        $this->assertNotNull($data['checksum']);
+        $this->expectException(\InvalidArgumentException::class);
+        new SnapshotSerializer('');
     }
 
     public function testSerializeWithSecretKey(): void
@@ -112,39 +103,37 @@ class SnapshotSerializerTest extends TestCase
         $this->assertFalse($serializer->verifyChecksum($snapshotWithInvalidChecksum));
     }
 
-    public function testVerifyChecksumWithoutSecretKeyAllowsNoChecksum(): void
-    {
-        $serializer = new SnapshotSerializer(); // No secret key
-        $snapshot = new Snapshot('Counter', 'main', [0 => 5]); // No checksum
-
-        $this->assertTrue($serializer->verifyChecksum($snapshot));
-    }
-
-    public function testVerifyChecksumWithSecretKeyRequiresChecksum(): void
+    public function testVerifyChecksumRequiresChecksum(): void
     {
         $serializer = new SnapshotSerializer('my-secret-key');
         $snapshot = new Snapshot('Counter', 'main', [0 => 5]); // No checksum
 
-        // With secret key, null checksum should fail
+        // With secret key (which is now required), a null checksum must fail.
+        // The earlier `secretKey === ''` bypass — which would have accepted
+        // any null-checksum snapshot as authentic — is gone.
         $this->assertFalse($serializer->verifyChecksum($snapshot));
     }
 
     public function testHasSecretKey(): void
     {
-        $withoutKey = new SnapshotSerializer();
         $withKey = new SnapshotSerializer('secret');
 
-        $this->assertFalse($withoutKey->hasSecretKey());
         $this->assertTrue($withKey->hasSecretKey());
     }
 
     public function testWithSecretKey(): void
     {
-        $original = new SnapshotSerializer();
+        $original = new SnapshotSerializer('original-secret');
         $withKey = $original->withSecretKey('new-secret');
 
-        $this->assertFalse($original->hasSecretKey());
+        $this->assertTrue($original->hasSecretKey());
         $this->assertTrue($withKey->hasSecretKey());
+        // Verify the new serializer actually uses the new key by signing a
+        // payload — different keys must produce different signatures.
+        $this->assertNotSame(
+            $original->signString('hello'),
+            $withKey->signString('hello'),
+        );
     }
 
     public function testCalculateChecksumIsDeterministic(): void

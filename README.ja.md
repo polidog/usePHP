@@ -694,6 +694,91 @@ H::button(onClick: fn() => $setCount($count + 1), children: '+')
 ./vendor/bin/usephp help                  # ヘルプ表示
 ```
 
+## セキュリティ
+
+usePHP には複数の防御機構が組み込まれています。以下はアプリケーション側で正しく配線する必要がある項目です。
+
+### Snapshot HMAC シークレットキー（Snapshot ストレージ使用時に必須）
+
+`SnapshotBehavior::Persistent|Session|Shared` および `#[Component(storage: 'snapshot')]` で宣言されたコンポーネントはクライアント経由で state をラウンドトリップするため、フレームワークはすべての snapshot を HMAC で署名します。Snapshot ストレージを使うコンポーネントを描画する前に高エントロピーのシークレットを設定してください。設定しないと描画時に `LogicException` が発生します。
+
+```php
+$app = new UsePHP();
+$app->setSnapshotSecret(getenv('USEPHP_SNAPSHOT_SECRET'));
+```
+
+キーは一度だけ生成して設定から読み込みます:
+
+```php
+// 一度だけ生成して保存する — リクエストごとに再生成してはいけない。
+echo bin2hex(random_bytes(32));
+```
+
+キーは **リクエスト間とワーカープロセス間で安定している必要があります**（PHP-FPM、マルチサーバ構成）。ワーカーごとに違うキーだと、片方のワーカーが作った snapshot をもう片方が検証できず破棄してしまいます。キーをローテーションすると有効な snapshot がすべて無効化されます。
+
+シークレットを git にコミットしないでください。`examples/` 配下にあるプレースホルダ（`'your-secret-key-here'`, `'phase-1-demo-secret'`）は意図的に弱いものです。デプロイ前に必ず置き換えてください。
+
+### CSRF 対策
+
+`UsePHP::run()` と `UsePHP::handleAction()` はすべての POST に対して 2 層の検証を行います:
+
+1. **Origin / Referer 同一オリジン検証**（常時）。両ヘッダ欠落、または現在の `Host` と一致しない origin のリクエストは `403 Forbidden` で拒否されます。
+2. **セッションバインドのシンクロナイザトークン**（セッション有効時）。`Renderer::renderWithForm` がセッション単位のトークンを `<input type="hidden" name="_usephp_csrf" value="...">` として埋め込み、`doHandleAction` が `hash_equals` で検証します。
+
+自前でフォームを描画する場合は `UsePHP::getCsrfToken()` でトークンを取得できます。
+
+ホストフレームワーク側（Laravel の `VerifyCsrfToken`、Symfony の CSRF コンポーネント等）が既に POST ハンドラで CSRF を強制している場合は、二重検証で正常なリクエストが弾かれないよう usePHP 側を opt-out してください:
+
+```php
+$app = new UsePHP();
+$app->disableCsrfProtection();
+```
+
+#### TLS 終端プロキシ配下で動かす場合
+
+nginx / ALB / Cloudflare のような TLS 終端リバースプロキシ配下で usePHP を動かす場合、ブラウザは `https://` を見ているのに PHP-FPM 側では `$_SERVER['HTTPS']` が未設定のままになります。このままだと期待 origin が `http://...` で計算され、正常な POST がすべて 403 になります。
+
+対処は 2 通り:
+
+1. **usePHP 実行前に `$_SERVER` へスキームを渡す**。nginx の場合:
+   ```nginx
+   fastcgi_param HTTPS on;
+   fastcgi_param HTTP_HOST $http_host;
+   ```
+2. **プロキシヘッダの信頼を opt-in する** — `X-Forwarded-Proto` / `X-Forwarded-Host` / `X-Forwarded-Port` を尊重:
+   ```php
+   $app->trustProxyHeaders();
+   ```
+   これは「すべてのリクエストが自分が管理するプロキシを経由し、かつクライアント由来のこれらヘッダをプロキシが除去・上書きする」と保証できる構成でのみ有効化してください。さもないと攻撃者がヘッダを偽装して origin チェックを回避できます。
+
+### セッション Cookie の堅牢化
+
+usePHP は `Session` / `Shared` snapshot 挙動と CSRF トークンの保存に `$_SESSION` を使います。Cookie フラグは設定しないので、`php.ini` か `session_start()` のオプションで指定してください:
+
+```ini
+session.cookie_httponly = 1
+session.cookie_secure   = 1     ; HTTPS 配信時に有効化
+session.cookie_samesite = Lax   ; もしくは Strict
+```
+
+認証成功直後にセッション固定対策として `session_regenerate_id(true)` を呼んでください。
+
+### 同一オリジンへのリダイレクト
+
+`UsePHP::redirect($url)` および `SimpleRouter::createRedirectUrl()` は絶対 URL（`https://...`）、プロトコル相対 URL（`//host/path`）、スキーム付きパス（`javascript:...`）を拒否します。`/` 始まりの同一オリジンパスのみ渡してください。外部ドメインへのリダイレクトが必要な場合は、独自の許可リストで検証した上で自前で `Location` ヘッダを送ってください。
+
+### URL 属性の XSS 対策
+
+`href`, `src`, `action`, `formaction`, `srcdoc`, `data`, `poster`, `background`, `xlink:href` は URL コンテキストの属性です。Renderer は値のスキームが `javascript:`, `vbscript:`, `data:` のいずれかに該当する場合（ブラウザのパースに合わせて先頭の空白・制御文字を除いた後で判定）、属性を破棄します。通常の相対 URL や HTTP(S) URL はそのまま通ります。
+
+### PSX コンパイルキャッシュ
+
+`usephp compile` は生成された PHP ファイルを `var/cache/psx/` に書き出し、`UsePHP::loadComponentManifest()` がそれを `require` します。キャッシュディレクトリは **ビルド/デプロイ用ロールにのみ書き込み権限を与え、HTTP リクエストハンドラからは書けないようにする** こと。`loadComponentManifest()` にリクエスト由来のパスを渡さないでください。
+
+### 脆弱性報告
+
+セキュリティ問題を見つけた場合は、公開 Issue ではなくメンテナへメールで報告してください。
+
 ## 要件
 
 - PHP 8.5+
