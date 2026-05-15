@@ -210,6 +210,18 @@ final class CompileCommand
                 continue;
             }
 
+            // Cheap textual pre-filter so we don't execute compiled top-level
+            // code for files that obviously can't contribute a Defer. This
+            // keeps `usephp compile` close to a pure build step for the
+            // common case where most .psx files don't use defer. A file that
+            // happens to mention "Defer" but doesn't actually return a
+            // FunctionComponent with one is still cheaply handled by the
+            // is_a/null checks below.
+            $source = \file_get_contents($compiledPath);
+            if ($source === false || !\str_contains($source, 'Defer')) {
+                continue;
+            }
+
             try {
                 $value = require $compiledPath;
             } catch (\Throwable $e) {

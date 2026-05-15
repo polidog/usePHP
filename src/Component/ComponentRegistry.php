@@ -33,9 +33,14 @@ final class ComponentRegistry
         $this->components[$name] = $className;
         $this->storageTypes[$name] = $this->resolveStorageType($className);
 
+        // Explicitly clear on re-register so a class without #[Defer] cannot
+        // inherit a stale Defer from a previous class registered under the
+        // same component name (register() overwrites by name).
         $defer = $this->resolveDefer($className);
         if ($defer !== null) {
             $this->defers[$name] = $defer;
+        } else {
+            unset($this->defers[$name]);
         }
 
         return $this;

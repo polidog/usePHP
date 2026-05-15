@@ -16,8 +16,10 @@ use Polidog\UsePhp\Storage\StorageType;
  *
  * Behaves like a callable function component, but also exposes the optional
  * {@see Defer} configuration so the framework (and the compile pipeline) can
- * discover deferred endpoints by inspecting the value a .psx file returns —
- * no second manifest file required, no manual `registerDeferred()` call.
+ * discover deferred endpoints by inspecting the value a .psx file returns.
+ * `usephp compile` materialises that discovery into a `deferred-manifest.php`
+ * sidecar; `UsePHP::loadComponentManifest()` then auto-registers each entry,
+ * so a manual `registerDeferred()` call is unnecessary in the normal flow.
  *
  * When `$defer` is set, invoking the component emits an `H::defer(...)`
  * placeholder on the page-render path, and runs the inner callable on the

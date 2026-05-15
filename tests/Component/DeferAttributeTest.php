@@ -61,16 +61,12 @@ class DeferAttributeTest extends TestCase
         new Defer(name: 'not/url-safe');
     }
 
-    public function testRegisterAutoRegistersDeferredEndpoint(): void
+    public function testRegisterAutoRendersClassEndpoint(): void
     {
+        // Regression for Copilot review on PR #17: registering a #[Defer]
+        // class component must make the defer endpoint render the class's
+        // own render() output — no extra wiring required.
         $app = new UsePHP();
-        // Bridge the class component as a renderable so the defer endpoint
-        // has something to render (class components don't auto-register as
-        // PSX callables otherwise).
-        $app->registerComponent(
-            DeferAttributeTestComponent::class,
-            fn(array $props) => H::header(children: 'rendered'),
-        );
         $app->register(DeferAttributeTestComponent::class);
 
         $headers = [];
@@ -84,9 +80,30 @@ class DeferAttributeTest extends TestCase
         ));
 
         self::assertNotNull($html, 'auto-registered endpoint should resolve');
-        self::assertStringContainsString('<header>rendered</header>', $html);
+        self::assertStringContainsString('<header>static</header>', $html);
         // The Cache-Control on the registration must travel into the response.
         self::assertContains('Cache-Control: private, no-store', $headers);
+    }
+
+    public function testPsxBridgeEmitsPlaceholderOnPageSide(): void
+    {
+        // Page-side: PSX <UserHeaderDeferred fallback={…} /> compiles to
+        // renderPsxComponent($className, $props). The bridge installed by
+        // register() must turn that into an H::defer placeholder (NOT the
+        // class's render() output, that's the endpoint side).
+        $app = new UsePHP();
+        $app->register(DeferAttributeTestComponent::class);
+
+        $fallback = H::span(children: 'loading');
+        $element = $app->renderPsxComponent(
+            DeferAttributeTestComponent::class,
+            ['fallback' => $fallback, 'post_id' => 5],
+        );
+
+        self::assertSame('__defer__', $element->type);
+        self::assertSame('user-header', $element->props['__name']);
+        self::assertSame(['post_id' => 5], $element->props['__params']);
+        self::assertSame($fallback, $element->props['__fallback']);
     }
 
     public function testRegisterIsIdempotentForIdenticalConfig(): void
@@ -97,5 +114,30 @@ class DeferAttributeTest extends TestCase
         // when the (component, cacheControl) tuple matches.
         $app->register(DeferAttributeTestComponent::class);
         $this->expectNotToPerformAssertions();
+    }
+
+    public function testRegistryClearsStaleDeferOnReRegister(): void
+    {
+        // Regression for Copilot review on PR #17: re-registering a name
+        // with a class that no longer carries #[Defer] must drop the
+        // previously resolved Defer config (register() overwrites by name).
+        $registry = new \Polidog\UsePhp\Component\ComponentRegistry();
+        $registry->register(DeferAttributeTestComponent::class);
+        self::assertNotNull($registry->getDefer('UserHeaderDeferred'));
+
+        $registry->register(NonDeferReplacementComponent::class);
+        self::assertNull(
+            $registry->getDefer('UserHeaderDeferred'),
+            'Re-registering the same name with a plain class must drop the stale Defer.',
+        );
+    }
+}
+
+#[Component(name: 'UserHeaderDeferred')]
+final class NonDeferReplacementComponent extends BaseComponent
+{
+    public function render(): Element
+    {
+        return H::header(children: 'replacement');
     }
 }
