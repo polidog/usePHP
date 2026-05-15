@@ -179,6 +179,22 @@ class CompilerTest extends TestCase
         $this->compileExpression('<UserHeader defer />');
     }
 
+    public function testDeferAttributeRejectsInvalidLiteralName(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('must match');
+        // Slash is not URL-safe in a defer name.
+        $this->compileExpression('<UserHeader defer="bad/name" />');
+    }
+
+    public function testDeferAttributeAllowsDynamicBraceExpression(): void
+    {
+        // Brace expressions are passed through verbatim — runtime is
+        // responsible for validating the resolved value.
+        $result = $this->compileExpression('<UserHeader defer={$dyn} />');
+        self::assertStringContainsString('\\Polidog\\UsePhp\\Html\\H::defer($dyn,', $result);
+    }
+
     public function testCompilesCounterPsxFixtureToValidPhp(): void
     {
         $sourcePath = \dirname(__DIR__, 2) . '/examples/components/psx/Counter.psx';

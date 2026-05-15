@@ -636,7 +636,7 @@ $app->registerDeferred(
 - **paramsはスカラのみ。** クエリ文字列を経由するため、`int`/`string`/`float`/`bool` のみ。`bool` は `'1'/'0'` に変換。配列・Element・Closure・リソースは渡せません。
 - **認可はコンポーネント側の責務。** 名前と params は URL に露出するため、敏感な情報を取得するエンドポイントでは、コンポーネント側でセッションや権限を確認してください（HMAC 署名は不要になりました — 名前はあくまで「公開された入口名」）。
 - **入れ子のdeferも動作します。** deferしたコンポーネントの出力内にさらに `<X defer="…" />` がある場合、`usephp.js` が再帰的に hydrate します。
-- **ページ単位の defer キャッシュ。** `usephp.js` は `Map<URL, DocumentFragment>` をページ生存期間中保持します。partial update が同じ defer placeholder を再出力した場合は、再 fetch せずキャッシュされた fragment を再利用します。キーは URL なので、params を変えれば別エントリ。フルページリロードで消えます。
+- **ページ単位の defer キャッシュ。** `usephp.js` は `Map<URL, DocumentFragment>` をページ生存期間中保持します。partial update が同じ defer placeholder を再出力した場合は、再 fetch せずキャッシュされた fragment を再利用します。キーは URL なので、params を変えれば別エントリ。フルページリロードで消えます。キャッシュは **64 エントリ上限**（簡易LRU）。一覧ページで行ごとに defer する（`<Comment defer="comment" id={$id} />` × N）ような使い方でも無限に成長することはありません。
 - **JSなしのユーザーはfallbackしか見えません。** これは仕様上のトレードオフです。
 - **フレームワーク統合:** コントローラから `UsePHP::handleDeferred()` を呼んでください。defer ルート（GET `/_defer/...`）ならレンダリング済みHTMLを返し、そうでなければ `null` を返します（`handleAction()` と同じパターン）。プレフィックスは `setDeferPrefix('/api/_d')` で変更可。
 

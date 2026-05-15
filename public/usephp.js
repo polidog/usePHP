@@ -14,7 +14,27 @@
     // only; a full page reload clears it. The browser's HTTP cache also
     // applies per the endpoint's Cache-Control, so this is a per-page
     // de-duplication layer on top of the normal cache.
+    //
+    // Capped to bound memory: list-style pages that defer per-row content
+    // with distinct query params (e.g. `<Comment defer="comment" id={$id} />`
+    // for many rows) would otherwise grow the cache without limit. When the
+    // cap is hit we drop the least-recently inserted entry — Maps preserve
+    // insertion order in JS, so reinserting on hit lifts the entry to the
+    // newest slot and gives us cheap LRU semantics.
+    const DEFER_CACHE_MAX = 64;
     const deferCache = new Map();
+
+    function rememberDeferFragment(url, fragment) {
+        if (deferCache.has(url)) {
+            deferCache.delete(url);
+        } else if (deferCache.size >= DEFER_CACHE_MAX) {
+            const oldest = deferCache.keys().next().value;
+            if (oldest !== undefined) {
+                deferCache.delete(oldest);
+            }
+        }
+        deferCache.set(url, fragment);
+    }
 
     document.addEventListener('submit', async function(e) {
         const form = e.target;
@@ -87,6 +107,10 @@
         // also hit the cache by their own URL.
         const cached = deferCache.get(url);
         if (cached) {
+            // Lift the entry to the newest slot so the LRU eviction sees it
+            // as recently used. Cloning is needed so the cached copy stays
+            // pristine for future hits.
+            rememberDeferFragment(url, cached);
             const clone = cached.cloneNode(true);
             processDeferred(clone);
             placeholder.replaceWith(clone);
@@ -123,7 +147,7 @@
             // Store a pristine clone before the original fragment is
             // consumed by replaceWith — moving children into the DOM would
             // leave the cached entry empty otherwise.
-            deferCache.set(url, template.content.cloneNode(true));
+            rememberDeferFragment(url, template.content.cloneNode(true));
 
             // A deferred component's rendered output may itself contain
             // nested defer placeholders. Kick off their fetches before

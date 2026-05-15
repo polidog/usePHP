@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Psx;
 
+use Polidog\UsePhp\UsePHP;
+
 /**
  * Parses one PSX expression from a source string starting at `<`.
  *
@@ -507,6 +509,31 @@ final class PsxParser implements PsxParserInterface
                         . 'Use <' . $tagName . ' defer="name" /> instead.',
                     );
                 }
+                // String literal form (`defer="user-header"`): the value
+                // arrives here already quoted as PHP source, e.g. `'user-header'`.
+                // Validate the URL-safe shape at compile time so typos surface
+                // during build, not as runtime exceptions in production.
+                if (!$attr['isExpr']) {
+                    // The value arrives wrapped as a PHP single-quoted literal
+                    // (e.g. `'user-header'`). Validate the inner string against
+                    // the shared name pattern so producer (here), runtime
+                    // (Renderer::renderDeferred), and consumer
+                    // (UsePHP::doHandleDeferred) all agree on what counts as a
+                    // valid name. Any unescaped-special-char case (e.g. a name
+                    // containing `'` or `\`) makes the inner string deviate
+                    // from the pattern and is caught the same way.
+                    $literalSource = $attr['value'] ?? '';
+                    if (\preg_match("/^'(" . UsePHP::DEFER_NAME_PATTERN . ")'$/", $literalSource) !== 1) {
+                        $literal = \substr($literalSource, 1, -1);
+                        throw $this->error(
+                            "<$tagName defer=\"$literal\"> name must match `" . UsePHP::DEFER_NAME_PATTERN . '`. '
+                            . 'Names appear as URL path segments and are validated by the runtime.',
+                        );
+                    }
+                }
+                // Brace expressions (`defer={$dynamicName}`) cannot be
+                // validated here — the runtime check in Renderer::renderDeferred
+                // and the endpoint match in UsePHP::doHandleDeferred take over.
                 $deferNameExpr = $attr['value'];
                 continue;
             }
