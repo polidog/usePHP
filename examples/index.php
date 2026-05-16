@@ -253,7 +253,7 @@ $layoutWrapper = function (string $title, string $content): void {
     </nav>
     <?= $content ?>
     <div class="badge">Partial updates with ~40 lines of JS</div>
-    <script src="/usephp.js"></script>
+    <?= UsePHP::renderClientScript() ?>
 </body>
 </html>
 <?php
