@@ -19,7 +19,7 @@ React Hooks風の書き心地で、**最小限のJavaScript**でサーバード�
 ```bash
 composer require polidog/use-php
 
-# JSファイルをpublicディレクトリにコピー（部分更新を使う場合）
+# JSファイルをpublicディレクトリにコピー（完全な progressive enhancement 層）
 ./vendor/bin/usephp publish
 ```
 
@@ -87,6 +87,12 @@ $router->get('/about', AboutPage::class)->name('about');
 // アプリケーションを実行
 UsePHP::run();
 ```
+
+自前のレイアウトで script を出す場合は、手書きの
+`<script src="/usephp.js">` より `UsePHP::renderClientScript()` を推奨します。
+公開済みアセットを `defer` 付きで読み込みつつ、アセットが読めない場合にも
+defer コンポーネントだけは取得する小さなインライン fallback を同梱します。
+部分フォーム更新には引き続き完全な `usephp.js` が必要です。
 
 ### 3. サーバーを起動
 
@@ -797,7 +803,7 @@ window.usePHP.reloadDefer('/_defer/todo-list?p=2'); // 厳密 URL で指定
 - **入れ子のdeferも動作します。** deferしたコンポーネントの出力内にさらに `<...Deferred />` がある場合、`usephp.js` が再帰的に hydrate します。
 - **2 段構成の defer キャッシュ（L1 インメモリ + opt-in な L2 `localStorage`）。** 永続化はコンポーネントが決め（HTTP `Cache-Control` ではなく `Defer::$localCache`、デフォルトは時間失効なし・`Defer::$localCacheTtl` 秒で任意に上限可）、JS の強制リセット API があります — 上記 [クライアントキャッシュと強制リセット](#クライアントキャッシュと強制リセット) を参照。opt-in しないコンポーネントは従来のインメモリのみキャッシュと全く同じ挙動です。
 - **opt-in な明示的リロード（`Defer::$reloadable`）。** 再取得可能なラッパーを残し、`window.usePHP.reloadDefer()`・フォームの `data-usephp-reload-defer`・任意要素のクリックで defer 領域を再取得できます — 上記 [明示的リロード](#明示的リロード) を参照。リロードのたびにその URL の両キャッシュ層を先に破棄します。opt-in しないコンポーネントは解決時に置換され、マークアップはバイト一致です。
-- **JSなしのユーザーはfallbackしか見えません。** これは仕様上のトレードオフです。
+- **JSなしのユーザーはfallbackしか見えません。** JavaScript は動くが公開済みの `usephp.js` アセットが読めない場合、`UsePHP::renderClientScript()` が同梱する小さなインライン fallback により defer フラグメントは一度だけ取得されます。部分フォーム更新、defer キャッシュ、明示的リロード API には引き続き完全なアセットが必要です。
 - **フレームワーク統合:** コントローラから `UsePHP::handleDeferred()` を呼んでください。defer ルート（GET `/_defer/...`）ならレンダリング済みHTMLを返し、そうでなければ `null` を返します（`handleAction()` と同じパターン）。プレフィックスは `setDeferPrefix('/api/_d')` で変更可。
 
 ## 生成されるHTML

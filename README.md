@@ -19,7 +19,7 @@ A framework that delivers server-driven UI with **minimal JavaScript**, using a 
 ```bash
 composer require polidog/use-php
 
-# Copy JS file to public directory (required for partial updates)
+# Copy JS file to public directory (full progressive enhancement layer)
 ./vendor/bin/usephp publish
 ```
 
@@ -87,6 +87,12 @@ $router->get('/about', AboutPage::class)->name('about');
 // Run the application
 UsePHP::run();
 ```
+
+When you render your own layout, prefer `UsePHP::renderClientScript()` over a
+hand-written `<script src="/usephp.js">`. It loads the published asset with
+`defer` and includes a tiny inline fallback that hydrates deferred components
+if the asset cannot be read; partial form updates still require the full
+`usephp.js` file.
 
 ### 3. Start the Server
 
@@ -808,7 +814,7 @@ replaced away on resolve, byte-identical markup.
 - **Nested defer works.** A deferred component's output may itself contain `<...Deferred />` placeholders; `usephp.js` recursively hydrates them.
 - **Two-tier defer cache (L1 in-memory + opt-in L2 `localStorage`).** Component-decided persistence (`Defer::$localCache`, not the HTTP `Cache-Control`; no time expiry by default, optionally bounded by `Defer::$localCacheTtl` seconds) and a JS forced-reset API — see [Client-side cache & forced reset](#client-side-cache--forced-reset) above. Components that don't opt in behave exactly like the previous in-memory-only cache.
 - **Opt-in explicit reload (`Defer::$reloadable`).** Keeps a re-targetable wrapper so a deferred region can be re-fetched via `window.usePHP.reloadDefer()`, a form's `data-usephp-reload-defer`, or a click on any element — see [Explicit reload](#explicit-reload) above. Each reload busts both cache tiers for that URL first. Components that don't opt in are replaced away on resolve, byte-identical markup.
-- **No-JS users see the fallback only.** This is the documented trade-off: the deferred component never renders without JavaScript.
+- **No-JS users see the fallback only.** If JavaScript runs but the published `usephp.js` asset cannot be read, `UsePHP::renderClientScript()` includes a tiny inline fallback that still fetches deferred fragments once. The full asset is still required for partial form updates, defer caching, and explicit reload APIs.
 - **Framework integration:** call `UsePHP::handleDeferred()` from your controller; it returns the rendered HTML for `GET /_defer/...` requests, or `null` otherwise. Mirrors `handleAction()`. The prefix is configurable via `setDeferPrefix('/api/_d')`.
 
 ## Generated HTML

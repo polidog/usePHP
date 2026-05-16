@@ -39,9 +39,50 @@ final class UsePHP
      */
     public const DEFER_NAME_PATTERN = '[A-Za-z0-9_-]+';
 
+    /**
+     * Tiny inline safety net for pages that use deferred components but fail
+     * to load the published usephp.js asset. It only hydrates
+     * data-usephp-defer-url placeholders; forms still degrade to normal POSTs
+     * when the full client script is absent.
+     */
+    private const DEFER_FALLBACK_SCRIPT = <<<'JS'
+        (function(){
+        if(window.usePHPDeferFallback)return;
+        window.usePHPDeferFallback=function(root){
+        function process(scope){(scope||document).querySelectorAll('[data-usephp-defer-url]:not([data-usephp-defer-loaded])').forEach(fetchOne);}
+        function place(el,html){var t=document.createElement('template');t.innerHTML=html;process(t.content);if(el.hasAttribute('data-usephp-defer-name')){el.replaceChildren(t.content);el.removeAttribute('aria-busy');el.setAttribute('data-usephp-defer-loaded','');process(el);return;}el.replaceWith(t.content);}
+        async function fetchOne(el){var url=el.dataset.usephpDeferUrl;if(!url||el.hasAttribute('data-usephp-defer-loaded')||el.hasAttribute('data-usephp-defer-fallback-loading'))return;el.setAttribute('data-usephp-defer-fallback-loading','');el.setAttribute('aria-busy','true');try{var r=await fetch(url,{method:'GET',headers:{'X-UsePHP-Defer':'1'},credentials:'same-origin'});if(!r.ok)return;place(el,await r.text());}catch(e){if(window.console&&console.warn)console.warn('[usePHP] defer fallback fetch failed:',e,url);}finally{el.removeAttribute('data-usephp-defer-fallback-loading');el.removeAttribute('aria-busy');}}
+        function start(){process(root||document);}
+        if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
+        };
+        window.usePHPDeferFallbackCheck=function(){function check(){setTimeout(function(){if(!(window.usePHP&&window.usePHP.reloadDefer))window.usePHPDeferFallback();},0);}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',check,{once:true});else check();};
+        })();
+        JS;
+
     public static function isValidDeferName(string $name): bool
     {
         return \preg_match('/^' . self::DEFER_NAME_PATTERN . '$/', $name) === 1;
+    }
+
+    /**
+     * Render the client script tag for usePHP.
+     *
+     * The external usephp.js remains the full progressive-enhancement layer
+     * (partial form submits, defer cache, explicit reload). The inline block is
+     * deliberately much smaller: if the external asset 404s or fails to
+     * execute, it fetches deferred placeholders once so defer does not make the
+     * page depend on the published asset being readable.
+     */
+    public static function renderClientScript(string $src = '/usephp.js'): string
+    {
+        $script = self::DEFER_FALLBACK_SCRIPT;
+        $escapedSrc = \htmlspecialchars($src, \ENT_QUOTES, 'UTF-8');
+
+        return <<<HTML
+            <script>{$script}</script>
+            <script src="{$escapedSrc}" defer onerror="window.usePHPDeferFallback&amp;&amp;window.usePHPDeferFallback()"></script>
+            <script>window.usePHPDeferFallbackCheck&&window.usePHPDeferFallbackCheck()</script>
+            HTML;
     }
 
     private ComponentRegistry $registry;
