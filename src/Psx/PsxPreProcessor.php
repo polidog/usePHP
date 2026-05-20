@@ -15,10 +15,14 @@ namespace Polidog\UsePhp\Psx;
  *
  * Strategy: iterate. Each pass re-tokenizes the current source and locates
  * the *first* PSX region only, then splices the placeholder in and loops.
- * PHP's tokenizer corrupts everything from any unbalanced `'`/`"`/`#`/`//`
- * inside JSX text through to EOF, but tokens *before* the first such region
- * are accurate — so their offsets are trustworthy. Replacing each region
- * with a placeholder removes the corrupting input for the next pass.
+ * JSX text routinely contains characters that PHP's tokenizer mis-handles —
+ * an unbalanced `'` or `"` is swallowed as a string literal running to the
+ * next matching quote or EOF, and `#` / `//` start a line comment that
+ * consumes the rest of the line. Either case can corrupt the token stream
+ * for the region itself and anything after it. Tokens *before* the first
+ * such region remain accurate though, so their offsets are trustworthy.
+ * Replacing each region with a placeholder removes the corrupting input
+ * for the next pass.
  *
  * Line-count preservation is NOT done here: this stage emits the placeholder
  * with no padding. The Compiler tops up newlines once it knows how many lines
