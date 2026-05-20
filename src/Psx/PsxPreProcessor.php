@@ -13,6 +13,13 @@ namespace Polidog\UsePhp\Psx;
  * — a top-level function call. The Compiler later substitutes each occurrence
  * with the lowered PSX expression.
  *
+ * Strategy: iterate. Each pass re-tokenizes the current source and locates
+ * the *first* PSX region only, then splices the placeholder in and loops.
+ * PHP's tokenizer corrupts everything from any unbalanced `'`/`"`/`#`/`//`
+ * inside JSX text through to EOF, but tokens *before* the first such region
+ * are accurate — so their offsets are trustworthy. Replacing each region
+ * with a placeholder removes the corrupting input for the next pass.
+ *
  * Line-count preservation is NOT done here: this stage emits the placeholder
  * with no padding. The Compiler tops up newlines once it knows how many lines
  * the lowered code actually consumes, so line numbers in the final output
@@ -25,72 +32,39 @@ final class PsxPreProcessor implements PsxPreProcessorInterface
     /**
      * @return array{0: string, 1: list<array{source: string, start: int, end: int}>}
      *         The pre-processed source plus the list of replaced PSX regions
-     *         (in source order).
+     *         (in source order). `start`/`end` are offsets in the *original*
+     *         source.
      */
     public function process(string $source): array
     {
-        $tokens = \token_get_all($source);
         $regions = [];
-        $output = '';
-        $expectExpression = true;
+        // Modified offsets shift as we splice placeholders in; this tracks
+        // (originalOffset - currentOffset) so we can report region positions
+        // against the original source.
+        $offsetShift = 0;
 
-        $i = 0;
-        $count = \count($tokens);
-
-        while ($i < $count) {
-            $token = $tokens[$i];
-
-            if (\is_array($token)) {
-                [$id, $text] = $token;
-
-                if ($id === \T_IS_NOT_EQUAL && $expectExpression && $text === '<>') {
-                    $output .= $this->capture($source, $tokens, $i, $regions);
-                    $i = $this->advanceTokensBeyond($tokens, $i, $regions[\count($regions) - 1]['end']);
-                    $expectExpression = false;
-                    continue;
-                }
-
-                $output .= $text;
-                $expectExpression = $this->updateExpressionContextFromToken($id, $expectExpression);
-                $i++;
-                continue;
+        while (true) {
+            $offset = $this->findFirstRegionOffset($source);
+            if ($offset === null) {
+                break;
             }
 
-            if ($token === '<' && $expectExpression && $this->isPsxTagStart($tokens[$i + 1] ?? null)) {
-                $output .= $this->capture($source, $tokens, $i, $regions);
-                $i = $this->advanceTokensBeyond($tokens, $i, $regions[\count($regions) - 1]['end']);
-                $expectExpression = false;
-                continue;
-            }
+            $end = new PsxParser($source, $offset)->parseElement()['end'];
 
-            $output .= $token;
-            $expectExpression = $this->updateExpressionContextFromChar($token, $expectExpression);
-            $i++;
+            $regionText = \substr($source, $offset, $end - $offset);
+            $idx = \count($regions);
+            $regions[] = [
+                'source' => $regionText,
+                'start' => $offset + $offsetShift,
+                'end' => $end + $offsetShift,
+            ];
+
+            $placeholder = $this->placeholder($idx);
+            $source = \substr($source, 0, $offset) . $placeholder . \substr($source, $end);
+            $offsetShift += ($end - $offset) - \strlen($placeholder);
         }
 
-        return [$output, $regions];
-    }
-
-    /**
-     * @param array<int, array{0:int,1:string,2:int}|string> $tokens
-     * @param list<array{source: string, start: int, end: int}> $regions
-     */
-    private function capture(string $source, array $tokens, int $i, array &$regions): string
-    {
-        $offset = $this->tokenOffset($tokens, $i);
-        // Run PsxParser purely for its end-of-region detection. The string it
-        // returns is discarded — we only need the end position to slice out
-        // the original PSX text.
-        $parser = new PsxParser($source, $offset);
-        $result = $parser->parseElement();
-
-        $regionText = \substr($source, $offset, $result['end'] - $offset);
-        $idx = \count($regions);
-        $regions[] = ['source' => $regionText, 'start' => $offset, 'end' => $result['end']];
-
-        // Padding to preserve line count is added later by the Compiler, after
-        // the lowered code's own newlines have been counted.
-        return $this->placeholder($idx);
+        return [$source, $regions];
     }
 
     public function placeholder(int $index): string
@@ -99,32 +73,42 @@ final class PsxPreProcessor implements PsxPreProcessorInterface
     }
 
     /**
-     * @param array<int, array{0:int,1:string,2:int}|string> $tokens
+     * Locate the byte offset of the first PSX region in `$source`, or null if
+     * none remains. Only the prefix up to the region matters — tokens after
+     * the JSX may be misparsed by PHP's tokenizer, but that's fine because we
+     * never consult them.
      */
-    private function tokenOffset(array $tokens, int $index): int
+    private function findFirstRegionOffset(string $source): ?int
     {
+        $tokens = \token_get_all($source);
+        $expectExpression = true;
         $offset = 0;
-        for ($j = 0; $j < $index; $j++) {
-            $t = $tokens[$j];
-            $offset += \strlen(\is_array($t) ? $t[1] : $t);
-        }
-        return $offset;
-    }
-
-    /**
-     * @param array<int, array{0:int,1:string,2:int}|string> $tokens
-     */
-    private function advanceTokensBeyond(array $tokens, int $startIndex, int $byteEnd): int
-    {
-        $offset = $this->tokenOffset($tokens, $startIndex);
-        $i = $startIndex;
         $count = \count($tokens);
-        while ($i < $count && $offset < $byteEnd) {
-            $t = $tokens[$i];
-            $offset += \strlen(\is_array($t) ? $t[1] : $t);
-            $i++;
+
+        for ($i = 0; $i < $count; $i++) {
+            $token = $tokens[$i];
+
+            if (\is_array($token)) {
+                [$id, $text] = $token;
+
+                if ($id === \T_IS_NOT_EQUAL && $expectExpression && $text === '<>') {
+                    return $offset;
+                }
+
+                $offset += \strlen($text);
+                $expectExpression = $this->updateExpressionContextFromToken($id, $expectExpression);
+                continue;
+            }
+
+            if ($token === '<' && $expectExpression && $this->isPsxTagStart($tokens[$i + 1] ?? null)) {
+                return $offset;
+            }
+
+            $offset++;
+            $expectExpression = $this->updateExpressionContextFromChar($token, $expectExpression);
         }
-        return $i;
+
+        return null;
     }
 
     /**

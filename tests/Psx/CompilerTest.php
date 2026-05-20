@@ -292,6 +292,63 @@ class CompilerTest extends TestCase
         $this->compileExpression('<div>{ "unterminated }</div>');
     }
 
+    /**
+     * Regression for #27: an odd number of apostrophes in JSX text caused
+     * PHP's tokenizer to swallow the rest of the source into an unterminated
+     * single-quoted string token, which made the pre-processor drop the
+     * trailing PHP after the placeholder.
+     */
+    public function testJsxTextWithOddApostropheInsideFunctionBlockCompiles(): void
+    {
+        $source = "<?php\nfunction page() {\n    return (<p>it's broken</p>);\n}\n";
+        $compiled = $this->compiler->compile($source);
+
+        self::assertStringContainsString("H::p(children: 'it\\'s broken')", $compiled);
+        self::assertStringContainsString('}', $compiled, 'Trailing closing brace must not be dropped');
+        $this->assertCompiledIsValidPhp($compiled);
+    }
+
+    public function testJsxTextWithOddApostropheInsideIfBlockCompiles(): void
+    {
+        $source = "<?php\nif (true) {\n    \$x = (<p>doesn't matter</p>);\n}\n";
+        $compiled = $this->compiler->compile($source);
+
+        self::assertStringContainsString("H::p(children: 'doesn\\'t matter')", $compiled);
+        $this->assertCompiledIsValidPhp($compiled);
+    }
+
+    public function testJsxTextWithApostropheInNestedSectionCompiles(): void
+    {
+        $source = "<?php\nfunction page() {\n    return fn() => fn() => (<section>it's nested</section>);\n}\n";
+        $compiled = $this->compiler->compile($source);
+
+        self::assertStringContainsString("H::section(children: 'it\\'s nested')", $compiled);
+        $this->assertCompiledIsValidPhp($compiled);
+    }
+
+    public function testMultipleSiblingJsxRegionsWithApostrophesCompile(): void
+    {
+        $source = "<?php\nfunction page() {\n"
+            . "    \$a = (<p>doesn't</p>);\n"
+            . "    \$b = (<p>you're</p>);\n"
+            . "    return [\$a, \$b];\n"
+            . "}\n";
+        $compiled = $this->compiler->compile($source);
+
+        self::assertStringContainsString("H::p(children: 'doesn\\'t')", $compiled);
+        self::assertStringContainsString("H::p(children: 'you\\'re')", $compiled);
+        $this->assertCompiledIsValidPhp($compiled);
+    }
+
+    private function assertCompiledIsValidPhp(string $compiled): void
+    {
+        try {
+            \token_get_all($compiled, \TOKEN_PARSE);
+        } catch (\ParseError $e) {
+            self::fail('Compiled PSX produced invalid PHP: ' . $e->getMessage());
+        }
+    }
+
     public function testCustomElementWithDataAttrUsesCallStaticDispatch(): void
     {
         $result = $this->compileExpression('<my-widget data-x="1" />');
