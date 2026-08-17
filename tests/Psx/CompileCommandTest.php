@@ -48,7 +48,8 @@ class CompileCommandTest extends TestCase
             $this->cacheDir,
             $this->workDir . '/components/Counter.psx',
         );
-        self::assertSame($expected, $manifest['App\\Components\\Counter']);
+        self::assertSame($expected, $manifest['App\\Components\\Counter']['file']);
+        self::assertSame([], $manifest['App\\Components\\Counter']['parameters']);
         self::assertFileExists($expected);
     }
 
@@ -385,6 +386,76 @@ class CompileCommandTest extends TestCase
         self::assertArrayHasKey('user-header', $entries);
         self::assertSame('App\\Components\\UserHeaderDeferred', $entries['user-header']['component']);
         self::assertSame('private, no-store', $entries['user-header']['cacheControl']);
+    }
+
+    public function testManifestIncludesComponentParameterMetadata(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/components/ProfileBadge.psx',
+            "<?php\n"
+            . "namespace App\\Components;\n"
+            . "use DateTimeInterface;\n"
+            . "use Polidog\\UsePhp\\Html\\H;\n"
+            . "use function Polidog\\UsePhp\\Runtime\\fc;\n"
+            . "return fc(\n"
+            . "    fn(array \$props, DateTimeInterface \$clock) => H::span(children: \$props['slot'] ?? \$clock->format('c')),\n"
+            . ");\n",
+        );
+
+        $cmd = new CompileCommand();
+        $exitCode = $this->runCmd($cmd, [$this->workDir . '/components']);
+        self::assertSame(0, $exitCode);
+
+        $manifest = require $this->cacheDir . '/' . CompileCommand::MANIFEST_FILENAME;
+        self::assertIsArray($manifest['App\\Components\\ProfileBadge']);
+        self::assertIsString($manifest['App\\Components\\ProfileBadge']['file']);
+        self::assertSame(
+            [
+                ['kind' => 'props', 'name' => 'props'],
+                ['kind' => 'service', 'name' => 'clock', 'service' => 'DateTimeInterface'],
+            ],
+            $manifest['App\\Components\\ProfileBadge']['parameters'],
+        );
+    }
+
+    public function testManifestIncludesNullableUnionServiceParameterMetadata(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/components/ProfileBadge.psx',
+            "<?php\n"
+            . "namespace App\\Components;\n"
+            . "use DateTimeInterface;\n"
+            . "use Polidog\\UsePhp\\Html\\H;\n"
+            . "return fn(array \$props, DateTimeInterface|null \$clock) => H::span(children: \$clock?->format('c') ?? 'none');\n",
+        );
+
+        $cmd = new CompileCommand();
+        $exitCode = $this->runCmd($cmd, [$this->workDir . '/components']);
+        self::assertSame(0, $exitCode);
+
+        $manifest = require $this->cacheDir . '/' . CompileCommand::MANIFEST_FILENAME;
+        self::assertSame(
+            [
+                ['kind' => 'props', 'name' => 'props'],
+                ['kind' => 'service', 'name' => 'clock', 'service' => 'DateTimeInterface'],
+            ],
+            $manifest['App\\Components\\ProfileBadge']['parameters'],
+        );
+    }
+
+    public function testCompileReturnsErrorWhenParameterMetadataCannotBeCollected(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/components/InvalidParam.psx',
+            "<?php\n"
+            . "namespace App\\Components;\n"
+            . "use Polidog\\UsePhp\\Html\\H;\n"
+            . "return fn(int \$id) => H::span(children: (string) \$id);\n",
+        );
+
+        $cmd = new CompileCommand();
+
+        self::assertSame(1, $this->runCmd($cmd, [$this->workDir . '/components']));
     }
 
     public function testOmitsDeferredManifestWhenNoDeferredComponents(): void
