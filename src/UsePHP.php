@@ -968,6 +968,20 @@ final class UsePHP
     }
 
     /**
+     * Restore component state from a snapshot carried by the request,
+     * according to the matched route's snapshot behavior.
+     *
+     * UsePHP::run() does this automatically before rendering; call it from
+     * a custom front controller after routing and before invoking the
+     * handler so Persistent/Session/Shared snapshot routes see their
+     * restored state.
+     */
+    public function restoreSnapshot(RequestContext $request, RouteMatch $match): void
+    {
+        $this->handleSnapshotRestoration($request, $match);
+    }
+
+    /**
      * Handle a deferred component fetch and return the rendered HTML.
      * Returns null if the request is not a defer route (caller should
      * continue with normal routing).
@@ -1200,6 +1214,22 @@ final class UsePHP
 
         // Full page - PRG pattern with snapshot behavior handling
         $redirectUrl = strtok($_SERVER['REQUEST_URI'] ?? '/', '?') ?: '/';
+
+        // Actions POST to the page's own URL, so the snapshot behavior that
+        // applies is the one declared on the GET route that rendered the
+        // page. The POST itself never matches that GET route, and actions
+        // are dispatched before routing, so currentMatch is unset here —
+        // resolve the page's route now, otherwise Persistent/Session routes
+        // would fall through to Isolated and drop their state on redirect.
+        if ($this->currentMatch === null && $this->router !== null && $storageType === StorageType::Snapshot) {
+            $current = RequestContext::fromGlobals();
+            $this->currentMatch = $this->router->match(new RequestContext(
+                method: 'GET',
+                path: $current->path,
+                queryString: $current->queryString,
+                query: $current->query,
+            ));
+        }
 
         // Handle snapshot preservation based on route behavior
         if ($this->currentMatch !== null && $storageType === StorageType::Snapshot) {
