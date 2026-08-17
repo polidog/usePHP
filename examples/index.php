@@ -302,12 +302,19 @@ if (is_string($handler) && class_exists($handler)) {
     // Class-based component
     $content = $app->render($handler);
 } elseif (is_callable($handler)) {
-    // Callable handler
-    $result = $handler($match->params, $request);
-    if ($result instanceof Element) {
-        $content = $app->renderElement($result);
-    } else {
-        $content = (string) $result;
+    // Callable handler. Snapshot-storage components need the app context
+    // while the handler builds its Element tree, not just inside
+    // renderElement(), so set it around the whole invocation.
+    RenderContext::setApp($app);
+    try {
+        $result = $handler($match->params, $request);
+        if ($result instanceof Element) {
+            $content = $app->renderElement($result);
+        } else {
+            $content = (string) $result;
+        }
+    } finally {
+        RenderContext::clearApp();
     }
 } else {
     $content = '';
