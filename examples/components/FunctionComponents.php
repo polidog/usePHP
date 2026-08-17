@@ -299,3 +299,97 @@ $FcSnapshotCounter = fc(function (array $props): Element {
         ]
     );
 }, 'snapshot-counter', StorageType::Snapshot);
+
+/**
+ * Shopping cart with Snapshot storage.
+ *
+ * Combined with `->persistentSnapshot()` on the route, the cart contents
+ * travel in the URL: every mutation redirects to /cart?_snapshot=..., so
+ * the URL is shareable and the server stays stateless.
+ *
+ * @var callable(array<string, mixed>): Element
+ */
+$FcCart = fc(function (array $props): Element {
+    $catalog = [
+        'apple'  => ['name' => 'Apple',  'price' => 120],
+        'banana' => ['name' => 'Banana', 'price' => 80],
+        'cherry' => ['name' => 'Cherry', 'price' => 350],
+    ];
+
+    /** @var array{0: array<string, int>, 1: callable} */
+    [$items, $setItems] = useState([]);
+
+    // The setter returned by useState() does not mutate anything: it returns
+    // an Action that the renderer embeds in the button's form, so these
+    // helpers must return the setter's result.
+    $add = function (string $id) use ($items, $setItems) {
+        $items[$id] = ($items[$id] ?? 0) + 1;
+        return $setItems($items);
+    };
+
+    $removeOne = function (string $id) use ($items, $setItems) {
+        if (($items[$id] ?? 0) <= 1) {
+            unset($items[$id]);
+        } else {
+            $items[$id]--;
+        }
+        return $setItems($items);
+    };
+
+    $productRows = [];
+    foreach ($catalog as $id => $product) {
+        $productRows[] = H::li(
+            className: 'todo-item',
+            children: [
+                H::span(children: "{$product['name']} — ¥{$product['price']}"),
+                H::button(
+                    className: 'btn btn-increment',
+                    onClick: fn() => $add($id),
+                    children: 'Add'
+                ),
+            ]
+        );
+    }
+
+    $total = 0;
+    $cartRows = [];
+    foreach ($items as $id => $qty) {
+        if (!isset($catalog[$id])) {
+            continue;
+        }
+        $product = $catalog[$id];
+        $total += $product['price'] * $qty;
+        $cartRows[] = H::li(
+            className: 'todo-item',
+            children: [
+                H::span(children: "{$product['name']} × {$qty}"),
+                H::button(
+                    className: 'btn btn-decrement',
+                    onClick: fn() => $removeOne($id),
+                    children: '-'
+                ),
+            ]
+        );
+    }
+
+    return H::div(
+        className: 'todo-app',
+        children: [
+            H::h1(children: 'Cart'),
+            H::p(
+                style: 'text-align:center;color:#666;font-size:14px;',
+                children: 'Snapshot storage + persistent behavior: cart state lives in the URL'
+            ),
+            H::h2(style: 'font-size:18px;', children: 'Products'),
+            H::ul(className: 'todo-list', children: $productRows),
+            H::h2(style: 'font-size:18px;margin-top:20px;', children: 'Cart'),
+            $cartRows === []
+                ? H::p(style: 'color:#999;text-align:center;', children: 'Cart is empty')
+                : H::ul(className: 'todo-list', children: $cartRows),
+            H::div(
+                className: 'todo-stats',
+                children: "Total: ¥{$total}"
+            ),
+        ]
+    );
+}, 'cart', StorageType::Snapshot);

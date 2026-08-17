@@ -99,15 +99,11 @@ $router->get('/fc-wrapped-todo', function (): Element {
     return $FcTodoList([]);
 });
 
-// Persistent snapshot example - state is passed via URL
+// Persistent snapshot example - cart state is passed via URL
 $router->get('/cart', function (): Element {
-    global $FcCounter;
+    global $FcCart;
     RenderContext::beginRender();
-    return H::div(children: [
-        H::h2(children: 'Cart (Persistent Snapshot)'),
-        H::p(children: 'State is preserved in URL when navigating'),
-        $FcCounter(['initial' => 0]),
-    ]);
+    return $FcCart([]);
 })->persistentSnapshot();
 
 // fc() with StorageType::Snapshot - stateless server example
@@ -294,6 +290,10 @@ $titles = [
     '/cart' => 'Cart',
 ];
 $title = $titles[$request->path] ?? 'usePHP';
+
+// Restore snapshot state carried by the request (e.g. /cart?_snapshot=...)
+// before rendering, mirroring what UsePHP::run() does.
+$app->restoreSnapshot($request, $match);
 
 // Render the component
 $handler = $match->handler;
