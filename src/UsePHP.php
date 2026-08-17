@@ -93,6 +93,9 @@ final class UsePHP
     /** @var array<string, string> FQCN => path to .psx.php file */
     private array $psxManifest = [];
 
+    /** @var array<string, list<array<string, mixed>>> FQCN => compile-time callable parameter metadata */
+    private array $psxParameterMetadata = [];
+
     /** @var array<string, callable> FQCN => loaded callable */
     private array $psxLoaded = [];
 
@@ -198,7 +201,9 @@ final class UsePHP
 
     /**
      * Load a PSX component manifest. The manifest is a PHP file that returns
-     * an array mapping FQCN to compiled .psx.php file paths.
+     * either the legacy `FQCN => compiled file path` map or the richer
+     * `FQCN => ['file' => path, 'parameters' => [...]]` map emitted by newer
+     * compilers.
      *
      * If a sibling `deferred-manifest.php` exists in the same directory, its
      * `name => ['component' => FQCN, 'cacheControl' => ...]` entries are
@@ -214,8 +219,33 @@ final class UsePHP
         if (!\is_array($manifest)) {
             throw new \RuntimeException("PSX manifest must return an array: $path");
         }
-        foreach ($manifest as $fqcn => $filePath) {
-            $this->psxManifest[(string) $fqcn] = (string) $filePath;
+        foreach ($manifest as $fqcn => $entry) {
+            if (\is_string($entry)) {
+                $this->psxManifest[(string) $fqcn] = $entry;
+                $this->psxParameterMetadata[(string) $fqcn] = [];
+
+                continue;
+            }
+
+            if (!\is_array($entry) || !isset($entry['file']) || !\is_string($entry['file'])) {
+                throw new \RuntimeException("PSX manifest entry for '$fqcn' is malformed in $path");
+            }
+
+            $parameters = $entry['parameters'] ?? [];
+            if (!\is_array($parameters)) {
+                throw new \RuntimeException("PSX manifest parameters for '$fqcn' must be an array in $path");
+            }
+
+            $metadata = [];
+            foreach ($parameters as $parameter) {
+                if (!\is_array($parameter) || !isset($parameter['kind']) || !\is_string($parameter['kind'])) {
+                    throw new \RuntimeException("PSX manifest parameter metadata for '$fqcn' is malformed in $path");
+                }
+                $metadata[] = $parameter;
+            }
+
+            $this->psxManifest[(string) $fqcn] = $entry['file'];
+            $this->psxParameterMetadata[(string) $fqcn] = $metadata;
         }
 
         $deferredPath = \dirname($path) . \DIRECTORY_SEPARATOR
@@ -242,6 +272,14 @@ final class UsePHP
         }
 
         return $this;
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public function getPsxComponentParameterMetadata(string $fqcn): array
+    {
+        return $this->psxParameterMetadata[$fqcn] ?? [];
     }
 
     /**

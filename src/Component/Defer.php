@@ -116,7 +116,7 @@ final class Defer
         // query string of the defer endpoint.
         unset($props['fallback'], $props['key']);
 
-        if ($fallback !== null && !$fallback instanceof Element) {
+        if ($fallback !== null && !($fallback instanceof Element)) {
             throw new \InvalidArgumentException(
                 "Defer target '{$this->name}' expected `fallback` prop to be an Element, got "
                 . \get_debug_type($fallback),

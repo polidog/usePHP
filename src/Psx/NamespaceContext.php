@@ -171,6 +171,37 @@ final class NamespaceContext
     }
 
     /**
+     * Resolve a PHP type name without recording it as a PSX component tag
+     * reference.
+     */
+    public function resolveClassName(string|Node\Name $name): string
+    {
+        $isFullyQualified = $name instanceof Node\Name
+            ? $name->isFullyQualified()
+            : \str_starts_with($name, '\\');
+
+        $nameString = $name instanceof Node\Name ? $name->toString() : $name;
+        $nameString = \ltrim($nameString, '\\');
+        if ($isFullyQualified) {
+            return $nameString;
+        }
+
+        $parts = \explode('\\', $nameString);
+        $firstPart = $parts[0];
+        if (isset($this->useMap[$firstPart])) {
+            $parts[0] = $this->useMap[$firstPart];
+
+            return \implode('\\', $parts);
+        }
+
+        if ($this->namespace !== '') {
+            return $this->namespace . '\\' . $nameString;
+        }
+
+        return $nameString;
+    }
+
+    /**
      * @return list<string>
      */
     public function getResolvedReferences(): array

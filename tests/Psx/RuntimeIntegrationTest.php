@@ -172,6 +172,45 @@ class RuntimeIntegrationTest extends TestCase
         }
     }
 
+    public function testLoadComponentManifestAcceptsParameterMetadataEntries(): void
+    {
+        $compiledPath = $this->workDir . '/Hello.psx.php';
+        \file_put_contents(
+            $compiledPath,
+            "<?php\n"
+            . "use Polidog\\UsePhp\\Html\\H;\n"
+            . "return static fn(array \$props) => H::p(children: \$props['text']);\n",
+        );
+        $manifest = $this->workDir . '/manifest.php';
+        \file_put_contents(
+            $manifest,
+            "<?php\nreturn " . \var_export([
+                'App\\Hello' => [
+                    'file' => $compiledPath,
+                    'parameters' => [
+                        ['kind' => 'props', 'name' => 'props'],
+                        ['kind' => 'service', 'name' => 'session', 'service' => 'App\\Session'],
+                    ],
+                ],
+            ], true) . ";\n",
+        );
+
+        $app = new UsePHP();
+        $app->loadComponentManifest($manifest);
+
+        self::assertSame(
+            [
+                ['kind' => 'props', 'name' => 'props'],
+                ['kind' => 'service', 'name' => 'session', 'service' => 'App\\Session'],
+            ],
+            $app->getPsxComponentParameterMetadata('App\\Hello'),
+        );
+
+        RenderContext::beginRender();
+        $element = $app->renderPsxComponent('App\\Hello', ['text' => 'metadata manifest']);
+        self::assertSame('p', $element->type);
+    }
+
     public function testRegisterComponentBridgesRuntimeCallable(): void
     {
         $app = new UsePHP();

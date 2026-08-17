@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Tests\Psx;
 
+use PhpParser\Node\Name;
 use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Psx\NamespaceContext;
 
@@ -64,6 +65,21 @@ class NamespaceContextTest extends TestCase
         $ctx = $this->parse("<?php\nuse function Polidog\\UsePhp\\Runtime\\fc;\nuse const Polidog\\UsePhp\\FOO;\n");
         // `fc` should not be resolvable as a class via the use map.
         self::assertSame('fc', $ctx->resolve('fc'));
+    }
+
+    public function testResolveClassNameHandlesQualifiedAliasAndNamespace(): void
+    {
+        $ctx = $this->parse("<?php\nnamespace App\\Pages;\nuse Psr\\Log as Log;\n");
+
+        self::assertSame('Psr\\Log\\LoggerInterface', $ctx->resolveClassName('Log\\LoggerInterface'));
+        self::assertSame('App\\Pages\\Domain\\Service', $ctx->resolveClassName('Domain\\Service'));
+    }
+
+    public function testResolveClassNamePreservesFullyQualifiedNameNode(): void
+    {
+        $ctx = $this->parse("<?php\nnamespace App\\Pages;\nuse App\\Local\\DateTimeInterface;\n");
+
+        self::assertSame('DateTimeInterface', $ctx->resolveClassName(new Name\FullyQualified('DateTimeInterface')));
     }
 
     private function parse(string $source): NamespaceContext
