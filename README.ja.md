@@ -327,6 +327,10 @@ $TempForm = fc(fn() => ..., 'key', StorageType::Memory);
 
 // スナップショットストレージ - HTMLに状態を埋め込み（ステートレスサーバー）
 $SnapshotCounter = fc(fn() => ..., 'key', StorageType::Snapshot);
+
+// スナップショットストレージ + リロードしても状態を保持（後述）
+use Polidog\UsePhp\Storage\SnapshotPersist;
+$SnapshotCounter = fc(fn() => ..., 'key', StorageType::Snapshot, persist: SnapshotPersist::SessionStorage);
 ```
 
 | ストレージタイプ | 説明 | ユースケース |
@@ -334,6 +338,8 @@ $SnapshotCounter = fc(fn() => ..., 'key', StorageType::Snapshot);
 | `Session` | PHPセッションに状態を保存 | デフォルト。フォーム、ショッピングカート |
 | `Memory` | リクエストごとにリセット | 一時的なUI状態、モーダル |
 | `Snapshot` | HTMLに状態を埋め込み | ステートレスサーバー、共有可能なURL |
+
+**スナップショットストレージとページリロード。** React の `useState` と同じく、Snapshot の状態はページの中に住んでいます。唯一のコピーは署名付きの `data-usephp-snapshot` 属性で、アクションのたびに往復するだけなので、通常の（Isolated な）ルートではリロードすると初期値に戻ります。サーバーをステートレスに保ったままリロードを越えて保持したい場合は `persist:` でクライアント側永続化にオプトインしてください。`usephp.js` が更新のたびに最新のスナップショットを `sessionStorage`（タブ単位）または `localStorage`（共有）にミラーし、次回ロード時に `restore` アクションとして POST し直してコンポーネントを保存済みの状態で再描画します。他のアクションと同様に HMAC 検証も通ります。Isolated ルートで使ってください。`persistentSnapshot()` / `sessionSnapshot()` のルートはすでに URL や PHP セッションでスナップショットを運んでいます。保存したエントリは `window.usePHP.forgetSnapshots()` で消せます。
 
 #### クラスベースコンポーネント
 
@@ -372,6 +378,10 @@ class TemporaryForm extends BaseComponent { ... }
 
 // スナップショットストレージ - HTMLに状態を埋め込み、サーバーはステートレス
 #[Component(storage: 'snapshot')]
+class Counter extends BaseComponent { ... }
+
+// スナップショットストレージをブラウザの sessionStorage でリロード越しに保持
+#[Component(storage: 'snapshot', persist: 'sessionStorage')]
 class Counter extends BaseComponent { ... }
 ```
 
