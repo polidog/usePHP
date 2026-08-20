@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Component;
 
+use Polidog\UsePhp\Storage\SnapshotPersist;
 use Polidog\UsePhp\Storage\StorageType;
 use ReflectionClass;
 
@@ -21,6 +22,9 @@ final class ComponentRegistry
     /** @var array<string, Defer> */
     private array $defers = [];
 
+    /** @var array<string, SnapshotPersist> */
+    private array $persists = [];
+
     /**
      * Register a component class.
      *
@@ -32,6 +36,13 @@ final class ComponentRegistry
         $name = $className::getComponentName();
         $this->components[$name] = $className;
         $this->storageTypes[$name] = $this->resolveStorageType($className);
+
+        $persist = $this->resolveComponentAttribute($className)?->persist;
+        if ($persist !== null) {
+            $this->persists[$name] = $persist;
+        } else {
+            unset($this->persists[$name]);
+        }
 
         // Explicitly clear on re-register so a class without #[Defer] cannot
         // inherit a stale Defer from a previous class registered under the
@@ -78,17 +89,38 @@ final class ComponentRegistry
     }
 
     /**
+     * Client-side snapshot persistence declared via `#[Component(persist: ...)]`,
+     * or null when the component has none.
+     */
+    public function getPersist(string $name): ?SnapshotPersist
+    {
+        return $this->persists[$name] ?? null;
+    }
+
+    /**
      * Resolve storage type from component class attributes.
      *
      * @param class-string<ComponentInterface> $className
      */
     private function resolveStorageType(string $className): StorageType
     {
+        $attribute = $this->resolveComponentAttribute($className);
+
+        return $attribute === null ? StorageType::Session : $attribute->storageType;
+    }
+
+    /**
+     * Read the `#[Component]` attribute carried by a class, if any.
+     *
+     * @param class-string<ComponentInterface> $className
+     */
+    private function resolveComponentAttribute(string $className): ?Component
+    {
         $reflection = new ReflectionClass($className);
         $attributes = $reflection->getAttributes(Component::class);
 
         $first = $attributes[0] ?? null;
-        return $first?->newInstance()->storageType ?? StorageType::Session;
+        return $first?->newInstance();
     }
 
     /**

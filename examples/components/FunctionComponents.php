@@ -6,6 +6,7 @@ namespace App\Components;
 
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
+use Polidog\UsePhp\Storage\SnapshotPersist;
 use Polidog\UsePhp\Storage\StorageType;
 
 use function Polidog\UsePhp\Runtime\fc;
@@ -259,6 +260,13 @@ $FcTodoList = fc(function (array $props): Element {
  * The state is serialized and included in the HTML output,
  * allowing the server to remain stateless.
  *
+ * On its own, that means a page reload starts over from `initial`: the
+ * only copy of the state lived in the previous page. `persist:` opts the
+ * component into client-side persistence — usephp.js mirrors the latest
+ * snapshot into sessionStorage after every update and replays it on the
+ * next load, so the count survives a reload while the server still holds
+ * nothing. Compare /cart, which keeps the snapshot in the URL instead.
+ *
  * @var callable(array<string, mixed>): Element
  */
 $FcSnapshotCounter = fc(function (array $props): Element {
@@ -270,7 +278,7 @@ $FcSnapshotCounter = fc(function (array $props): Element {
             H::h1(children: 'Snapshot Counter'),
             H::p(
                 style: 'text-align:center;color:#666;font-size:14px;',
-                children: 'State is embedded in HTML (stateless server)'
+                children: 'State is embedded in HTML (stateless server), kept across reloads in sessionStorage'
             ),
             H::div(
                 className: 'counter-display',
@@ -298,7 +306,7 @@ $FcSnapshotCounter = fc(function (array $props): Element {
             ),
         ]
     );
-}, 'snapshot-counter', StorageType::Snapshot);
+}, 'snapshot-counter', StorageType::Snapshot, persist: SnapshotPersist::SessionStorage);
 
 /**
  * Shopping cart with Snapshot storage.

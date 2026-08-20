@@ -440,6 +440,8 @@
     usePHP.clearDeferCache = clearDeferCache;
     usePHP.reloadDefer = reloadDefer;
     usePHP.DEFER_CACHE_VERSION = DEFER_CACHE_VERSION;
+    // usePHP.restoreSnapshots / usePHP.forgetSnapshots are attached further
+    // down, next to the client-side snapshot persistence they operate on.
 
     // =====================================================================
     // Declarative reload triggers
@@ -534,17 +536,7 @@
             }
 
             if (response.ok) {
-                const html = await response.text();
-                // Server-rendered HTML is trusted content from our endpoint
-                component.innerHTML = html;
-
-                // Update snapshot on component from hidden field in response
-                const snapshotField = component.querySelector('[data-usephp-snapshot-update]');
-                if (snapshotField) {
-                    component.dataset.usephpSnapshot = snapshotField.value;
-                    // Remove the hidden field as it's not needed in DOM
-                    snapshotField.remove();
-                }
+                applyPartial(component, await response.text());
 
                 // Declarative post-submit reload, dispatched *before* the
                 // generic processDeferred() scan. The canonical "form
@@ -769,13 +761,166 @@
             .forEach((el) => fetchDeferred(el));
     }
 
+    // =====================================================================
+    // Partial responses
+    // =====================================================================
+
+    // Swap a component's contents for the partial HTML the server returned
+    // and pick up the refreshed snapshot it carries. Shared by the form
+    // submit path and the snapshot restore path below.
+    function applyPartial(component, html) {
+        // Server-rendered HTML is trusted content from our endpoint
+        component.innerHTML = html;
+
+        // Update snapshot on component from hidden field in response
+        const snapshotField = component.querySelector('[data-usephp-snapshot-update]');
+        if (snapshotField) {
+            component.dataset.usephpSnapshot = snapshotField.value;
+            // Remove the hidden field as it's not needed in DOM
+            snapshotField.remove();
+        }
+
+        saveSnapshot(component);
+    }
+
+    // =====================================================================
+    // Client-side snapshot persistence
+    // =====================================================================
+    //
+    // Snapshot storage keeps a component's state in the page itself, so a
+    // reload normally starts over. A wrapper that carries
+    // `data-usephp-persist="sessionStorage"` (or "localStorage") — emitted
+    // when the component opts in via `fc(..., persist: ...)` or
+    // `#[Component(persist: ...)]` — gets its latest snapshot mirrored into
+    // that Web Storage after every partial update. On the next page load
+    // the saved snapshot is POSTed back as a `restore` action (no state
+    // change; the snapshot *is* the state) and the component is swapped
+    // for the server's re-render. The server stays stateless and still
+    // HMAC-verifies the snapshot, exactly as it does for any action.
+    //
+    // Entries are keyed by pathname + instance id, so the same component
+    // on two pages keeps two independent states. A saved snapshot the
+    // server rejects (e.g. the signing secret rotated) or answers with a
+    // redirect is dropped so it is not retried on every load.
+
+    const SNAPSHOT_PREFIX = 'usephp:snapshot:';
+
+    function snapshotStore(component) {
+        const kind = component.dataset.usephpPersist;
+        if (kind !== 'sessionStorage' && kind !== 'localStorage') return null;
+        try {
+            const store = window[kind];
+            const probe = SNAPSHOT_PREFIX + '__probe__';
+            store.setItem(probe, '1');
+            store.removeItem(probe);
+            return store;
+        } catch {
+            return null;
+        }
+    }
+
+    function snapshotKey(component) {
+        return SNAPSHOT_PREFIX + location.pathname + '#' + component.dataset.usephp;
+    }
+
+    function saveSnapshot(component) {
+        const store = snapshotStore(component);
+        if (!store) return;
+        try {
+            const snapshot = component.dataset.usephpSnapshot;
+            if (snapshot) {
+                store.setItem(snapshotKey(component), snapshot);
+            } else {
+                store.removeItem(snapshotKey(component));
+            }
+        } catch {
+            // Quota exceeded or storage revoked mid-session: the page keeps
+            // working from the DOM snapshot, it just won't survive a reload.
+        }
+    }
+
+    function forgetSnapshot(component) {
+        const store = snapshotStore(component);
+        if (!store) return;
+        try {
+            store.removeItem(snapshotKey(component));
+        } catch {}
+    }
+
+    async function restoreSnapshot(component) {
+        const store = snapshotStore(component);
+        if (!store) return;
+        const key = snapshotKey(component);
+        let saved;
+        try {
+            saved = store.getItem(key);
+        } catch {
+            return;
+        }
+        if (!saved || saved === component.dataset.usephpSnapshot) return;
+
+        const instanceId = component.dataset.usephp;
+        const formData = new FormData();
+        formData.set('_usephp_component', instanceId);
+        formData.set('_usephp_action', JSON.stringify({
+            type: 'restore',
+            payload: {},
+            componentId: instanceId,
+            storageType: 'snapshot',
+        }));
+        formData.set('_usephp_snapshot', saved);
+        // The session-bound CSRF token (when a session is active) is embedded
+        // in every usephp form; borrow it from one of ours.
+        const csrf = component.querySelector('input[name="_usephp_csrf"]');
+        if (csrf) formData.set('_usephp_csrf', csrf.value);
+
+        component.setAttribute('aria-busy', 'true');
+        try {
+            const response = await fetch(location.href, {
+                method: 'POST',
+                headers: { 'X-UsePHP-Partial': '1' },
+                body: formData,
+            });
+            if (response.redirected || !response.ok) {
+                forgetSnapshot(component);
+                return;
+            }
+            applyPartial(component, await response.text());
+            processDeferred(component);
+        } catch {
+            // Network failure: keep the saved snapshot for the next load.
+        } finally {
+            component.removeAttribute('aria-busy');
+        }
+    }
+
+    function restoreSnapshots(root) {
+        (root || document)
+            .querySelectorAll('[data-usephp][data-usephp-persist]')
+            .forEach((el) => restoreSnapshot(el));
+    }
+
+    function forgetSnapshots(root) {
+        (root || document)
+            .querySelectorAll('[data-usephp][data-usephp-persist]')
+            .forEach((el) => forgetSnapshot(el));
+    }
+
+    usePHP.restoreSnapshots = restoreSnapshots;
+    usePHP.forgetSnapshots = forgetSnapshots;
+
     // Reconcile the persisted-cache version before the first read so a
     // stale release is dropped rather than served.
     reconcileVersion();
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => processDeferred());
-    } else {
+    function boot() {
         processDeferred();
+        restoreSnapshots();
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', boot);
+    } else {
+        boot();
     }
 })();

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Polidog\UsePhp\Runtime;
 
 use Polidog\UsePhp\Component\Defer;
+use Polidog\UsePhp\Storage\SnapshotPersist;
 use Polidog\UsePhp\Storage\StorageType;
 
 /**
@@ -93,18 +94,22 @@ function useEffect(callable $callback, ?array $deps = null): void
  * @param string|null $key State management key
  * @param StorageType $storageType Storage type for component state
  * @param Defer|null $defer Optional deferred-endpoint configuration
+ * @param SnapshotPersist|null $persist Snapshot storage only: mirror the
+ *        snapshot into Web Storage so the state survives a page reload
+ *        while the server stays stateless. See {@see SnapshotPersist}.
  */
 function fc(
     callable $component,
     ?string $key = null,
     StorageType $storageType = StorageType::Session,
     ?Defer $defer = null,
+    ?SnapshotPersist $persist = null,
 ): FunctionComponent {
     $closure = $component instanceof \Closure
         ? $component
         : \Closure::fromCallable($component);
 
-    return new FunctionComponent($closure, $key, $storageType, $defer);
+    return new FunctionComponent($closure, $key, $storageType, $defer, $persist);
 }
 
 /**

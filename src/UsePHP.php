@@ -1279,7 +1279,9 @@ final class UsePHP
             return 'Invalid snapshot';
         }
 
-        // Execute the action
+        // Execute the action. 'restore' (sent by usephp.js when it replays a
+        // snapshot it persisted client-side) carries no mutation: the posted
+        // snapshot *is* the state, so it only needs the re-render below.
         if ($action->type === 'setState') {
             $index = $action->payload['index'] ?? 0;
             $value = $action->payload['value'] ?? null;
@@ -1287,8 +1289,21 @@ final class UsePHP
         }
 
         // Partial update (AJAX) - return only component HTML
-        if ($isPartial && $isRegisteredComponent) {
-            return $this->doRenderComponentPartialWithInstanceId($instanceId, $componentName);
+        if ($isPartial) {
+            if ($isRegisteredComponent) {
+                return $this->doRenderComponentPartialWithInstanceId($instanceId, $componentName);
+            }
+
+            // fc() components are not in the registry, so re-render them by
+            // replaying the page route. Without this, a Snapshot-storage
+            // function component on a plain (Isolated) route would fall
+            // through to the redirect below and lose the state it just set.
+            if ($storageType === StorageType::Snapshot) {
+                $partial = $this->renderFunctionComponentPartial($instanceId);
+                if ($partial !== null) {
+                    return $partial;
+                }
+            }
         }
 
         // Full page - PRG pattern with snapshot behavior handling
@@ -1300,14 +1315,8 @@ final class UsePHP
         // are dispatched before routing, so currentMatch is unset here —
         // resolve the page's route now, otherwise Persistent/Session routes
         // would fall through to Isolated and drop their state on redirect.
-        if ($this->currentMatch === null && $this->router !== null && $storageType === StorageType::Snapshot) {
-            $current = RequestContext::fromGlobals();
-            $this->currentMatch = $this->router->match(new RequestContext(
-                method: 'GET',
-                path: $current->path,
-                queryString: $current->queryString,
-                query: $current->query,
-            ));
+        if ($storageType === StorageType::Snapshot) {
+            $this->resolveActionPageMatch();
         }
 
         // Handle snapshot preservation based on route behavior
@@ -1350,6 +1359,118 @@ final class UsePHP
     }
 
     /**
+     * Resolve the GET route of the page an action was POSTed to, caching it
+     * in `currentMatch`. Also returns the RequestContext that GET would have
+     * seen so callers can replay the route handler against it.
+     *
+     * @return array{0: RouteMatch|null, 1: RequestContext}
+     */
+    private function resolveActionPageMatch(): array
+    {
+        $current = RequestContext::fromGlobals();
+        $pageRequest = new RequestContext(
+            method: 'GET',
+            path: $current->path,
+            queryString: $current->queryString,
+            query: $current->query,
+            headers: $current->headers,
+        );
+
+        if ($this->currentMatch === null && $this->router !== null) {
+            $this->currentMatch = $this->router->match($pageRequest);
+        }
+
+        return [$this->currentMatch, $pageRequest];
+    }
+
+    /**
+     * Re-render a function component instance for a partial (AJAX) response.
+     *
+     * `fc()` components are closures held by user code, not registry
+     * entries, so they cannot be looked up by instance id the way class
+     * components are. Instead, replay the GET route of the page the action
+     * was POSTed to: its handler rebuilds the Element tree, and because the
+     * instance's ComponentState was already primed from the posted snapshot
+     * (with the action applied) the component re-renders with the new
+     * state. The instance's wrapper is then picked out of that tree.
+     *
+     * Only Isolated routes take this path. It is the one combination where
+     * the PRG redirect would drop the state outright — nothing carries a
+     * snapshot across the redirect — so a partial response is the only way
+     * the action can take effect. Persistent/Session/Shared routes keep
+     * redirecting: the redirect is what writes the snapshot into the URL or
+     * the session, and answering with a partial would leave those stale.
+     *
+     * Returns null when the page cannot be replayed (no router match, a
+     * non-Isolated route, a class-component handler, a non-Element result,
+     * or the instance is missing from the tree); the caller then falls
+     * back to the PRG redirect.
+     */
+    private function renderFunctionComponentPartial(string $instanceId): ?string
+    {
+        [$match, $pageRequest] = $this->resolveActionPageMatch();
+        if ($match === null || $match->snapshotBehavior !== SnapshotBehavior::Isolated) {
+            return null;
+        }
+
+        $handler = $match->handler;
+        if ((is_string($handler) && class_exists($handler)) || !is_callable($handler)) {
+            return null;
+        }
+
+        // Fresh render pass so auto-generated instance keys (e.g. "#0")
+        // line up with the ones the original GET produced.
+        RenderContext::beginRender();
+        $result = $handler($match->params, $pageRequest);
+        if (!$result instanceof Element) {
+            return null;
+        }
+
+        $wrapper = self::findComponentElement($result, $instanceId);
+        if ($wrapper === null) {
+            return null;
+        }
+
+        $renderer = new Renderer(
+            $instanceId,
+            $this->tryGetSnapshotSerializer(),
+            StorageType::Snapshot,
+            $this->deferPrefix,
+            $this->getCsrfToken(),
+        );
+
+        // renderPartial() emits the wrapper's contents plus the refreshed
+        // snapshot as a data-usephp-snapshot-update field, which usephp.js
+        // copies back onto the wrapper for the next round trip.
+        return $renderer->renderPartial(
+            static fn(): Element => new Element('Fragment', [], $wrapper->children)
+        );
+    }
+
+    /**
+     * Depth-first search for the component wrapper (`data-usephp="<id>"`)
+     * inside a rendered Element tree.
+     */
+    private static function findComponentElement(Element $element, string $instanceId): ?Element
+    {
+        if (($element->props['data-usephp'] ?? null) === $instanceId) {
+            return $element;
+        }
+
+        foreach ($element->children as $child) {
+            if (!$child instanceof Element) {
+                continue;
+            }
+            $found = self::findComponentElement($child, $instanceId);
+            if ($found !== null) {
+                return $found;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Create a component Element with wrapper.
      */
     private function doCreateElement(string $componentName, ?string $key = null): Element
@@ -1383,6 +1504,10 @@ final class UsePHP
                 $snapshot = $state->createSnapshot();
                 $snapshotJson = $this->getSnapshotSerializer()->serialize($snapshot);
                 $props['data-usephp-snapshot'] = $snapshotJson;
+                $persist = $this->registry->getPersist($componentName);
+                if ($persist !== null) {
+                    $props['data-usephp-persist'] = $persist->value;
+                }
             }
 
             return new Element('div', $props, [$innerElement]);
@@ -1443,6 +1568,7 @@ final class UsePHP
                 $storageType,
                 $this->deferPrefix,
                 $this->getCsrfToken(),
+                $this->registry->getPersist($componentName),
             );
 
             return $renderer->render(fn() => $component->render());
