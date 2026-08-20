@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Polidog\UsePhp\Runtime;
 
 use Polidog\UsePhp\Snapshot\SnapshotSerializer;
+use Polidog\UsePhp\Storage\SnapshotPersist;
 use Polidog\UsePhp\Storage\StorageType;
 use Polidog\UsePhp\UsePHP;
 
@@ -218,6 +219,7 @@ final class Renderer
     private ?StorageType $storageType;
     private string $deferPrefix;
     private string $csrfToken;
+    private ?SnapshotPersist $persist;
 
     public function __construct(
         string $componentId,
@@ -225,12 +227,14 @@ final class Renderer
         ?StorageType $storageType = null,
         string $deferPrefix = self::DEFAULT_DEFER_PREFIX,
         string $csrfToken = '',
+        ?SnapshotPersist $persist = null,
     ) {
         $this->componentId = $componentId;
         $this->snapshotSerializer = $snapshotSerializer;
         $this->storageType = $storageType;
         $this->deferPrefix = $deferPrefix;
         $this->csrfToken = $csrfToken;
+        $this->persist = $persist;
     }
 
     /**
@@ -253,6 +257,9 @@ final class Renderer
         if ($this->shouldEmbedSnapshot($state)) {
             $snapshotJson = $this->serializeSnapshot($state);
             $attrs .= sprintf(' data-usephp-snapshot=\'%s\'', htmlspecialchars($snapshotJson, ENT_QUOTES, 'UTF-8'));
+            if ($this->persist !== null) {
+                $attrs .= sprintf(' data-usephp-persist="%s"', $this->persist->value);
+            }
         }
 
         // Wrap with component container for partial updates

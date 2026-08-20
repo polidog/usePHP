@@ -327,6 +327,10 @@ $TempForm = fc(fn() => ..., 'key', StorageType::Memory);
 
 // Snapshot storage - State is embedded in HTML (stateless server)
 $SnapshotCounter = fc(fn() => ..., 'key', StorageType::Snapshot);
+
+// Snapshot storage that also survives a page reload (see below)
+use Polidog\UsePhp\Storage\SnapshotPersist;
+$SnapshotCounter = fc(fn() => ..., 'key', StorageType::Snapshot, persist: SnapshotPersist::SessionStorage);
 ```
 
 | Storage Type | Description | Use Case |
@@ -334,6 +338,19 @@ $SnapshotCounter = fc(fn() => ..., 'key', StorageType::Snapshot);
 | `Session` | State stored in PHP session | Default. Forms, shopping carts |
 | `Memory` | State reset per request | Temporary UI state, modals |
 | `Snapshot` | State embedded in HTML | Stateless server, shareable URLs |
+
+**Snapshot storage and page reloads.** Like React's `useState`, Snapshot
+state lives in the page: the only copy is the signed `data-usephp-snapshot`
+attribute that round-trips with each action, so a reload on a plain
+(Isolated) route starts over from the initial value. To keep it across
+reloads while the server stays stateless, opt in to client-side
+persistence with `persist:`. `usephp.js` then mirrors the latest snapshot
+into `sessionStorage` (per tab) or `localStorage` (shared) after every
+update, and on the next load POSTs it back as a `restore` action so the
+component re-renders with the saved state — still HMAC-verified, like any
+other action. Use this on Isolated routes; `persistentSnapshot()` /
+`sessionSnapshot()` routes already carry the snapshot in the URL or the
+PHP session. `window.usePHP.forgetSnapshots()` clears the saved entries.
 
 #### Class-based Components
 
@@ -372,6 +389,10 @@ class TemporaryForm extends BaseComponent { ... }
 
 // Snapshot storage - State is embedded in HTML, stateless on server
 #[Component(storage: 'snapshot')]
+class Counter extends BaseComponent { ... }
+
+// Snapshot storage kept across reloads in the browser's sessionStorage
+#[Component(storage: 'snapshot', persist: 'sessionStorage')]
 class Counter extends BaseComponent { ... }
 ```
 

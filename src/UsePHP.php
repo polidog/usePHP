@@ -1279,7 +1279,9 @@ final class UsePHP
             return 'Invalid snapshot';
         }
 
-        // Execute the action
+        // Execute the action. 'restore' (sent by usephp.js when it replays a
+        // snapshot it persisted client-side) carries no mutation: the posted
+        // snapshot *is* the state, so it only needs the re-render below.
         if ($action->type === 'setState') {
             $index = $action->payload['index'] ?? 0;
             $value = $action->payload['value'] ?? null;
@@ -1502,6 +1504,10 @@ final class UsePHP
                 $snapshot = $state->createSnapshot();
                 $snapshotJson = $this->getSnapshotSerializer()->serialize($snapshot);
                 $props['data-usephp-snapshot'] = $snapshotJson;
+                $persist = $this->registry->getPersist($componentName);
+                if ($persist !== null) {
+                    $props['data-usephp-persist'] = $persist->value;
+                }
             }
 
             return new Element('div', $props, [$innerElement]);
@@ -1562,6 +1568,7 @@ final class UsePHP
                 $storageType,
                 $this->deferPrefix,
                 $this->getCsrfToken(),
+                $this->registry->getPersist($componentName),
             );
 
             return $renderer->render(fn() => $component->render());

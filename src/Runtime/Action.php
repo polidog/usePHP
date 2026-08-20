@@ -74,6 +74,16 @@ final readonly class Action
     }
 
     /**
+     * Re-render a component from the snapshot sent with the request without
+     * changing any state. usephp.js sends this on page load for components
+     * that opted into client-side snapshot persistence.
+     */
+    public static function restore(?string $componentId = null, ?StorageType $storageType = null): self
+    {
+        return new self('restore', [], $componentId, $storageType);
+    }
+
+    /**
      * @param array{type: string, payload?: array<string, mixed>, componentId?: string|null, storageType?: string|null} $data
      */
     public static function fromArray(array $data): self

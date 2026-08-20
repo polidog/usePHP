@@ -16,6 +16,8 @@ use Polidog\UsePhp\Runtime\RenderContext;
 
 use function Polidog\UsePhp\Runtime\useState;
 
+use Polidog\UsePhp\Storage\SnapshotPersist;
+use Polidog\UsePhp\Storage\StorageFactory;
 use Polidog\UsePhp\Storage\StorageType;
 use Polidog\UsePhp\UsePHP;
 
@@ -46,6 +48,7 @@ final class FunctionComponentActionTest extends TestCase
         }
         $_SESSION = [];
         ComponentState::clearInstances();
+        StorageFactory::reset();
         RenderContext::beginRender();
         $this->savedPost = $_POST;
         $this->savedServer = $_SERVER;
@@ -57,13 +60,14 @@ final class FunctionComponentActionTest extends TestCase
         $_SERVER = $this->savedServer;
         $_SESSION = [];
         ComponentState::clearInstances();
+        StorageFactory::reset();
         RenderContext::clearApp();
     }
 
     /**
      * @return callable(array<string, mixed>): Element
      */
-    private static function snapshotCounter(string $key): callable
+    private static function snapshotCounter(string $key, ?SnapshotPersist $persist = null): callable
     {
         return fc(static function (array $props): Element {
             [$count, $setCount] = useState($props['initial'] ?? 0);
@@ -72,7 +76,7 @@ final class FunctionComponentActionTest extends TestCase
                 H::span(className: 'display', children: "Count: {$count}"),
                 H::button(onClick: fn() => $setCount($count + 1), children: '+'),
             ]);
-        }, $key, StorageType::Snapshot);
+        }, $key, StorageType::Snapshot, persist: $persist);
     }
 
     /**
@@ -121,15 +125,20 @@ final class FunctionComponentActionTest extends TestCase
             '_usephp_csrf' => $app->getCsrfToken(),
         ];
 
-        // A real request starts from an empty state cache; the GET that
-        // produced the form ran in a different process.
+        // A real request starts from an empty state cache and empty storage;
+        // the GET that produced the form ran in a different process.
         ComponentState::clearInstances();
+        StorageFactory::reset();
 
         return $app->handleAction();
     }
 
     private static function renderRoute(UsePHP $app, string $path): string
     {
+        // Each page render is its own request: nothing survives from the last one.
+        ComponentState::clearInstances();
+        StorageFactory::reset();
+
         $match = $app->getRouter()->match(new RequestContext(method: 'GET', path: $path));
         self::assertNotNull($match);
 
@@ -209,5 +218,112 @@ final class FunctionComponentActionTest extends TestCase
         self::assertStringContainsString('Count: 21', $html);
         self::assertStringNotContainsString('Count: 10', $html);
         self::assertStringNotContainsString('<h2>', $html);
+    }
+
+    public function testPersistOptInIsEmittedOnTheWrapper(): void
+    {
+        $counter = self::snapshotCounter('persisted', SnapshotPersist::SessionStorage);
+
+        $app = new UsePHP();
+        $app->setSnapshotSecret(self::SECRET);
+        $app->getRouter()->get('/p', static fn(): Element => $counter([]));
+
+        $page = self::renderRoute($app, '/p');
+
+        self::assertMatchesRegularExpression(
+            '/<div data-usephp="[^"]*#persisted" data-usephp-snapshot="[^"]+" data-usephp-persist="sessionStorage">/',
+            $page,
+        );
+    }
+
+    public function testWrapperHasNoPersistAttributeByDefault(): void
+    {
+        $counter = self::snapshotCounter('plain');
+
+        $app = new UsePHP();
+        $app->setSnapshotSecret(self::SECRET);
+        $app->getRouter()->get('/p', static fn(): Element => $counter([]));
+
+        self::assertStringNotContainsString('data-usephp-persist', self::renderRoute($app, '/p'));
+    }
+
+    public function testPersistRequiresSnapshotStorage(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('StorageType::Snapshot');
+
+        fc(static fn(array $props): Element => H::div(), 'k', StorageType::Session, persist: SnapshotPersist::LocalStorage);
+    }
+
+    public function testRestoreActionReRendersFromPersistedSnapshotWithoutMutating(): void
+    {
+        // usephp.js saves the snapshot after each partial update and, on the
+        // next page load, POSTs it back as a `restore` action. The server
+        // must answer with the component rendered from that snapshot and
+        // must not touch the state (the snapshot it returns is unchanged).
+        $counter = self::snapshotCounter('snapshot-counter', SnapshotPersist::SessionStorage);
+
+        $app = new UsePHP();
+        $app->setSnapshotSecret(self::SECRET);
+        $app->getRouter()->get('/snapshot', static function () use ($counter): Element {
+            RenderContext::beginRender();
+            return $counter(['initial' => 0]);
+        });
+
+        $page = self::renderRoute($app, '/snapshot');
+        \preg_match('/data-usephp="([^"]+)"/', $page, $m);
+        $instanceId = \html_entity_decode($m[1], \ENT_QUOTES, 'UTF-8');
+
+        // Click "+" once and keep the refreshed snapshot, as the client would.
+        $afterClick = self::submitPartial($app, '/snapshot', self::extractFormFields($page, $instanceId));
+        self::assertNotNull($afterClick);
+        \preg_match('/name="_usephp_snapshot" value="([^"]*)" data-usephp-snapshot-update/', $afterClick, $m);
+        $savedSnapshot = \html_entity_decode($m[1], \ENT_QUOTES, 'UTF-8');
+
+        // "Reload": a fresh page renders the initial state again...
+        self::assertStringContainsString('Count: 0', self::renderRoute($app, '/snapshot'));
+
+        // ...and the client replays the saved snapshot.
+        $restored = self::submitPartial($app, '/snapshot', [
+            'component' => $instanceId,
+            'action' => \json_encode(['type' => 'restore', 'payload' => [], 'componentId' => $instanceId, 'storageType' => 'snapshot'], \JSON_THROW_ON_ERROR),
+            'snapshot' => $savedSnapshot,
+        ]);
+
+        self::assertNotNull($restored);
+        self::assertStringContainsString('Count: 1', $restored);
+        self::assertStringNotContainsString('Count: 0', $restored);
+        \preg_match('/name="_usephp_snapshot" value="([^"]*)" data-usephp-snapshot-update/', $restored, $m);
+        self::assertSame($savedSnapshot, \html_entity_decode($m[1], \ENT_QUOTES, 'UTF-8'), 'restore must not change the state');
+    }
+
+    public function testRestoreWithTamperedSnapshotIsRejected(): void
+    {
+        $counter = self::snapshotCounter('snapshot-counter', SnapshotPersist::SessionStorage);
+
+        $app = new UsePHP();
+        $app->setSnapshotSecret(self::SECRET);
+        $app->getRouter()->get('/snapshot', static function () use ($counter): Element {
+            RenderContext::beginRender();
+            return $counter(['initial' => 0]);
+        });
+
+        $page = self::renderRoute($app, '/snapshot');
+        \preg_match('/data-usephp="([^"]+)"/', $page, $m);
+        $instanceId = \html_entity_decode($m[1], \ENT_QUOTES, 'UTF-8');
+        $fields = self::extractFormFields($page, $instanceId);
+
+        $forged = \str_replace('"state":[0]', '"state":[999]', $fields['snapshot']);
+        self::assertNotSame($fields['snapshot'], $forged);
+
+        $html = self::submitPartial($app, '/snapshot', [
+            'component' => $instanceId,
+            'action' => \json_encode(['type' => 'restore', 'payload' => [], 'componentId' => $instanceId, 'storageType' => 'snapshot'], \JSON_THROW_ON_ERROR),
+            'snapshot' => $forged,
+        ]);
+
+        self::assertSame('Invalid snapshot', $html);
+        self::assertSame(400, \http_response_code());
+        \http_response_code(200);
     }
 }

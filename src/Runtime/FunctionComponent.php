@@ -8,6 +8,7 @@ use Polidog\UsePhp\Component\Defer;
 
 use function Polidog\UsePhp\Html\getFunctionComponentName;
 
+use Polidog\UsePhp\Storage\SnapshotPersist;
 use Polidog\UsePhp\Storage\StorageType;
 
 /**
@@ -35,7 +36,16 @@ final class FunctionComponent
         public readonly ?string $key = null,
         public readonly StorageType $storageType = StorageType::Session,
         public readonly ?Defer $defer = null,
-    ) {}
+        public readonly ?SnapshotPersist $persist = null,
+    ) {
+        if ($persist !== null && $storageType !== StorageType::Snapshot) {
+            throw new \InvalidArgumentException(
+                'fc(): $persist only applies to StorageType::Snapshot — client-side '
+                . 'persistence mirrors the snapshot the page already carries, and '
+                . $storageType->name . ' storage keeps state on the server instead.'
+            );
+        }
+    }
 
     /**
      * @param array<string, mixed> $props
@@ -84,6 +94,9 @@ final class FunctionComponent
             }
             $snapshotJson = $app->getSnapshotSerializer()->serialize($snapshot);
             $wrapperProps['data-usephp-snapshot'] = $snapshotJson;
+            if ($this->persist !== null) {
+                $wrapperProps['data-usephp-persist'] = $this->persist->value;
+            }
         }
 
         return new Element('div', $wrapperProps, [$result]);
