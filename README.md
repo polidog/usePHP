@@ -732,6 +732,13 @@ allowing the client cache, or vice versa. Because there's no expiry by
 default, invalidate via `DEFER_CACHE_VERSION` (deploy) or
 `clearDeferCache()` (runtime).
 
+Fragments that contain a usePHP form (the hidden `_usephp_csrf` /
+`_usephp_snapshot` fields, or a `data-usephp-snapshot` wrapper) are
+**never written to `localStorage`**, even with `localCache: true` — they
+stay in the per-page L1 tier and `usephp.js` logs a warning. Persisting
+them would expose the session CSRF token to the next user of a shared
+device and resurrect a stale token after the session rotates.
+
 #### Optional time bound — `Defer::$localCacheTtl`
 
 If a fragment should simply go stale after N seconds, set
@@ -937,6 +944,51 @@ Call `session_regenerate_id(true)` after authentication to defeat session fixati
 ### Same-origin redirects
 
 `UsePHP::redirect($url)` and `SimpleRouter::createRedirectUrl()` reject absolute URLs (`https://...`), protocol-relative URLs (`//host/path`), and scheme-prefixed paths (`javascript:...`). Pass only same-origin paths starting with `/`. If you need to redirect off-site, write the `Location` header yourself after running the target through your own allow-list.
+
+### Deferred fetch guard (client)
+
+`usephp.js` (and the inline fallback emitted by `renderClientScript()`) only
+hydrates a `data-usephp-defer-url` placeholder when the URL resolves to the
+**page's own origin** and lives **under the defer prefix**, and only accepts
+a response whose `Content-Type` is `text/html`. Anything else is skipped
+with a console warning. This keeps a placeholder that slipped through an
+HTML sanitiser (Markdown, a sanitiser that keeps `data-*` attributes) from
+pulling an arbitrary URL — or a same-origin API that echoes user input —
+into the DOM via `innerHTML`.
+
+The default prefix `/_defer` is baked into the client. If you call
+`setDeferPrefix()`, pass the same value to `renderClientScript()` so the
+client accepts your placeholders:
+
+```php
+$app->setDeferPrefix('/api/_d');
+echo UsePHP::renderClientScript('/usephp.js', '/api/_d');
+// emits: window.usePHP.deferPrefix = "/api/_d"
+```
+
+If you load `usephp.js` with your own `<script>` tag, set
+`window.usePHP = { deferPrefix: '/api/_d' }` before it runs.
+
+### Failed partial submits are not replayed
+
+When a partial (`X-UsePHP-Partial`) POST returns a non-2xx status or the
+request throws, `usephp.js` does **not** fall back to a full-page
+`form.submit()`: the server may already have processed the action (e.g.
+the state change committed and only rendering failed, or the response
+timed out), so a replay would run a non-idempotent action twice. Instead
+the form dispatches a cancelable, bubbling `usephp:submit-error`
+`CustomEvent` (`detail.response` for HTTP failures, `detail.error` for
+exceptions). If no listener calls `preventDefault()`, a console warning is
+logged and the component wrapper gets a `data-usephp-error` attribute you
+can style; the attribute is cleared on the next submit.
+
+```js
+document.addEventListener('usephp:submit-error', (e) => {
+    e.preventDefault();
+    if (e.detail.response?.status === 403) location.reload(); // stale CSRF token
+    else showToast('Something went wrong, please try again.');
+});
+```
 
 ### URL-attribute XSS guard
 
