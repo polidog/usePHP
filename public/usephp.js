@@ -3,8 +3,10 @@
  * Falls back to full page reload if JS is disabled.
  * Supports snapshot-based state management.
  *
- * Security note: innerHTML/outerHTML are used intentionally here as the HTML
- * content comes from our own server endpoint, not from user input.
+ * Security note: innerHTML is used intentionally here for server-rendered
+ * HTML. Deferred fetches are restricted to the same-origin defer prefix
+ * and to `text/html` responses so a placeholder can never pull in
+ * arbitrary content; partial submits post to the page's own URL.
  */
 (function() {
     // =====================================================================
@@ -89,6 +91,66 @@
     const LS_VERSION_KEY = LS_PREFIX + '__version__';
 
     const deferCache = new Map();
+
+    // --- fetch target guard ------------------------------------------------
+    //
+    // `data-usephp-defer-url` is an attribute in server-rendered markup, but
+    // the client must not *assume* it only ever points at our own defer
+    // endpoint: an app that lets sanitised user HTML through (Markdown, a
+    // sanitiser that keeps `data-*`) could otherwise plant a placeholder
+    // aimed at an arbitrary URL and have its response injected verbatim via
+    // innerHTML. Two checks close that:
+    //
+    //   1. the URL must resolve to the page's own origin AND live under the
+    //      defer prefix (`window.usePHP.deferPrefix`, emitted by
+    //      `UsePHP::renderClientScript()` when the app customised it;
+    //      otherwise the library default);
+    //   2. the response must declare `text/html` — a JSON/API endpoint that
+    //      echoes user input is never treated as a fragment.
+    const DEFAULT_DEFER_PREFIX = '/_defer';
+
+    function allowedDeferPrefix() {
+        const configured = window.usePHP && window.usePHP.deferPrefix;
+        const prefix = typeof configured === 'string' && configured !== ''
+            ? configured
+            : DEFAULT_DEFER_PREFIX;
+        return prefix.replace(/\/+$/, '');
+    }
+
+    function isAllowedDeferUrl(url) {
+        let parsed;
+        try {
+            parsed = new URL(url, location.href);
+        } catch {
+            return false;
+        }
+        if (parsed.origin !== location.origin) return false;
+        const prefix = allowedDeferPrefix();
+        return parsed.pathname.startsWith(prefix + '/');
+    }
+
+    function isHtmlResponse(response) {
+        const type = (response.headers.get('content-type') || '').toLowerCase();
+        return type.startsWith('text/html');
+    }
+
+    // --- persistence guard -------------------------------------------------
+    //
+    // A fragment that carries a usePHP form embeds the per-session CSRF
+    // token and (for snapshot storage) a signed snapshot. Writing that to
+    // localStorage would hand the token to the next user of a shared
+    // device and resurrect a stale token after the session rotates (403 on
+    // submit). Such fragments stay L1-only regardless of the opt-in.
+    const SESSION_BOUND_SELECTOR = [
+        '[data-usephp-form]',
+        'input[name="_usephp_csrf"]',
+        'input[name="_usephp_snapshot"]',
+        '[data-usephp-snapshot]',
+    ].join(',');
+
+    function fragmentHoldsSessionData(content) {
+        return content.querySelector(SESSION_BOUND_SELECTOR) !== null;
+    }
 
     // Per-placeholder fetch coordination, keyed by the element so entries
     // vanish with the node (WeakMap/WeakSet, no manual cleanup):
@@ -498,6 +560,36 @@
     // Partial form submission
     // =====================================================================
 
+    // A partial submit that came back non-OK (or threw) must NOT be
+    // replayed as a full-page `form.submit()`: the request may already
+    // have been processed server-side (render failed after the state
+    // change committed, or the response timed out), so a replay would
+    // run a non-idempotent action twice. Instead surface the failure:
+    // a cancelable `usephp:submit-error` event on the form (bubbles, so
+    // apps can handle it centrally), and when nobody cancels it, a
+    // console warning plus a `data-usephp-error` marker on the component
+    // that CSS can target. `detail.response` is set for HTTP failures,
+    // `detail.error` for network/parse exceptions.
+    function reportSubmitFailure(form, component, detail) {
+        const event = new CustomEvent('usephp:submit-error', {
+            bubbles: true,
+            cancelable: true,
+            detail,
+        });
+        const handled = !form.dispatchEvent(event);
+        if (handled) return;
+        if (detail.response) {
+            console.warn(
+                '[usePHP] partial submit returned non-OK status:',
+                detail.response.status,
+                detail.response.statusText,
+            );
+        } else {
+            console.warn('[usePHP] partial submit failed:', detail.error);
+        }
+        component.setAttribute('data-usephp-error', '');
+    }
+
     document.addEventListener('submit', async function(e) {
         const form = e.target;
         if (!form.matches('[data-usephp-form]')) return;
@@ -511,6 +603,7 @@
         }
 
         component.setAttribute('aria-busy', 'true');
+        component.removeAttribute('data-usephp-error');
 
         try {
             // Get current snapshot from component if using snapshot storage
@@ -564,10 +657,10 @@
                 // deferred placeholders that still need their initial fetch.
                 processDeferred(component);
             } else {
-                form.submit();
+                reportSubmitFailure(form, component, { response });
             }
-        } catch {
-            form.submit();
+        } catch (error) {
+            reportSubmitFailure(form, component, { error });
         } finally {
             component.removeAttribute('aria-busy');
         }
@@ -622,6 +715,17 @@
     async function fetchDeferred(placeholder, { force = false } = {}) {
         const url = placeholder.dataset.usephpDeferUrl;
         if (!url) return;
+
+        // Refuse anything that is not our own defer endpoint (see the guard
+        // above). Checked before the cache tiers too, so a poisoned key can
+        // never be served either.
+        if (!isAllowedDeferUrl(url)) {
+            console.warn(
+                '[usePHP] refusing defer fetch: URL is not under the same-origin defer prefix',
+                url,
+            );
+            return;
+        }
 
         // Defensive: a resolved reloadable wrapper is only re-fetched via
         // reloadDefer(), which clears this marker first. Any other caller
@@ -716,8 +820,18 @@
                 return;
             }
 
+            if (!isHtmlResponse(response)) {
+                console.warn(
+                    '[usePHP] refusing defer response: Content-Type is not text/html',
+                    response.headers.get('content-type'),
+                    url,
+                );
+                return;
+            }
+
             const html = await response.text();
-            // Server-rendered HTML is trusted content from our endpoint.
+            // Server-rendered HTML from our own defer endpoint (origin,
+            // prefix and Content-Type verified above).
             const template = document.createElement('template');
             template.innerHTML = html;
 
@@ -731,8 +845,17 @@
             // Persist to L2 only when the component opted in via
             // `Defer::$localCache`. The HTTP response (Cache-Control or
             // otherwise) is intentionally not consulted for this decision.
+            // Session-bound content (CSRF token, snapshot) never reaches
+            // L2 even when the component opted in.
             if (wantsLocalCache) {
-                persistFragment(url, html);
+                if (fragmentHoldsSessionData(template.content)) {
+                    console.warn(
+                        '[usePHP] not persisting defer fragment: it contains a usePHP form / session token',
+                        url,
+                    );
+                } else {
+                    persistFragment(url, html);
+                }
             }
 
             // A newer reload may have superseded this response while it was

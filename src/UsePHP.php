@@ -51,7 +51,8 @@ final class UsePHP
         window.usePHPDeferFallback=function(root){
         function process(scope){(scope||document).querySelectorAll('[data-usephp-defer-url]:not([data-usephp-defer-loaded])').forEach(fetchOne);}
         function place(el,html){var t=document.createElement('template');t.innerHTML=html;process(t.content);if(el.hasAttribute('data-usephp-defer-name')){el.replaceChildren(t.content);el.removeAttribute('aria-busy');el.setAttribute('data-usephp-defer-loaded','');process(el);return;}el.replaceWith(t.content);}
-        async function fetchOne(el){var url=el.dataset.usephpDeferUrl;if(!url||el.hasAttribute('data-usephp-defer-loaded')||el.hasAttribute('data-usephp-defer-fallback-loading'))return;el.setAttribute('data-usephp-defer-fallback-loading','');el.setAttribute('aria-busy','true');try{var r=await fetch(url,{method:'GET',headers:{'X-UsePHP-Defer':'1'},credentials:'same-origin'});if(!r.ok)return;place(el,await r.text());}catch(e){if(window.console&&console.warn)console.warn('[usePHP] defer fallback fetch failed:',e,url);}finally{el.removeAttribute('data-usephp-defer-fallback-loading');el.removeAttribute('aria-busy');}}
+        function allowed(url){var p=(window.usePHP&&typeof window.usePHP.deferPrefix==='string'&&window.usePHP.deferPrefix!==''?window.usePHP.deferPrefix:'/_defer').replace(/\/+$/,'');try{var u=new URL(url,location.href);return u.origin===location.origin&&u.pathname.indexOf(p+'/')===0;}catch(e){return false;}}
+        async function fetchOne(el){var url=el.dataset.usephpDeferUrl;if(!url||el.hasAttribute('data-usephp-defer-loaded')||el.hasAttribute('data-usephp-defer-fallback-loading'))return;if(!allowed(url)){if(window.console&&console.warn)console.warn('[usePHP] refusing defer fetch: URL is not under the same-origin defer prefix',url);return;}el.setAttribute('data-usephp-defer-fallback-loading','');el.setAttribute('aria-busy','true');try{var r=await fetch(url,{method:'GET',headers:{'X-UsePHP-Defer':'1'},credentials:'same-origin'});if(!r.ok)return;if(((r.headers.get('content-type')||'').toLowerCase()).indexOf('text/html')!==0)return;place(el,await r.text());}catch(e){if(window.console&&console.warn)console.warn('[usePHP] defer fallback fetch failed:',e,url);}finally{el.removeAttribute('data-usephp-defer-fallback-loading');el.removeAttribute('aria-busy');}}
         function start(){process(root||document);}
         if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
         };
@@ -73,12 +74,24 @@ final class UsePHP
      * execute, it fetches deferred placeholders once so defer does not make the
      * page depend on the published asset being readable.
      */
-    public static function renderClientScript(string $src = '/usephp.js'): string
+    public static function renderClientScript(string $src = '/usephp.js', ?string $deferPrefix = null): string
     {
         $script = self::DEFER_FALLBACK_SCRIPT;
         $escapedSrc = \htmlspecialchars($src, \ENT_QUOTES, 'UTF-8');
 
-        return <<<HTML
+        // The client only hydrates placeholders whose URL is same-origin
+        // *and* under the defer prefix. The library default (`/_defer`) is
+        // baked into both scripts; an app using `setDeferPrefix()` must
+        // pass the same value here so the client accepts its placeholders.
+        // Emitted as a JS string literal (json_encode) inside a <script>,
+        // with `</` escaped so the value can't close the tag.
+        $prefixScript = '';
+        if ($deferPrefix !== null) {
+            $prefixJs = \json_encode($deferPrefix, \JSON_THROW_ON_ERROR | \JSON_HEX_TAG | \JSON_UNESCAPED_SLASHES);
+            $prefixScript = "<script>window.usePHP=window.usePHP||{};window.usePHP.deferPrefix={$prefixJs};</script>\n";
+        }
+
+        return $prefixScript . <<<HTML
             <script>{$script}</script>
             <script src="{$escapedSrc}" defer onerror="window.usePHPDeferFallback&amp;&amp;window.usePHPDeferFallback()"></script>
             <script>window.usePHPDeferFallbackCheck&&window.usePHPDeferFallbackCheck()</script>

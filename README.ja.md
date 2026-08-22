@@ -906,6 +906,53 @@ session.cookie_samesite = Lax   ; もしくは Strict
 
 `UsePHP::redirect($url)` および `SimpleRouter::createRedirectUrl()` は絶対 URL（`https://...`）、プロトコル相対 URL（`//host/path`）、スキーム付きパス（`javascript:...`）を拒否します。`/` 始まりの同一オリジンパスのみ渡してください。外部ドメインへのリダイレクトが必要な場合は、独自の許可リストで検証した上で自前で `Location` ヘッダを送ってください。
 
+### 遅延フェッチのガード（クライアント側）
+
+`usephp.js`（および `renderClientScript()` が出力するインライン fallback）は、
+`data-usephp-defer-url` の URL が **ページと同一オリジン** かつ **defer プレフィックス配下**
+に解決される場合にのみフェッチし、レスポンスの `Content-Type` が `text/html`
+の場合にのみ DOM に挿入します。それ以外はコンソール警告を出してスキップします。
+HTML サニタイザ（Markdown や `data-*` 属性を通すサニタイザ）をすり抜けたプレースホルダが
+任意の URL や「ユーザー入力をそのまま返す同一オリジン API」の内容を `innerHTML`
+で流し込むことを防ぐためです。
+
+デフォルトのプレフィックス `/_defer` はクライアントに組み込まれています。
+`setDeferPrefix()` を使う場合は、同じ値を `renderClientScript()` に渡してください:
+
+```php
+$app->setDeferPrefix('/api/_d');
+echo UsePHP::renderClientScript('/usephp.js', '/api/_d');
+// 出力: window.usePHP.deferPrefix = "/api/_d"
+```
+
+`usephp.js` を自前の `<script>` タグで読み込む場合は、その前に
+`window.usePHP = { deferPrefix: '/api/_d' }` を設定してください。
+
+また、usePHP のフォーム（`_usephp_csrf` / `_usephp_snapshot` の hidden フィールドや
+`data-usephp-snapshot` ラッパー）を含むフラグメントは、`localCache: true` でも
+**`localStorage` には書き込まれません**（ページ内の L1 キャッシュのみ）。
+共有端末で次の利用者にセッションの CSRF トークンが渡る、セッション更新後に
+古いトークンが復元されて 403 になる、といった問題を防ぐためです。
+
+### 失敗した部分送信は再送しない
+
+部分更新（`X-UsePHP-Partial`）の POST が 2xx 以外を返した場合や例外が発生した場合、
+`usephp.js` はフルページの `form.submit()` に **フォールバックしません**。
+サーバー側で既にアクションが処理されている可能性（state の変更はコミットされ描画だけ失敗、
+レスポンスがタイムアウト、など）があり、再送すると非冪等なアクションが二重実行されるためです。
+代わりにフォームから cancelable・bubbling な `usephp:submit-error` `CustomEvent`
+（HTTP 失敗なら `detail.response`、例外なら `detail.error`）を発火します。
+リスナーが `preventDefault()` しなければ、コンソール警告を出し、コンポーネントのラッパーに
+スタイル用の `data-usephp-error` 属性を付与します（次回送信時にクリア）。
+
+```js
+document.addEventListener('usephp:submit-error', (e) => {
+    e.preventDefault();
+    if (e.detail.response?.status === 403) location.reload(); // CSRF トークン失効
+    else showToast('エラーが発生しました。もう一度お試しください。');
+});
+```
+
 ### URL 属性の XSS 対策
 
 `href`, `src`, `action`, `formaction`, `srcdoc`, `data`, `poster`, `background`, `xlink:href` は URL コンテキストの属性です。Renderer は値のスキームが `javascript:`, `vbscript:`, `data:` のいずれかに該当する場合（ブラウザのパースに合わせて先頭の空白・制御文字を除いた後で判定）、属性を破棄します。通常の相対 URL や HTTP(S) URL はそのまま通ります。
