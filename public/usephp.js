@@ -624,7 +624,22 @@
             // If redirected, the server doesn't support partial updates for this component
             // Fall back to page navigation (PRG pattern)
             if (response.redirected) {
-                location.href = response.url;
+                // The server only ever redirects to its own origin (PRG
+                // back to the page). Refuse to navigate anywhere else so a
+                // misbehaving proxy or a server bug cannot turn the partial
+                // submit into an open redirect; reload the page instead.
+                let target;
+                try {
+                    target = new URL(response.url, location.href);
+                } catch {
+                    target = null;
+                }
+                if (target && target.origin === location.origin) {
+                    location.href = target.href;
+                } else {
+                    console.warn('[usePHP] ignoring cross-origin redirect after action:', response.url);
+                    location.reload();
+                }
                 return;
             }
 

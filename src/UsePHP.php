@@ -1168,6 +1168,51 @@ final class UsePHP
     }
 
     /**
+     * Reduce a raw request URI to a same-origin path suitable for a
+     * `Location` header.
+     *
+     * `$_SERVER['REQUEST_URI']` is the request line as the client sent it.
+     * A victim lured to `https://app//evil.example/page` still sees the
+     * normal page (routing drops the authority part), but echoing that URI
+     * back as `Location: //evil.example/page` would send them off-site after
+     * their next form submit. Browsers also treat `\` as `/` in URLs, so
+     * `/\evil.example` is the same trick.
+     *
+     * The result always starts with exactly one `/`, never contains `\`,
+     * carries no query string, and falls back to `/` for anything
+     * unparsable or containing control characters.
+     *
+     * @internal Exposed for tests; not part of the public API.
+     */
+    public static function normalizeRedirectPath(string $requestUri): string
+    {
+        // Control characters never belong in a request target; refuse to
+        // reason about such input at all.
+        if (preg_match('/[\x00-\x1F\x7F]/', $requestUri) === 1) {
+            return '/';
+        }
+
+        $parsed = parse_url($requestUri);
+        if (is_array($parsed)) {
+            $path = $parsed['path'] ?? '/';
+        } else {
+            // parse_url() gives up on some inputs (e.g. three leading
+            // slashes). Fall back to the raw target minus query/fragment;
+            // the normalisation below still forces a single-slash path.
+            $path = (string) strtok($requestUri, '?#');
+        }
+        if ($path === '') {
+            return '/';
+        }
+
+        // Backslashes are path separators to browsers; collapse them before
+        // the leading-slash check so `/\\host` cannot survive as `//host`.
+        $path = str_replace('\\', '/', $path);
+
+        return '/' . ltrim($path, '/');
+    }
+
+    /**
      * Handle a POST action and return the partial HTML.
      * Returns null if not a valid action request.
      */
@@ -1487,8 +1532,12 @@ final class UsePHP
             }
         }
 
-        // Full page - PRG pattern with snapshot behavior handling
-        $redirectUrl = strtok($_SERVER['REQUEST_URI'] ?? '/', '?') ?: '/';
+        // Full page - PRG pattern with snapshot behavior handling.
+        // The redirect target is derived from the raw request line, which the
+        // client controls — normalise it to a same-origin path first so a
+        // request for `//evil.example/page` cannot turn the 303 into an open
+        // redirect (see normalizeRedirectPath()).
+        $redirectUrl = self::normalizeRedirectPath($_SERVER['REQUEST_URI'] ?? '/');
 
         // Actions POST to the page's own URL, so the snapshot behavior that
         // applies is the one declared on the GET route that rendered the
