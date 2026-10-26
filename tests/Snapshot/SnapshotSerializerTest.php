@@ -185,4 +185,93 @@ class SnapshotSerializerTest extends TestCase
 
         $this->assertFalse($verifier->verifyString('hello', $sig));
     }
+
+    // ------------------------------------------------------------------
+    // Binding context (withContext)
+    // ------------------------------------------------------------------
+
+    public function testEmptyContextProducesTheHistoricalChecksum(): void
+    {
+        // Pinned value: HMAC-SHA256 over the pre-context payload
+        // {"name":"Counter","key":"main","state":[5],"effectDeps":[]} with
+        // key "s3cret". If this changes, every snapshot already issued to
+        // clients stops verifying.
+        $expected = '4e2a329d66783817fdcc0ef0f10aa1d19ec9f408385d8aacb73d1d2cfb3d8999';
+        $this->assertSame(
+            $expected,
+            hash_hmac('sha256', '{"name":"Counter","key":"main","state":[5],"effectDeps":[]}', 's3cret'),
+        );
+
+        $serializer = new SnapshotSerializer('s3cret');
+        $snapshot = new Snapshot('Counter', 'main', [0 => 5]);
+
+        $this->assertSame($expected, $serializer->calculateChecksum($snapshot));
+        $this->assertSame($expected, $serializer->withContext('')->calculateChecksum($snapshot));
+    }
+
+    public function testWithContextChangesChecksumAndIsRequiredToVerify(): void
+    {
+        $unbound = new SnapshotSerializer('s3cret');
+        $boundA = $unbound->withContext('session-A');
+        $boundB = $unbound->withContext('session-B');
+        $snapshot = new Snapshot('Counter', 'main', [0 => 5]);
+
+        $this->assertNotSame($unbound->calculateChecksum($snapshot), $boundA->calculateChecksum($snapshot));
+        $this->assertNotSame($boundA->calculateChecksum($snapshot), $boundB->calculateChecksum($snapshot));
+
+        $jsonA = $boundA->serialize($snapshot);
+
+        // Same context: round-trips.
+        $this->assertSame([0 => 5], $boundA->deserialize($jsonA)->state);
+
+        // Other context and no context: rejected.
+        $this->assertFalse($boundB->verifyChecksum(Snapshot::fromJson($jsonA)));
+        $this->assertFalse($unbound->verifyChecksum(Snapshot::fromJson($jsonA)));
+
+        // And an unbound snapshot does not verify under a context.
+        $jsonUnbound = $unbound->serialize($snapshot);
+        $this->assertFalse($boundA->verifyChecksum(Snapshot::fromJson($jsonUnbound)));
+
+        $this->expectException(SnapshotVerificationException::class);
+        $boundB->deserialize($jsonA);
+    }
+
+    public function testWithContextDoesNotMutateTheOriginalSerializer(): void
+    {
+        $unbound = new SnapshotSerializer('s3cret');
+        $snapshot = new Snapshot('Counter', 'main', [0 => 5]);
+        $before = $unbound->calculateChecksum($snapshot);
+
+        $unbound->withContext('session-A');
+
+        $this->assertSame($before, $unbound->calculateChecksum($snapshot));
+    }
+
+    public function testWithContextAppliesToSignString(): void
+    {
+        $unbound = new SnapshotSerializer('s3cret');
+        $boundA = $unbound->withContext('session-A');
+        $boundB = $unbound->withContext('session-B');
+
+        $this->assertSame($unbound->signString('hello'), $unbound->withContext('')->signString('hello'));
+        $this->assertNotSame($unbound->signString('hello'), $boundA->signString('hello'));
+        $this->assertNotSame($boundA->signString('hello'), $boundB->signString('hello'));
+
+        $sigA = $boundA->signString('hello');
+        $this->assertTrue($boundA->verifyString('hello', $sigA));
+        $this->assertFalse($boundB->verifyString('hello', $sigA));
+        $this->assertFalse($unbound->verifyString('hello', $sigA));
+    }
+
+    public function testWithSecretKeyKeepsTheContext(): void
+    {
+        $boundA = new SnapshotSerializer('s3cret')->withContext('session-A');
+        $rotated = $boundA->withSecretKey('n3w-secret');
+        $snapshot = new Snapshot('Counter', 'main', [0 => 5]);
+
+        $this->assertSame(
+            new SnapshotSerializer('n3w-secret')->withContext('session-A')->calculateChecksum($snapshot),
+            $rotated->calculateChecksum($snapshot),
+        );
+    }
 }

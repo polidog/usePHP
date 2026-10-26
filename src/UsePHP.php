@@ -630,6 +630,35 @@ final class UsePHP
     }
 
     /**
+     * Serializer for snapshots that live in `$_SESSION` (the Session and
+     * Shared route behaviors).
+     *
+     * The HMAC is bound to the current PHP session id, so a snapshot signed
+     * in one session fails verification in every other one — a signed
+     * snapshot lifted from an attacker's own session cannot be replayed
+     * into a victim's. Both the write side (`doHandleAction()` PRG) and the
+     * read side (`handleSnapshotRestoration()`) must use this serializer.
+     * `session_regenerate_id()` therefore invalidates stored snapshots; that
+     * is the intended trade-off after login/privilege changes.
+     *
+     * Persistent snapshots and the plain `#[Component(storage: 'snapshot')]`
+     * form round trip stay on the unbound {@see getSnapshotSerializer()}:
+     * their state travels in the URL / form and is meant to be replayable.
+     *
+     * @throws \LogicException If `setSnapshotSecret()` was not called.
+     */
+    private function sessionBoundSerializer(): SnapshotSerializer
+    {
+        $serializer = $this->getSnapshotSerializer();
+
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            return $serializer;
+        }
+
+        return $serializer->withContext(session_id() ?: '');
+    }
+
+    /**
      * Set a custom router.
      */
     public function setRouter(RouterInterface $router): self
@@ -1060,31 +1089,31 @@ final class UsePHP
                 break;
 
             case SnapshotBehavior::Session:
-                // Verify the snapshot's HMAC *before* storing it in the
-                // session. The data here was extracted from the request
-                // (query string / etc.), so it is attacker-controlled — if
-                // we wrote it verbatim, a later restoration would either
-                // trust it without a re-check or pollute the session with
-                // arbitrary attacker text. Re-serialize from the verified
-                // Snapshot object so the bytes in $_SESSION are guaranteed
-                // to have come out of our own serializer.
-                if (session_status() === PHP_SESSION_ACTIVE) {
-                    try {
-                        $snapshot = $this->getSnapshotSerializer()->deserialize($snapshotData);
-                        $_SESSION['_usephp_snapshot'] = $this->getSnapshotSerializer()->serialize($snapshot);
-                    } catch (SnapshotVerificationException $e) {
-                        $this->logSnapshotRejection('Session', $e);
-                    }
-                }
+                // Session state lives server-side only: the single writer of
+                // $_SESSION['_usephp_snapshot'] is doHandleAction() on the
+                // PRG path, and nothing in the framework ever puts a
+                // Session snapshot into a URL. A `?_snapshot=` on a Session
+                // route is therefore never legitimate — earlier versions
+                // verified it against the app-wide secret and copied it
+                // into $_SESSION, which let a signed snapshot obtained in
+                // one session (an attacker's own) be planted into another
+                // via a crafted link. Ignore it; the log line keeps probes
+                // visible to operators.
+                \error_log(
+                    '[usePHP] Snapshot ignored (behavior=Session): '
+                    . 'request-carried snapshots are not accepted on Session routes'
+                );
                 break;
 
             case SnapshotBehavior::Shared:
-                // Restore from session if in same group
+                // Restore from session if in same group. The stored snapshot
+                // is verified with the session-bound serializer, so bytes
+                // that were signed for another session id are rejected.
                 if ($match->sharedGroup !== null && session_status() === PHP_SESSION_ACTIVE) {
                     $sessionKey = '_usephp_shared_' . $match->sharedGroup;
                     if (isset($_SESSION[$sessionKey])) {
                         try {
-                            $snapshot = $this->getSnapshotSerializer()->deserialize($_SESSION[$sessionKey]);
+                            $snapshot = $this->sessionBoundSerializer()->deserialize($_SESSION[$sessionKey]);
                             ComponentState::fromSnapshot($snapshot);
                         } catch (SnapshotVerificationException $e) {
                             $this->logSnapshotRejection('Shared', $e);
@@ -1561,18 +1590,20 @@ final class UsePHP
                     break;
 
                 case SnapshotBehavior::Session:
-                    // Store snapshot in session
+                    // Store snapshot in session, signed for this session id
+                    // only (see sessionBoundSerializer()).
                     if (session_status() === PHP_SESSION_ACTIVE) {
-                        $serialized = $this->getSnapshotSerializer()->serialize($snapshot);
+                        $serialized = $this->sessionBoundSerializer()->serialize($snapshot);
                         $_SESSION['_usephp_snapshot'] = $serialized;
                     }
                     break;
 
                 case SnapshotBehavior::Shared:
-                    // Store in shared group session
+                    // Store in shared group session, signed for this session
+                    // id only (see sessionBoundSerializer()).
                     if ($this->currentMatch->sharedGroup !== null && session_status() === PHP_SESSION_ACTIVE) {
                         $sessionKey = '_usephp_shared_' . $this->currentMatch->sharedGroup;
-                        $serialized = $this->getSnapshotSerializer()->serialize($snapshot);
+                        $serialized = $this->sessionBoundSerializer()->serialize($snapshot);
                         $_SESSION[$sessionKey] = $serialized;
                     }
                     break;
