@@ -471,6 +471,55 @@ final class SecurityHardeningTest extends TestCase
         // CSRF tests don't exercise Snapshot storage, but disableRouter()
         // simplifies the action handling.
         $app->disableRouter();
+        // An action that is not answered with a partial ends in a PRG
+        // redirect followed by `exit`, which would take the PHPUnit process
+        // down with it (#49). Swallow headers and the exit instead.
+        $app->withHeaderEmitter(static function (string $header): void {});
+        $app->withExitHandler(static function (): void {});
         return $app;
+    }
+
+    public function testPrgRedirectGoesThroughTheExitSeam(): void
+    {
+        $app = $this->buildAppWithCounter();
+        $headers = [];
+        $exited = 0;
+        $app->withHeaderEmitter(static function (string $header) use (&$headers): void {
+            $headers[] = $header;
+        });
+        $app->withExitHandler(static function () use (&$exited): void {
+            $exited++;
+        });
+
+        $savedServer = $_SERVER;
+        $savedPost = $_POST;
+        try {
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            $_SERVER['REQUEST_URI'] = '/counter?x=1';
+            $_SERVER['HTTP_HOST'] = 'example.test';
+            $_SERVER['HTTP_ORIGIN'] = 'http://example.test';
+            // No X-UsePHP-Partial header: full-page submit → PRG redirect.
+            $_POST = [
+                '_usephp_component' => 'Counter#0',
+                '_usephp_action' => json_encode([
+                    'type' => 'setState',
+                    'payload' => ['index' => 0, 'value' => 1],
+                    'componentId' => 'Counter#0',
+                ], JSON_THROW_ON_ERROR),
+                '_usephp_csrf' => $app->getCsrfToken(),
+            ];
+
+            http_response_code(200);
+            $html = $app->handleAction();
+
+            self::assertSame('', $html);
+            self::assertSame(1, $exited);
+            self::assertSame(303, http_response_code());
+            self::assertContains('Location: /counter', $headers);
+        } finally {
+            $_POST = $savedPost;
+            $_SERVER = $savedServer;
+            http_response_code(200);
+        }
     }
 }

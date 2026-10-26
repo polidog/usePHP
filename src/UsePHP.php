@@ -160,6 +160,15 @@ final class UsePHP
      */
     private ?\Closure $headerEmitter = null;
 
+    /**
+     * Optional replacement for `exit` after the PRG redirect in
+     * {@see doHandleAction()}. Tests install one so a request that ends in a
+     * redirect does not terminate the PHPUnit process. Null in production.
+     *
+     * @var \Closure(): void|null
+     */
+    private ?\Closure $exitHandler = null;
+
     public function __construct()
     {
         $this->registry = new ComponentRegistry();
@@ -423,6 +432,34 @@ final class UsePHP
             return;
         }
         \header($header);
+    }
+
+    /**
+     * Test-only seam: replace the `exit` that ends the PRG redirect in
+     * {@see doHandleAction()}. When a handler is installed it is invoked
+     * instead and `doHandleAction()` returns an empty body. Pass `null` to
+     * restore the default behavior.
+     *
+     * @internal Not part of the public API; subject to change without notice.
+     *
+     * @param \Closure(): void|null $handler
+     */
+    public function withExitHandler(?\Closure $handler): self
+    {
+        $this->exitHandler = $handler;
+        return $this;
+    }
+
+    /**
+     * End the request after a redirect header has been emitted.
+     */
+    private function terminate(): void
+    {
+        if ($this->exitHandler !== null) {
+            ($this->exitHandler)();
+            return;
+        }
+        exit;
     }
 
     /**
@@ -1367,8 +1404,11 @@ final class UsePHP
             }
         }
 
-        header('Location: ' . $redirectUrl, true, 303);
-        exit;
+        http_response_code(303);
+        $this->emitHeader('Location: ' . $redirectUrl);
+        $this->terminate();
+
+        return '';
     }
 
     /**
