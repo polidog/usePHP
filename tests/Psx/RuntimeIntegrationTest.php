@@ -342,9 +342,11 @@ class RuntimeIntegrationTest extends TestCase
             $_SERVER['HTTP_X_USEPHP_PARTIAL'] = '1';
             $_SERVER['HTTP_HOST'] = 'example.test';
             $_SERVER['HTTP_ORIGIN'] = 'http://example.test';
+            $actionJson = \json_encode($action, \JSON_THROW_ON_ERROR);
             $_POST = [
                 '_usephp_component' => 'memory-with-defer#0',
-                '_usephp_action' => \json_encode($action, \JSON_THROW_ON_ERROR),
+                '_usephp_action' => $actionJson,
+                '_usephp_action_sig' => $app->signAction('memory-with-defer#0', $actionJson),
                 '_usephp_csrf' => $app->getCsrfToken(),
             ];
 

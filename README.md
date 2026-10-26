@@ -856,12 +856,14 @@ Transforms to:
 ```html
 <form method="post" data-usephp-form style="display:inline;">
   <input type="hidden" name="_usephp_component" value="counter#0" />
-  <input type="hidden" name="_usephp_action" value='{"type":"setState","payload":{"index":0,"value":1}}' />
+  <input type="hidden" name="_usephp_action" value='{"type":"setState","payload":{"index":0,"value":1},"componentId":"counter#0","storageType":null}' />
+  <input type="hidden" name="_usephp_action_sig" value="…hmac-sha256…" />
   <button type="submit">+</button>
 </form>
 ```
 
 - `data-usephp-form` - Form intercepted by JS
+- `_usephp_action_sig` - HMAC over the instance id and the action JSON; the server only executes actions it rendered (see [Signed actions](#signed-actions))
 - Works as a regular form submission without JS
 
 ## CLI
@@ -911,6 +913,31 @@ If the surrounding framework (Laravel `VerifyCsrfToken`, Symfony's CSRF componen
 $app = new UsePHP();
 $app->disableCsrfProtection();
 ```
+
+### Signed actions
+
+Every action form carries `_usephp_action_sig`, an HMAC-SHA256 over the
+component instance id and the exact `_usephp_action` JSON. `doHandleAction()`
+refuses any action whose signature is missing or does not verify, so the
+browser can only replay actions the server itself rendered: it cannot change
+the hook `index`, the `value`, the `storageType`, or point the action at a
+different component instance. When a PHP session is active its id is mixed
+into the signature, so a form rendered in one session does not verify in
+another. The client-built `restore` action (snapshot persistence) is the one
+unsigned action; it carries no payload and is validated through the snapshot's
+own HMAC, which must name the same instance.
+
+The signing key is the snapshot secret when `setSnapshotSecret()` was called,
+otherwise a random per-session key stored in `$_SESSION`. Applications that
+use neither (no secret, no session) cannot render verifiable actions: set a
+secret. If you render action forms yourself, obtain the signature with
+`UsePHP::signAction($instanceId, $actionJson)`.
+
+Signing fixes the transport, not the trust boundary: a user can still replay
+any action that was rendered for them, so hook state must not be used for
+authorization decisions (see the trust-boundary notes above). Malformed action
+payloads (wrong types, out-of-range hook index, bad instance id) are answered
+with `400` instead of surfacing as a PHP `TypeError`.
 
 #### Behind a TLS-terminating proxy
 

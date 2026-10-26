@@ -83,7 +83,7 @@ final class FunctionComponentActionTest extends TestCase
      * Pull the `_usephp_*` hidden fields of the first form out of rendered
      * HTML, exactly as the browser would submit them.
      *
-     * @return array{component: string, action: string, snapshot: string}
+     * @return array{component: string, action: string, signature: string, snapshot: string}
      */
     private static function extractFormFields(string $html, string $instanceId): array
     {
@@ -91,6 +91,7 @@ final class FunctionComponentActionTest extends TestCase
         $matched = \preg_match(
             '/name="_usephp_component" value="' . $instanceEscaped . '" \/>\s*'
             . '<input type="hidden" name="_usephp_action" value="([^"]*)" \/>\s*'
+            . '<input type="hidden" name="_usephp_action_sig" value="([^"]*)" \/>'
             . '(?:<input type="hidden" name="_usephp_csrf" value="[^"]*" \/>)?'
             . '<input type="hidden" name="_usephp_snapshot" value="([^"]*)" \/>/',
             $html,
@@ -101,7 +102,8 @@ final class FunctionComponentActionTest extends TestCase
         return [
             'component' => $instanceId,
             'action' => \html_entity_decode($m[1], \ENT_QUOTES, 'UTF-8'),
-            'snapshot' => \html_entity_decode($m[2], \ENT_QUOTES, 'UTF-8'),
+            'signature' => \html_entity_decode($m[2], \ENT_QUOTES, 'UTF-8'),
+            'snapshot' => \html_entity_decode($m[3], \ENT_QUOTES, 'UTF-8'),
         ];
     }
 
@@ -109,7 +111,7 @@ final class FunctionComponentActionTest extends TestCase
      * Simulate the browser's partial (X-UsePHP-Partial) submission of a
      * usePHP form to the page URL.
      *
-     * @param array{component: string, action: string, snapshot: string} $fields
+     * @param array{component: string, action: string, signature?: string, snapshot: string} $fields
      */
     private static function submitPartial(UsePHP $app, string $path, array $fields): ?string
     {
@@ -124,6 +126,9 @@ final class FunctionComponentActionTest extends TestCase
             '_usephp_snapshot' => $fields['snapshot'],
             '_usephp_csrf' => $app->getCsrfToken(),
         ];
+        if (isset($fields['signature'])) {
+            $_POST['_usephp_action_sig'] = $fields['signature'];
+        }
 
         // A real request starts from an empty state cache and empty storage;
         // the GET that produced the form ran in a different process.

@@ -465,6 +465,247 @@ final class SecurityHardeningTest extends TestCase
     // Helpers
     // ------------------------------------------------------------------
 
+    // ------------------------------------------------------------------
+    // #37 / #41 / #42: actions are server-signed; malformed input is a 400.
+    // ------------------------------------------------------------------
+
+    /**
+     * Fake a same-origin browser POST of an action and return the body.
+     *
+     * @param array<string, string> $overrides Extra/overriding POST fields.
+     */
+    private function postAction(UsePHP $app, string $instanceId, string $actionJson, array $overrides = []): ?string
+    {
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+        $_SERVER['REQUEST_URI'] = '/counter';
+        $_SERVER['HTTP_HOST'] = 'example.test';
+        $_SERVER['HTTP_ORIGIN'] = 'http://example.test';
+        $_SERVER['HTTP_X_USEPHP_PARTIAL'] = '1';
+        $_POST = $overrides + [
+            '_usephp_component' => $instanceId,
+            '_usephp_action' => $actionJson,
+            '_usephp_csrf' => $app->getCsrfToken(),
+        ];
+        ComponentState::clearInstances();
+        http_response_code(200);
+
+        return $app->handleAction();
+    }
+
+    private function signedCounterApp(): UsePHP
+    {
+        $app = new UsePHP();
+        $app->setSnapshotSecret('test-secret');
+        $app->disableRouter();
+        $app->register(SignedActionCounter::class);
+
+        return $app;
+    }
+
+    private static function setStateJson(int $index, mixed $value, ?string $storageType = null): string
+    {
+        $data = ['type' => 'setState', 'payload' => ['index' => $index, 'value' => $value], 'componentId' => 'SignedActionCounter#0'];
+        if ($storageType !== null) {
+            $data['storageType'] = $storageType;
+        }
+
+        return json_encode($data, JSON_THROW_ON_ERROR);
+    }
+
+    public function testRenderedActionFormCarriesSignatureThatVerifies(): void
+    {
+        $app = $this->signedCounterApp();
+        $html = $app->render('SignedActionCounter');
+
+        self::assertSame(1, preg_match('/name="_usephp_action" value="([^"]*)" \/>\s*<input type="hidden" name="_usephp_action_sig" value="([0-9a-f]{64})"/', $html, $m));
+        $actionJson = html_entity_decode($m[1], ENT_QUOTES, 'UTF-8');
+        self::assertTrue($app->verifyActionSignature('SignedActionCounter#0', $actionJson, $m[2]));
+    }
+
+    public function testSignedActionIsExecuted(): void
+    {
+        $savedServer = $_SERVER;
+        $savedPost = $_POST;
+        try {
+            $app = $this->signedCounterApp();
+            $json = self::setStateJson(0, 41);
+            $html = $this->postAction($app, 'SignedActionCounter#0', $json, [
+                '_usephp_action_sig' => (string) $app->signAction('SignedActionCounter#0', $json),
+            ]);
+
+            self::assertSame(200, http_response_code());
+            self::assertStringContainsString('count=41', (string) $html);
+        } finally {
+            $_POST = $savedPost;
+            $_SERVER = $savedServer;
+        }
+    }
+
+    public function testUnsignedActionIsRejected(): void
+    {
+        $savedServer = $_SERVER;
+        $savedPost = $_POST;
+        try {
+            $app = $this->signedCounterApp();
+            $html = $this->postAction($app, 'SignedActionCounter#0', self::setStateJson(0, true));
+
+            self::assertSame('Invalid action signature', $html);
+            self::assertSame(400, http_response_code());
+            self::assertArrayNotHasKey('usephp:SignedActionCounter#0:state:0', $_SESSION);
+        } finally {
+            $_POST = $savedPost;
+            $_SERVER = $savedServer;
+            http_response_code(200);
+        }
+    }
+
+    public function testTamperedSignedActionIsRejected(): void
+    {
+        $savedServer = $_SERVER;
+        $savedPost = $_POST;
+        try {
+            $app = $this->signedCounterApp();
+            $signature = (string) $app->signAction('SignedActionCounter#0', self::setStateJson(0, 1));
+
+            // Change the value the server signed.
+            $html = $this->postAction($app, 'SignedActionCounter#0', self::setStateJson(0, 999), ['_usephp_action_sig' => $signature]);
+            self::assertSame('Invalid action signature', $html);
+            self::assertSame(400, http_response_code());
+
+            // Change the storage type the server signed (attempt to mint a signed snapshot).
+            $html = $this->postAction($app, 'SignedActionCounter#0', self::setStateJson(0, 1, 'snapshot'), ['_usephp_action_sig' => $signature]);
+            self::assertSame('Invalid action signature', $html);
+            self::assertSame(400, http_response_code());
+
+            // Point the signed action at a different instance.
+            $html = $this->postAction($app, 'SignedActionCounter#1', self::setStateJson(0, 1), ['_usephp_action_sig' => $signature]);
+            self::assertSame(400, http_response_code());
+            self::assertNotNull($html);
+            self::assertStringStartsWith('Invalid action', $html);
+        } finally {
+            $_POST = $savedPost;
+            $_SERVER = $savedServer;
+            http_response_code(200);
+        }
+    }
+
+    /**
+     * @return iterable<string, array{0: string}>
+     */
+    public static function malformedActionProvider(): iterable
+    {
+        yield 'index as string' => ['{"type":"setState","payload":{"index":"0","value":1}}'];
+        yield 'negative index' => ['{"type":"setState","payload":{"index":-1,"value":1}}'];
+        yield 'huge index' => ['{"type":"setState","payload":{"index":99999,"value":1}}'];
+        yield 'payload scalar' => ['{"type":"setState","payload":"x"}'];
+        yield 'json scalar' => ['"scalar"'];
+        yield 'json list' => ['[1,2]'];
+        yield 'missing type' => ['{"payload":{}}'];
+        yield 'type array' => ['{"type":["x"]}'];
+        yield 'unknown storageType' => ['{"type":"setState","payload":{"index":0,"value":1},"storageType":"redis"}'];
+        yield 'componentId not string' => ['{"type":"setState","payload":{"index":0,"value":1},"componentId":5}'];
+        yield 'invalid json' => ['{not json'];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('malformedActionProvider')]
+    public function testMalformedActionIsBadRequestNotTypeError(string $actionJson): void
+    {
+        $savedServer = $_SERVER;
+        $savedPost = $_POST;
+        try {
+            $app = $this->signedCounterApp();
+            // Sign it so the shape check — not the signature check — is what rejects it.
+            $html = $this->postAction($app, 'SignedActionCounter#0', $actionJson, [
+                '_usephp_action_sig' => (string) $app->signAction('SignedActionCounter#0', $actionJson),
+            ]);
+
+            self::assertSame('Invalid action data', $html);
+            self::assertSame(400, http_response_code());
+        } finally {
+            $_POST = $savedPost;
+            $_SERVER = $savedServer;
+            http_response_code(200);
+        }
+    }
+
+    /**
+     * @return iterable<string, array{0: string}>
+     */
+    public static function invalidInstanceIdProvider(): iterable
+    {
+        yield 'no hash' => ['SignedActionCounter'];
+        yield 'control char' => ["SignedActionCounter#0\n"];
+        yield 'too long' => ['SignedActionCounter#' . str_repeat('a', 300)];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('invalidInstanceIdProvider')]
+    public function testInvalidInstanceIdIsBadRequest(string $instanceId): void
+    {
+        $savedServer = $_SERVER;
+        $savedPost = $_POST;
+        try {
+            $app = $this->signedCounterApp();
+            $json = self::setStateJson(0, 1);
+            $html = $this->postAction($app, $instanceId, $json, [
+                '_usephp_action_sig' => (string) $app->signAction($instanceId, $json),
+            ]);
+
+            self::assertSame('Invalid action request', $html);
+            self::assertSame(400, http_response_code());
+        } finally {
+            $_POST = $savedPost;
+            $_SERVER = $savedServer;
+            http_response_code(200);
+        }
+    }
+
+    public function testRestoreRequiresASnapshotForTheSameInstance(): void
+    {
+        $savedServer = $_SERVER;
+        $savedPost = $_POST;
+        try {
+            $app = $this->signedCounterApp();
+            $restore = '{"type":"restore","payload":{},"componentId":"SignedActionCounter#0","storageType":"snapshot"}';
+
+            // No snapshot at all → nothing to restore from.
+            $html = $this->postAction($app, 'SignedActionCounter#0', $restore);
+            self::assertSame('Invalid action request', $html);
+            self::assertSame(400, http_response_code());
+
+            // A valid snapshot that belongs to another instance.
+            $other = $app->getSnapshotSerializer()->serialize(new Snapshot('SignedActionCounter', '1', [0 => 7]));
+            $html = $this->postAction($app, 'SignedActionCounter#0', $restore, ['_usephp_snapshot' => $other]);
+            self::assertSame('Invalid snapshot', $html);
+            self::assertSame(400, http_response_code());
+
+            // A restore that smuggles a mutation in its payload.
+            $mutating = '{"type":"restore","payload":{"index":0,"value":1},"componentId":"SignedActionCounter#0","storageType":"snapshot"}';
+            $own = $app->getSnapshotSerializer()->serialize(new Snapshot('SignedActionCounter', '0', [0 => 7]));
+            $html = $this->postAction($app, 'SignedActionCounter#0', $mutating, ['_usephp_snapshot' => $own]);
+            self::assertSame('Invalid action request', $html);
+            self::assertSame(400, http_response_code());
+        } finally {
+            $_POST = $savedPost;
+            $_SERVER = $savedServer;
+            http_response_code(200);
+        }
+    }
+
+    public function testSignActionFallsBackToAPerSessionKeyWithoutSecret(): void
+    {
+        $app = new UsePHP();
+        $signature = $app->signAction('Counter#0', '{"type":"setState"}');
+
+        self::assertNotNull($signature);
+        self::assertArrayHasKey('_usephp_action_key', $_SESSION);
+        self::assertTrue($app->verifyActionSignature('Counter#0', '{"type":"setState"}', $signature));
+        self::assertFalse($app->verifyActionSignature('Counter#1', '{"type":"setState"}', $signature));
+
+        // A different session key must not verify the old signature.
+        $_SESSION['_usephp_action_key'] = bin2hex(random_bytes(32));
+        self::assertFalse($app->verifyActionSignature('Counter#0', '{"type":"setState"}', $signature));
+    }
+
     private function buildAppWithCounter(): UsePHP
     {
         $app = new UsePHP();
@@ -472,5 +713,22 @@ final class SecurityHardeningTest extends TestCase
         // simplifies the action handling.
         $app->disableRouter();
         return $app;
+    }
+}
+
+/**
+ * Session-storage class component used by the signed-action tests.
+ */
+#[\Polidog\UsePhp\Component\Component(name: 'SignedActionCounter')]
+final class SignedActionCounter extends \Polidog\UsePhp\Component\BaseComponent
+{
+    public function render(): Element
+    {
+        [$count, $setCount] = $this->useState(0);
+
+        return H::div(children: [
+            "count={$count}",
+            H::button(onClick: fn() => $setCount($count + 1), children: '+'),
+        ]);
     }
 }

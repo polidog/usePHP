@@ -84,11 +84,41 @@ final readonly class Action
     }
 
     /**
-     * @param array{type: string, payload?: array<string, mixed>, componentId?: string|null, storageType?: string|null} $data
+     * Rebuild an Action from decoded JSON.
+     *
+     * The input comes straight from the `_usephp_action` POST field, so every
+     * shape assumption is checked here and reported as InvalidArgumentException
+     * rather than surfacing as a TypeError from the constructor.
+     *
+     * @param array<mixed> $data
+     * @throws \InvalidArgumentException If $data is not a well-formed action.
      */
     public static function fromArray(array $data): self
     {
-        $storageType = isset($data['storageType']) ? StorageType::tryFrom($data['storageType']) : null;
-        return new self($data['type'], $data['payload'] ?? [], $data['componentId'] ?? null, $storageType);
+        $type = $data['type'] ?? null;
+        if (!is_string($type) || $type === '') {
+            throw new \InvalidArgumentException('Action "type" must be a non-empty string');
+        }
+
+        $payload = $data['payload'] ?? [];
+        if (!is_array($payload)) {
+            throw new \InvalidArgumentException('Action "payload" must be an object');
+        }
+
+        $componentId = $data['componentId'] ?? null;
+        if ($componentId !== null && !is_string($componentId)) {
+            throw new \InvalidArgumentException('Action "componentId" must be a string or null');
+        }
+
+        $storageType = null;
+        if (isset($data['storageType'])) {
+            $storageType = is_string($data['storageType']) ? StorageType::tryFrom($data['storageType']) : null;
+            if ($storageType === null) {
+                throw new \InvalidArgumentException('Action "storageType" is not a known storage type');
+            }
+        }
+
+        /** @var array<string, mixed> $payload */
+        return new self($type, $payload, $componentId, $storageType);
     }
 }

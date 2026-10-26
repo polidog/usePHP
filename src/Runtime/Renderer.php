@@ -221,6 +221,19 @@ final class Renderer
     private string $csrfToken;
     private ?SnapshotPersist $persist;
 
+    /**
+     * Signs the (componentId, action JSON) pair embedded in each action form
+     * so the server only executes actions it rendered itself. Returns null
+     * when no signing key is available, in which case no signature field is
+     * emitted and the server will refuse the action.
+     *
+     * @var \Closure(string, string): ?string|null
+     */
+    private ?\Closure $actionSigner;
+
+    /**
+     * @param \Closure(string, string): ?string|null $actionSigner
+     */
     public function __construct(
         string $componentId,
         ?SnapshotSerializer $snapshotSerializer = null,
@@ -228,6 +241,7 @@ final class Renderer
         string $deferPrefix = self::DEFAULT_DEFER_PREFIX,
         string $csrfToken = '',
         ?SnapshotPersist $persist = null,
+        ?\Closure $actionSigner = null,
     ) {
         $this->componentId = $componentId;
         $this->snapshotSerializer = $snapshotSerializer;
@@ -235,6 +249,7 @@ final class Renderer
         $this->deferPrefix = $deferPrefix;
         $this->csrfToken = $csrfToken;
         $this->persist = $persist;
+        $this->actionSigner = $actionSigner;
     }
 
     /**
@@ -352,10 +367,25 @@ final class Renderer
         $children = $this->renderChildren($element->children);
 
         // Build the form with hidden action data
-        $actionJson = htmlspecialchars($action->toJson(), ENT_QUOTES, 'UTF-8');
+        $actionJsonRaw = $action->toJson();
+        $actionJson = htmlspecialchars($actionJsonRaw, ENT_QUOTES, 'UTF-8');
         // Prefer componentId from Action, fall back to Renderer's componentId
         $componentId = $action->componentId ?? $this->componentId;
         $componentIdEscaped = htmlspecialchars($componentId, ENT_QUOTES, 'UTF-8');
+
+        // Sign the action so doHandleAction() only replays actions this
+        // server rendered: the client cannot change index/value/storageType
+        // or point the action at another component instance.
+        $signatureField = '';
+        if ($this->actionSigner !== null) {
+            $signature = ($this->actionSigner)($componentId, $actionJsonRaw);
+            if ($signature !== null) {
+                $signatureField = sprintf(
+                    '<input type="hidden" name="_usephp_action_sig" value="%s" />',
+                    htmlspecialchars($signature, ENT_QUOTES, 'UTF-8')
+                );
+            }
+        }
 
         $innerElement = in_array($tag, self::SELF_CLOSING_TAGS, true)
             ? "<{$tag}{$attributes} />"
@@ -389,7 +419,7 @@ final class Renderer
             <form method="post" data-usephp-form style="display:inline;">
             <input type="hidden" name="_usephp_component" value="{$componentIdEscaped}" />
             <input type="hidden" name="_usephp_action" value="{$actionJson}" />
-            {$csrfField}{$snapshotField}{$innerElement}
+            {$signatureField}{$csrfField}{$snapshotField}{$innerElement}
             </form>
             HTML;
     }

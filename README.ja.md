@@ -827,12 +827,14 @@ H::button(onClick: fn() => $setCount($count + 1), children: '+')
 ```html
 <form method="post" data-usephp-form style="display:inline;">
   <input type="hidden" name="_usephp_component" value="counter#0" />
-  <input type="hidden" name="_usephp_action" value='{"type":"setState","payload":{"index":0,"value":1}}' />
+  <input type="hidden" name="_usephp_action" value='{"type":"setState","payload":{"index":0,"value":1},"componentId":"counter#0","storageType":null}' />
+  <input type="hidden" name="_usephp_action_sig" value="…hmac-sha256…" />
   <button type="submit">+</button>
 </form>
 ```
 
 - `data-usephp-form` - JSがインターセプトするフォーム
+- `_usephp_action_sig` - インスタンス ID とアクション JSON に対する HMAC。サーバーは自分が描画したアクションしか実行しません（[署名付きアクション](#署名付きアクション) を参照）
 - JSなしでも通常のフォーム送信として動作
 
 ## CLI
@@ -882,6 +884,14 @@ echo bin2hex(random_bytes(32));
 $app = new UsePHP();
 $app->disableCsrfProtection();
 ```
+
+### 署名付きアクション
+
+すべてのアクションフォームには `_usephp_action_sig` が含まれます。これはコンポーネントのインスタンス ID と `_usephp_action` の JSON そのものに対する HMAC-SHA256 です。`doHandleAction()` は署名が無い、または検証に失敗するアクションを拒否するため、ブラウザはサーバーが描画したアクションしか再送できません。フックの `index`、`value`、`storageType` を書き換えることも、別のコンポーネントインスタンスに向けることもできません。PHP セッションが有効な場合はセッション ID も署名に混ぜるので、あるセッションで描画したフォームは別のセッションでは検証を通りません。クライアント側で組み立てる `restore` アクション（スナップショットの永続化）だけは署名を持ちませんが、payload を持てず、スナップショット自身の HMAC（同じインスタンスを指している必要があります）で検証されます。
+
+署名鍵は `setSnapshotSecret()` を呼んでいればそのシークレット、そうでなければ `$_SESSION` に保存するセッションごとのランダム鍵です。どちらも無い（シークレット未設定かつセッション無し）アプリケーションは検証可能なアクションを描画できないため、シークレットを設定してください。自前でアクションフォームを描画する場合は `UsePHP::signAction($instanceId, $actionJson)` で署名を取得できます。
+
+署名が直すのは「運び方」であって信頼境界ではありません。ユーザーは自分に描画されたアクションを何度でも再送できるので、フック state を認可判定に使わないでください（上記の信頼境界の節を参照）。不正な形のアクション（型違い、範囲外のフック index、不正なインスタンス ID）は PHP の `TypeError` ではなく `400` で応答します。
 
 #### TLS 終端プロキシ配下で動かす場合
 
