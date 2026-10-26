@@ -920,6 +920,8 @@ The key must be **stable across requests and across worker processes** (PHP-FPM,
 
 Never commit the secret to git. The placeholders used in `examples/` (`'your-secret-key-here'`, `'phase-1-demo-secret'`) are deliberately weak — replace them before deploying anything.
 
+**What the signature does and does not bind.** `SnapshotBehavior::Session` and `Shared` snapshots are additionally bound to the PHP session id: they are stored in `$_SESSION` and only verify inside the session that produced them, so a signed snapshot obtained in one browser cannot be planted into another user's session (a `?_snapshot=` parameter is ignored on Session routes). The trade-off is that `session_regenerate_id()` — which you should call after login anyway — invalidates the snapshots stored under the old id. `SnapshotBehavior::Persistent` snapshots and `#[Component(storage: 'snapshot')]` form round trips are intentionally *not* user-bound: their state lives in the URL / form, and anyone holding that URL can replay it. Snapshots carry no issue time and no expiry; a signature stays valid until the secret (or the session id, for bound snapshots) changes.
+
 ### CSRF protection
 
 `UsePHP::run()` and `UsePHP::handleAction()` enforce two layers on every POST:
