@@ -30,7 +30,7 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        Action|callable|null $onClick = null,
+        Action|\Closure|null $onClick = null,
         array|Element|string|null $children = null,
     ): Element {
         return createElement('div', get_defined_vars());
@@ -41,7 +41,7 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        Action|callable|null $onClick = null,
+        Action|\Closure|null $onClick = null,
         array|Element|string|null $children = null,
     ): Element {
         return createElement('span', get_defined_vars());
@@ -133,7 +133,7 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        Action|callable|null $onClick = null,
+        Action|\Closure|null $onClick = null,
         array|Element|string|null $children = null,
     ): Element {
         return createElement('a', get_defined_vars());
@@ -380,7 +380,7 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        Action|callable|null $onClick = null,
+        Action|\Closure|null $onClick = null,
         array|Element|string|null $children = null,
     ): Element {
         return createElement('li', get_defined_vars());
@@ -540,7 +540,7 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        Action|callable|null $onSubmit = null,
+        Action|\Closure|null $onSubmit = null,
         array|Element|string|null $children = null,
     ): Element {
         return createElement('form', get_defined_vars());
@@ -567,10 +567,10 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        Action|callable|null $onChange = null,
-        Action|callable|null $onInput = null,
-        Action|callable|null $onFocus = null,
-        Action|callable|null $onBlur = null,
+        Action|\Closure|null $onChange = null,
+        Action|\Closure|null $onInput = null,
+        Action|\Closure|null $onFocus = null,
+        Action|\Closure|null $onBlur = null,
     ): Element {
         return createElement('input', get_defined_vars());
     }
@@ -590,8 +590,8 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        Action|callable|null $onChange = null,
-        Action|callable|null $onInput = null,
+        Action|\Closure|null $onChange = null,
+        Action|\Closure|null $onInput = null,
         array|Element|string|null $children = null,
     ): Element {
         return createElement('textarea', get_defined_vars());
@@ -606,7 +606,7 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        Action|callable|null $onClick = null,
+        Action|\Closure|null $onClick = null,
         array|Element|string|null $children = null,
     ): Element {
         return createElement('button', get_defined_vars());
@@ -623,7 +623,7 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        Action|callable|null $onChange = null,
+        Action|\Closure|null $onChange = null,
         array|Element|string|null $children = null,
     ): Element {
         return createElement('select', get_defined_vars());
@@ -835,7 +835,7 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        Action|callable|null $onClick = null,
+        Action|\Closure|null $onClick = null,
         array|Element|string|null $children = null,
     ): Element {
         return createElement('details', get_defined_vars());
@@ -888,8 +888,8 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        Action|callable|null $onLoad = null,
-        Action|callable|null $onError = null,
+        Action|\Closure|null $onLoad = null,
+        Action|\Closure|null $onError = null,
     ): Element {
         return createElement('img', get_defined_vars());
     }
@@ -1295,14 +1295,22 @@ function createElement(string $type, array $params): Element
                 $children = resolveRenderables([$value]);
             }
         } elseif (isset($eventHandlers[$key])) {
-            // Handle event handlers
-            $action = null;
-
+            // Handle event handlers. Only Action instances and Closures are
+            // accepted: is_callable() would also accept strings such as
+            // 'phpinfo' and [$obj, 'method'] arrays, which turns any
+            // untrusted value forwarded into an event prop into arbitrary
+            // function execution (GH-40).
             if ($value instanceof Action) {
                 $action = $value;
-            } elseif (is_callable($value)) {
-                // Execute callable to get the Action
+            } elseif ($value instanceof \Closure) {
+                // Execute the Closure to get the Action
                 $action = $value();
+            } else {
+                throw new \InvalidArgumentException(sprintf(
+                    '%s must be an Action or a Closure; got %s',
+                    $key,
+                    get_debug_type($value),
+                ));
             }
 
             if ($action instanceof Action) {

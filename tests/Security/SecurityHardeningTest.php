@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Router\RequestContext;
 use Polidog\UsePhp\Router\SimpleRouter;
+use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\ComponentState;
 use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\RenderContext;
@@ -16,6 +17,16 @@ use Polidog\UsePhp\Runtime\Snapshot;
 use Polidog\UsePhp\Snapshot\SnapshotSerializer;
 use Polidog\UsePhp\Snapshot\SnapshotVerificationException;
 use Polidog\UsePhp\UsePHP;
+
+/**
+ * Side-effect probe for the GH-40 tests: if createElement() ever executes a
+ * string callable again, this flips the flag.
+ */
+function gh40SideEffectProbe(): Action
+{
+    $GLOBALS['gh40_probe_called'] = true;
+    return Action::setState(0, 'pwned');
+}
 
 /**
  * Regression tests covering the security hardening done in response to the
@@ -459,6 +470,144 @@ final class SecurityHardeningTest extends TestCase
         } finally {
             $_SERVER = $savedServer;
         }
+    }
+
+    // ------------------------------------------------------------------
+    // GH-40: createElement() used is_callable() on event props, so a string
+    // such as 'phpinfo' forwarded from untrusted props was executed as a PHP
+    // function. Only Action instances and Closures are accepted now.
+    // ------------------------------------------------------------------
+
+    public function testEventPropRejectsStringCallableWithoutExecutingIt(): void
+    {
+        // The __callStatic path is what PSX / spread-props calls hit when an
+        // attribute is not part of the typed signature; it bypasses PHP's own
+        // parameter type check, so createElement() must enforce the rule itself.
+        $GLOBALS['gh40_probe_called'] = false;
+        $probe = __NAMESPACE__ . '\\gh40SideEffectProbe';
+        self::assertTrue(is_callable($probe), 'precondition: probe must be a valid string callable');
+
+        try {
+            H::__callStatic('button', ['onClick' => $probe, 'children' => 'x']);
+            self::fail('Expected InvalidArgumentException for string callable event prop');
+        } catch (\InvalidArgumentException $e) {
+            self::assertStringContainsString('onClick', $e->getMessage());
+            self::assertStringContainsString('string', $e->getMessage());
+        }
+
+        self::assertFalse($GLOBALS['gh40_probe_called'], 'string callable must not be executed');
+    }
+
+    public function testEventPropRejectsBuiltinFunctionNames(): void
+    {
+        foreach (['strlen', 'phpinfo', 'php_uname'] as $name) {
+            try {
+                H::__callStatic('div', ['onClick' => $name, 'children' => 'x']);
+                self::fail("Expected InvalidArgumentException for '{$name}'");
+            } catch (\InvalidArgumentException $e) {
+                self::assertStringContainsString('onClick must be an Action or a Closure; got string', $e->getMessage());
+            }
+        }
+    }
+
+    public function testEventPropRejectsArrayCallable(): void
+    {
+        $GLOBALS['gh40_probe_called'] = false;
+        $callable = [$this, 'gh40ArrayCallableTarget'];
+        self::assertTrue(is_callable($callable), 'precondition: must be a valid array callable');
+
+        try {
+            H::__callStatic('button', ['onClick' => $callable, 'children' => 'x']);
+            self::fail('Expected InvalidArgumentException for array callable event prop');
+        } catch (\InvalidArgumentException $e) {
+            self::assertStringContainsString('onClick must be an Action or a Closure; got array', $e->getMessage());
+        }
+
+        self::assertFalse($GLOBALS['gh40_probe_called'], 'array callable must not be executed');
+    }
+
+    public function testEventPropRejectsInvokableObjectThatIsNotAClosure(): void
+    {
+        $invokable = new class {
+            public function __invoke(): Action
+            {
+                $GLOBALS['gh40_probe_called'] = true;
+                return Action::setState(0, 'pwned');
+            }
+        };
+        $GLOBALS['gh40_probe_called'] = false;
+
+        try {
+            H::__callStatic('button', ['onClick' => $invokable, 'children' => 'x']);
+            self::fail('Expected InvalidArgumentException for invokable object event prop');
+        } catch (\InvalidArgumentException $e) {
+            self::assertStringContainsString('onClick must be an Action or a Closure; got class@anonymous', $e->getMessage());
+        }
+
+        self::assertFalse($GLOBALS['gh40_probe_called'], 'invokable object must not be executed');
+    }
+
+    public function testEventPropRejectsOtherScalars(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('onChange must be an Action or a Closure; got int');
+        H::__callStatic('select', ['onChange' => 42]);
+    }
+
+    public function testTypedHMethodRejectsStringCallableAtSignatureLevel(): void
+    {
+        // The typed H::xxx() signatures were narrowed from Action|callable|null
+        // to Action|\Closure|null, so a string never even reaches createElement().
+        $GLOBALS['gh40_probe_called'] = false;
+        $probe = __NAMESPACE__ . '\\gh40SideEffectProbe';
+
+        try {
+            /** @phpstan-ignore argument.type */
+            H::button(onClick: $probe, children: 'x');
+            self::fail('Expected TypeError for string callable on typed H::button()');
+        } catch (\TypeError) {
+            // expected
+        }
+
+        self::assertFalse($GLOBALS['gh40_probe_called'], 'string callable must not be executed');
+    }
+
+    public function testEventPropStillAcceptsActionInstance(): void
+    {
+        $action = Action::setState(0, 1, 'Counter#0');
+        $element = H::button(onClick: $action, children: 'x');
+
+        self::assertSame($action, $element->props['wire:click']);
+        self::assertArrayNotHasKey('onClick', $element->props);
+    }
+
+    public function testEventPropStillAcceptsClosureReturningAction(): void
+    {
+        $action = Action::setState(0, 2, 'Counter#0');
+        $closure = \Closure::fromCallable(static fn(): Action => $action);
+        $element = H::button(onClick: $closure, children: 'x');
+
+        self::assertSame($action, $element->props['wire:click']);
+    }
+
+    public function testEventPropStillAcceptsArrowFunction(): void
+    {
+        $action = Action::setState(0, 3, 'Counter#0');
+        $element = H::input(onChange: fn() => $action);
+
+        self::assertSame($action, $element->props['wire:change']);
+    }
+
+    public function testEventPropIgnoresNull(): void
+    {
+        $element = H::button(onClick: null, children: 'x');
+        self::assertArrayNotHasKey('wire:click', $element->props);
+    }
+
+    public function gh40ArrayCallableTarget(): Action
+    {
+        $GLOBALS['gh40_probe_called'] = true;
+        return Action::setState(0, 'pwned');
     }
 
     // ------------------------------------------------------------------
