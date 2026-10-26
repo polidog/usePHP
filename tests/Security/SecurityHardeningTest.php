@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Router\RequestContext;
 use Polidog\UsePhp\Router\SimpleRouter;
+use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\ComponentState;
 use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\RenderContext;
@@ -440,6 +441,205 @@ final class SecurityHardeningTest extends TestCase
 
         $html = $renderer->renderElement($element);
         self::assertStringContainsString('href="page.html"', $html);
+    }
+
+    // ------------------------------------------------------------------
+    // #31: tag names and attribute names are validated before they are
+    // interpolated into the markup; inline on* handlers are refused.
+    // ------------------------------------------------------------------
+
+    public function testRendererRejectsAttributeNameWithQuoteAndSpace(): void
+    {
+        $renderer = new Renderer('test');
+        // Would previously render as `<div x" onmouseover="alert(1)="y">`.
+        $element = new Element('div', ['x" onmouseover="alert(1)' => 'y'], ['hi']);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Invalid HTML attribute name');
+        $renderer->renderElement($element);
+    }
+
+    public function testRendererRejectsAttributeNameWithAngleBracket(): void
+    {
+        $renderer = new Renderer('test');
+        $element = new Element('div', ['a><img src=x onerror=alert(1)>' => '1'], ['hi']);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Invalid HTML attribute name');
+        $renderer->renderElement($element);
+    }
+
+    public function testRendererRejectsAttributeNameWithWhitespace(): void
+    {
+        $renderer = new Renderer('test');
+        // The reproduction from the issue: a key containing a space is
+        // otherwise emitted as two attributes.
+        $element = new Element('div', ['x onclick' => 'alert(1)', 'id' => 'ok'], ['hello']);
+
+        $this->expectException(\RuntimeException::class);
+        $renderer->renderElement($element);
+    }
+
+    public function testRendererRejectsLowercaseOnclickStringProp(): void
+    {
+        $renderer = new Renderer('test');
+        // PSX compiles non-whitelisted attributes through H::__callStatic,
+        // so a lowercase `onclick` string prop reaches the renderer as-is.
+        $element = H::__callStatic('div', ['onclick' => 'alert(1)']);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Inline event handler attribute "onclick" is not allowed');
+        $renderer->renderElement($element);
+    }
+
+    public function testRendererRejectsOnerrorProp(): void
+    {
+        $renderer = new Renderer('test');
+        $element = new Element('img', ['src' => '/x.png', 'onerror' => 'alert(1)'], []);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Inline event handler attribute "onerror" is not allowed');
+        $renderer->renderElement($element);
+    }
+
+    public function testRendererRejectsCamelCaseEventPropThatBypassedCreateElement(): void
+    {
+        $renderer = new Renderer('test');
+        // createElement() only converts onLoad etc. when the value is an
+        // Action/callable; a raw Element with a string handler must still
+        // be refused (the check is case-insensitive).
+        $element = new Element('img', ['src' => '/x.png', 'onLoad' => 'alert(1)'], []);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Inline event handler attribute "onLoad" is not allowed');
+        $renderer->renderElement($element);
+    }
+
+    public function testRendererRejectsBooleanInlineEventAttribute(): void
+    {
+        $renderer = new Renderer('test');
+        // Name validation happens before the boolean-attribute shortcut.
+        $element = new Element('div', ['onmouseover' => true], ['x']);
+
+        $this->expectException(\RuntimeException::class);
+        $renderer->renderElement($element);
+    }
+
+    public function testRendererRejectsMalformedTagName(): void
+    {
+        $renderer = new Renderer('test');
+        $element = new Element('img src=x onerror=alert(1)', [], []);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Invalid HTML tag name');
+        $renderer->renderElement($element);
+    }
+
+    public function testRendererRejectsTagNameWithAngleBracket(): void
+    {
+        $renderer = new Renderer('test');
+        $element = new Element('div><script>alert(1)</script', [], ['x']);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Invalid HTML tag name');
+        $renderer->renderElement($element);
+    }
+
+    public function testRendererRejectsMalformedTagNameOnActionElement(): void
+    {
+        $renderer = new Renderer('test');
+        // The form-wrapped path (renderWithForm) reuses the tag name too;
+        // the check in renderElement() must run before dispatching there.
+        $element = new Element(
+            'button onmouseover=alert(1)',
+            ['wire:click' => Action::setState(0, 1)],
+            ['x'],
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Invalid HTML tag name');
+        $renderer->renderElement($element);
+    }
+
+    public function testRendererRejectsMalformedAttributeNameOnActionElement(): void
+    {
+        $renderer = new Renderer('test');
+        $element = new Element(
+            'button',
+            ['wire:click' => Action::setState(0, 1), 'x" onmouseover="alert(1)' => 'y'],
+            ['x'],
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Invalid HTML attribute name');
+        $renderer->renderElement($element);
+    }
+
+    public function testRendererAllowsDataAriaAndNamespacedAttributeNames(): void
+    {
+        $renderer = new Renderer('test');
+        $element = H::__callStatic('svg', [
+            'data-id' => '42',
+            'aria-label' => 'close',
+            'strokeWidth' => '2',          // JSX map -> stroke-width
+            'xlinkHref' => '#icon',        // JSX map -> xlink:href
+            'xmlLang' => 'en',             // JSX map -> xml:lang
+            'xmlnsXlink' => 'http://www.w3.org/1999/xlink',
+            'viewBox' => '0 0 24 24',      // canonical camelCase, no map entry
+            'httpEquiv' => 'refresh',      // JSX map -> http-equiv
+            'acceptCharset' => 'utf-8',    // JSX map -> accept-charset
+            'className' => 'icon',         // JSX map -> class
+            'htmlFor' => 'input-1',        // JSX map -> for
+            'hidden' => true,
+        ]);
+
+        $html = $renderer->renderElement($element);
+
+        self::assertStringContainsString('data-id="42"', $html);
+        self::assertStringContainsString('aria-label="close"', $html);
+        self::assertStringContainsString('stroke-width="2"', $html);
+        self::assertStringContainsString('xlink:href="#icon"', $html);
+        self::assertStringContainsString('xml:lang="en"', $html);
+        self::assertStringContainsString('xmlns:xlink="http://www.w3.org/1999/xlink"', $html);
+        self::assertStringContainsString('viewBox="0 0 24 24"', $html);
+        self::assertStringContainsString('http-equiv="refresh"', $html);
+        self::assertStringContainsString('accept-charset="utf-8"', $html);
+        self::assertStringContainsString('class="icon"', $html);
+        self::assertStringContainsString('for="input-1"', $html);
+        self::assertStringContainsString(' hidden', $html);
+    }
+
+    public function testRendererAllowsCustomElementAndSvgTagNames(): void
+    {
+        $renderer = new Renderer('test');
+        $element = new Element('my-widget', ['data-x' => '1'], [
+            new Element('linearGradient', ['id' => 'g'], []),
+            new Element('foreignObject', [], ['x']),
+        ]);
+
+        $html = $renderer->renderElement($element);
+
+        self::assertStringStartsWith('<my-widget data-x="1">', $html);
+        self::assertStringContainsString('<linearGradient id="g"></linearGradient>', $html);
+        self::assertStringContainsString('<foreignObject>x</foreignObject>', $html);
+        self::assertStringEndsWith('</my-widget>', $html);
+    }
+
+    public function testOnClickActionStillRendersWireFormWithoutInlineHandler(): void
+    {
+        $renderer = new Renderer('test');
+        // createElement() converts onClick into a wire:click Action before
+        // the renderer sees it, so the framework event path keeps working
+        // while raw on* attributes are refused.
+        $element = H::button(onClick: fn() => Action::setState(0, 1), children: 'Go');
+
+        $html = $renderer->renderElement($element);
+
+        self::assertStringContainsString('<form method="post" data-usephp-form', $html);
+        self::assertStringContainsString('name="_usephp_action"', $html);
+        self::assertStringContainsString('<button type="submit">Go</button>', $html);
+        self::assertStringNotContainsString('onclick', strtolower($html));
+        self::assertStringNotContainsString('wire:', $html);
     }
 
     // ------------------------------------------------------------------

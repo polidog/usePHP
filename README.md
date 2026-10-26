@@ -994,6 +994,10 @@ document.addEventListener('usephp:submit-error', (e) => {
 
 `href`, `src`, `action`, `formaction`, `srcdoc`, `data`, `poster`, `background`, and `xlink:href` are URL-context attributes. The renderer drops any value whose scheme resolves to `javascript:`, `vbscript:`, or `data:` (after stripping leading whitespace and control characters, the way browsers parse URLs). Regular relative or absolute HTTP(S) URLs pass through unchanged.
 
+### Tag and attribute name validation
+
+Prop *keys* and `Element::$type` are written into the markup verbatim (only values are escaped), so the renderer validates them before interpolation. Tag names must match `/^[A-Za-z][A-Za-z0-9\-]*$/` (HTML/SVG elements and custom elements such as `my-widget`); attribute names — after the JSX→HTML mapping — must match `/^[A-Za-z_:][A-Za-z0-9:_.\-]*$/`, which admits `data-*`, `aria-*`, `stroke-width`, `xlink:href`, `xml:lang`, `viewBox` and friends but not quotes, whitespace, `=`, `<` or `>`. Inline event handler attributes (`onclick`, `onerror`, `onLoad`, … — anything matching `/^on[a-z]/i` that reaches the renderer) are refused as well; use the `onClick`/`onChange`/… props with an `Action`, which compile to the `wire:*` form-action path. A name that fails either check throws a `RuntimeException` rather than rendering, since it is always a bug or an injection attempt.
+
 ### PSX compilation cache
 
 `usephp compile` writes generated PHP files into `var/cache/psx/` and `UsePHP::loadComponentManifest()` `require`s them. The cache directory must be **writable only by the build/deployment role, not by HTTP request handlers**. Never call `loadComponentManifest()` with a request-derived path.

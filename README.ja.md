@@ -967,6 +967,10 @@ document.addEventListener('usephp:submit-error', (e) => {
 
 `href`, `src`, `action`, `formaction`, `srcdoc`, `data`, `poster`, `background`, `xlink:href` は URL コンテキストの属性です。Renderer は値のスキームが `javascript:`, `vbscript:`, `data:` のいずれかに該当する場合（ブラウザのパースに合わせて先頭の空白・制御文字を除いた後で判定）、属性を破棄します。通常の相対 URL や HTTP(S) URL はそのまま通ります。
 
+### タグ名・属性名の検証
+
+props の *キー* と `Element::$type` はエスケープされずにそのままマークアップへ書き込まれる（エスケープされるのは値だけ）ため、Renderer は補間前にこれらを検証します。タグ名は `/^[A-Za-z][A-Za-z0-9\-]*$/`（HTML/SVG 要素と `my-widget` のようなカスタム要素）に、属性名は JSX→HTML 変換後の名前が `/^[A-Za-z_:][A-Za-z0-9:_.\-]*$/` に一致する必要があります。`data-*`, `aria-*`, `stroke-width`, `xlink:href`, `xml:lang`, `viewBox` などは通りますが、引用符・空白・`=`・`<`・`>` を含む名前は通りません。インラインのイベントハンドラ属性（`onclick`, `onerror`, `onLoad` など、Renderer に到達した `/^on[a-z]/i` に一致する名前）も拒否されます。イベントには `onClick`/`onChange` などの props に `Action` を渡してください（`wire:*` のフォームアクション経路にコンパイルされます）。いずれかの検証に失敗した名前は、描画されずに `RuntimeException` を投げます（常にバグか注入攻撃のどちらかだからです）。
+
 ### PSX コンパイルキャッシュ
 
 `usephp compile` は生成された PHP ファイルを `var/cache/psx/` に書き出し、`UsePHP::loadComponentManifest()` がそれを `require` します。キャッシュディレクトリは **ビルド/デプロイ用ロールにのみ書き込み権限を与え、HTTP リクエストハンドラからは書けないようにする** こと。`loadComponentManifest()` にリクエスト由来のパスを渡さないでください。
