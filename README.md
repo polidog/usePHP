@@ -876,6 +876,28 @@ Transforms to:
 
 usePHP ships with several built-in defenses. The notes below cover the parts an application author still has to wire up correctly.
 
+### What usePHP does not protect (trust boundaries)
+
+The guarantees in this section are about transport: signing, CSRF tokens, URL filtering. They do not move the trust boundary. Everything that round-trips through the browser is client input, and the points below are the application author's responsibility.
+
+- **`useState` values are client input.** A setter computes its value on the server, but that value travels through the browser, and a user can replay any action the server ever rendered for them. Never derive authorization, prices, payment or wizard-step completion, user identity, or anything else the server must decide from hook state. Re-read those from `$_SESSION` or your database at render time.
+
+  ```php
+  // Bad: "paid" lives in hook state — the client can replay the action that set it.
+  [$paid, $setPaid] = useState(false);
+
+  // Good: the server decides at render time; hook state only drives presentation.
+  $paid = $_SESSION['paid'] ?? false;
+  ```
+
+- **Snapshot contents are plaintext in the HTML.** The `data-usephp-snapshot` attribute and the `_usephp_snapshot` hidden field carry the state as readable JSON. The HMAC prevents tampering, not reading. Do not put secrets or personal data in the state of Snapshot-storage components.
+
+- **Snapshots are replayable and have no expiry.** `SnapshotBehavior::Persistent` carries the state in the URL on purpose: anyone with the link reproduces that state. `Session` and `Shared` snapshots are bound to the PHP session id, but neither kind expires — a snapshot stays valid for as long as the signing secret does. Treat a snapshot as a bookmark, not as proof that something happened.
+
+- **`/_defer/{name}` is an unauthenticated GET endpoint.** Query parameters become component props verbatim. Beyond checking permissions inside the component (see [Deferred rendering](#deferred-rendering-cdn-friendly-partial-hydration) above), treat props as untrusted input: validate and cast them before use, and never forward them into attribute names, tag names, or event props such as `onClick`.
+
+- **Session cookie flags and `session_regenerate_id()` are the application's job.** See [Session cookie hardening](#session-cookie-hardening) below.
+
 ### Snapshot HMAC secret (required for Snapshot storage)
 
 `SnapshotBehavior::Persistent|Session|Shared` and components declared with `#[Component(storage: 'snapshot')]` round-trip state through the client, so the framework HMAC-signs every snapshot. You must configure a high-entropy secret before rendering a snapshot-using component or you'll get a `LogicException` at render time.
