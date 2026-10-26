@@ -728,6 +728,96 @@ final class UsePHP
     }
 
     /**
+     * Upper bound for a hook index accepted from the client. Components
+     * never have anywhere near this many hooks; the bound keeps a replayed
+     * or forged action from fanning out storage keys.
+     */
+    private const MAX_HOOK_INDEX = 255;
+
+    /**
+     * Sign an action for the given component instance.
+     *
+     * Actions are rendered by the server and replayed by the browser, so the
+     * server signs the pair (instance id, action JSON) and refuses anything it
+     * did not emit. The key is the snapshot secret when configured, otherwise
+     * a random per-session key; the active session id is mixed into the
+     * payload so a form rendered in one session cannot be replayed in another.
+     *
+     * Returns null when no key is available (no secret and no active
+     * session) — such an action cannot be verified later and will be
+     * rejected by {@see doHandleAction()}.
+     *
+     * @internal Exposed for tests and custom form rendering; not stable API.
+     */
+    public function signAction(string $componentId, string $actionJson): ?string
+    {
+        $payload = $this->actionSigningPayload($componentId, $actionJson);
+
+        if ($this->snapshotSerializer !== null) {
+            return $this->snapshotSerializer->signString($payload);
+        }
+
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            return null;
+        }
+        $key = $_SESSION['_usephp_action_key'] ?? null;
+        if (!is_string($key) || $key === '') {
+            $key = bin2hex(random_bytes(32));
+            $_SESSION['_usephp_action_key'] = $key;
+        }
+
+        return hash_hmac('sha256', $payload, $key);
+    }
+
+    /**
+     * Verify a signature produced by {@see signAction()}.
+     *
+     * @internal
+     */
+    public function verifyActionSignature(string $componentId, string $actionJson, string $signature): bool
+    {
+        $expected = $this->signAction($componentId, $actionJson);
+
+        return $expected !== null && hash_equals($expected, $signature);
+    }
+
+    private function actionSigningPayload(string $componentId, string $actionJson): string
+    {
+        $sessionId = session_status() === PHP_SESSION_ACTIVE ? session_id() : '';
+
+        return "usephp-action\0" . $sessionId . "\0" . $componentId . "\0" . $actionJson;
+    }
+
+    /**
+     * @return \Closure(string, string): ?string
+     */
+    private function actionSigner(): \Closure
+    {
+        return fn(string $componentId, string $actionJson): ?string => $this->signAction($componentId, $actionJson);
+    }
+
+    /**
+     * Shape check for the `_usephp_component` field. The signature (or the
+     * snapshot memo, for `restore`) binds the id to a specific instance, so
+     * this only has to keep obviously hostile strings out of storage keys
+     * and log lines.
+     */
+    private static function isValidInstanceId(string $instanceId): bool
+    {
+        return strlen($instanceId) <= 255
+            && str_contains($instanceId, '#')
+            && preg_match('/[\x00-\x1F\x7F]/', $instanceId) !== 1;
+    }
+
+    private function respondBadRequest(string $body): string
+    {
+        http_response_code(400);
+        $this->emitHeader('Cache-Control: no-store');
+
+        return $body;
+    }
+
+    /**
      * Verify the current POST request against CSRF rules. Returns null when
      * the request is acceptable, or a short reason string when it should be
      * rejected. Combines two layers:
@@ -1287,21 +1377,28 @@ final class UsePHP
 
         $instanceId = $_POST['_usephp_component'] ?? null;
         $actionJson = $_POST['_usephp_action'] ?? null;
+        $actionSignature = $_POST['_usephp_action_sig'] ?? null;
         $snapshotJson = $_POST['_usephp_snapshot'] ?? null;
         $isPartial = isset($_SERVER['HTTP_X_USEPHP_PARTIAL']);
 
-        if ($instanceId === null || $actionJson === null) {
-            http_response_code(400);
-            return 'Invalid action request';
+        if (!is_string($instanceId) || !is_string($actionJson)
+            || !self::isValidInstanceId($instanceId)
+            || ($actionSignature !== null && !is_string($actionSignature))
+            || ($snapshotJson !== null && !is_string($snapshotJson))
+        ) {
+            return $this->respondBadRequest('Invalid action request');
         }
 
-        // Parse action first to get storageType
+        // Parse the action. Every shape assumption is checked so malformed
+        // input is a 400, not an uncaught TypeError.
         try {
             $actionData = json_decode($actionJson, true, 512, JSON_THROW_ON_ERROR);
+            if (!is_array($actionData)) {
+                throw new \InvalidArgumentException('Action must be a JSON object');
+            }
             $action = Action::fromArray($actionData);
-        } catch (\JsonException $e) {
-            http_response_code(400);
-            return 'Invalid action data';
+        } catch (\JsonException|\InvalidArgumentException $e) {
+            return $this->respondBadRequest('Invalid action data');
         }
 
         // Extract component name from instanceId (e.g., "Counter#0" => "Counter")
@@ -1310,31 +1407,65 @@ final class UsePHP
         // Check if this is a registered class-based component
         $isRegisteredComponent = $this->registry->has($componentName);
 
-        // Determine storage type: use action's storageType if available (for function components),
-        // otherwise use registry for class components, default to Session
-        $storageType = $action->storageType
-            ?? ($isRegisteredComponent ? $this->registry->getStorageType($componentName) : StorageType::Session);
+        if ($action->type === 'restore') {
+            // 'restore' is built by usephp.js (not rendered by the server), so
+            // it carries no signature. It must not mutate anything: the
+            // posted snapshot *is* the state and is HMAC-verified below.
+            if ($snapshotJson === null || $action->payload !== []
+                || ($action->componentId !== null && $action->componentId !== $instanceId)
+            ) {
+                return $this->respondBadRequest('Invalid action request');
+            }
+            $storageType = StorageType::Snapshot;
+        } else {
+            // Every other action must be one this server rendered. The
+            // signature covers the instance id and the full action JSON, so
+            // index/value/storageType and the target instance are all fixed
+            // by the server, and the session id in the payload stops a form
+            // rendered in one session from being replayed in another.
+            if ($actionSignature === null
+                || !$this->verifyActionSignature($instanceId, $actionJson, $actionSignature)
+            ) {
+                \error_log('[usePHP] action signature missing or invalid for ' . $instanceId);
+
+                return $this->respondBadRequest('Invalid action signature');
+            }
+            if ($action->componentId !== null && $action->componentId !== $instanceId) {
+                return $this->respondBadRequest('Invalid action request');
+            }
+
+            // Storage type: the signed action carries it for fc() components;
+            // class components leave it null and the registry decides.
+            $storageType = $action->storageType
+                ?? ($isRegisteredComponent ? $this->registry->getStorageType($componentName) : StorageType::Session);
+        }
 
         // Handle snapshot storage - restore state from snapshot
         try {
             if ($storageType === StorageType::Snapshot && $snapshotJson !== null) {
                 $snapshot = $this->getSnapshotSerializer()->deserialize($snapshotJson);
+                // The memo is covered by the HMAC; it must name the instance
+                // this request claims to act on.
+                if ($snapshot->getInstanceId() !== $instanceId) {
+                    return $this->respondBadRequest('Invalid snapshot');
+                }
                 $state = ComponentState::fromSnapshot($snapshot);
             } else {
                 // Use instanceId for state to match the correct component instance
                 $state = ComponentState::getInstance($instanceId, $storageType);
             }
         } catch (SnapshotVerificationException $e) {
-            http_response_code(400);
-            return 'Invalid snapshot';
+            return $this->respondBadRequest('Invalid snapshot');
         }
 
-        // Execute the action. 'restore' (sent by usephp.js when it replays a
-        // snapshot it persisted client-side) carries no mutation: the posted
-        // snapshot *is* the state, so it only needs the re-render below.
+        // Execute the action. 'restore' carries no mutation and only needs
+        // the re-render below.
         if ($action->type === 'setState') {
-            $index = $action->payload['index'] ?? 0;
+            $index = $action->payload['index'] ?? null;
             $value = $action->payload['value'] ?? null;
+            if (!is_int($index) || $index < 0 || $index > self::MAX_HOOK_INDEX) {
+                return $this->respondBadRequest('Invalid action data');
+            }
             $state->setState($index, $value);
         }
 
@@ -1490,6 +1621,7 @@ final class UsePHP
             StorageType::Snapshot,
             $this->deferPrefix,
             $this->getCsrfToken(),
+            actionSigner: $this->actionSigner(),
         );
 
         // renderPartial() emits the wrapper's contents plus the refreshed
@@ -1582,6 +1714,7 @@ final class UsePHP
                 $this->tryGetSnapshotSerializer(),
                 deferPrefix: $this->deferPrefix,
                 csrfToken: $this->getCsrfToken(),
+                actionSigner: $this->actionSigner(),
             );
             return $renderer->renderElement($element);
         } finally {
@@ -1622,6 +1755,7 @@ final class UsePHP
                 $this->deferPrefix,
                 $this->getCsrfToken(),
                 $this->registry->getPersist($componentName),
+                $this->actionSigner(),
             );
 
             return $renderer->render(fn() => $component->render());
@@ -1655,6 +1789,7 @@ final class UsePHP
             $storageType,
             $this->deferPrefix,
             $this->getCsrfToken(),
+            actionSigner: $this->actionSigner(),
         );
 
         return $renderer->renderPartial(fn() => $component->render());
