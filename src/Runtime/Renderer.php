@@ -24,6 +24,36 @@ final class Renderer
     ];
 
     /**
+     * Grammar for element (tag) names we are willing to write into the
+     * output. Covers every HTML and SVG element (`div`, `linearGradient`,
+     * `foreignObject`) plus custom elements (`my-widget`); anything else —
+     * whitespace, `<`, `>`, `/`, quotes — would let a tainted
+     * `Element::$type` break out of the tag and is refused loudly.
+     */
+    public const TAG_NAME_PATTERN = '/^[A-Za-z][A-Za-z0-9\-]*$/';
+
+    /**
+     * Grammar for attribute names, applied to the *post-JSX-map* name.
+     * Conservative HTML/XML name: `class`, `data-*`, `aria-*`, hyphenated
+     * SVG presentation attributes (`stroke-width`), namespaced attributes
+     * (`xlink:href`, `xml:lang`, `xmlns:xlink`) and camelCase SVG names
+     * (`viewBox`) all pass. Quotes, whitespace, `=`, `<`, `>` and `/` do
+     * not, so a prop key can never inject a second attribute or close the
+     * tag.
+     */
+    public const ATTRIBUTE_NAME_PATTERN = '/^[A-Za-z_:][A-Za-z0-9:_.\-]*$/';
+
+    /**
+     * Inline event-handler attributes (`onclick`, `onerror`, `onLoad`, …).
+     * These are never emitted from props: the only sanctioned way to react
+     * to a DOM event is the `onClick`/`onChange`/… props that
+     * {@see \Polidog\UsePhp\Html\createElement()} turns into `wire:*`
+     * actions. A lowercase/string-valued handler that reaches the renderer
+     * is either a bug or an injection attempt, so it is rejected.
+     */
+    private const EVENT_HANDLER_ATTRIBUTE_PATTERN = '/^on[a-z]/i';
+
+    /**
      * Attributes whose values are interpreted as URLs and therefore must
      * not carry executable schemes like `javascript:`. Matches React's
      * v16.9+ behavior, where any `javascript:` URL in these attributes is
@@ -310,7 +340,22 @@ final class Renderer
             return $this->renderDeferred($element);
         }
 
+        // Function components are resolved by H::component() /
+        // resolveRenderables() when they sit inside a children array; one
+        // that reaches the renderer directly was never expanded.
+        if ($element->type === '__function_component__') {
+            throw new \RuntimeException(
+                'Function component Element reached the renderer unresolved. '
+                . 'Place H::component(...) inside a children array so it is expanded before rendering.',
+            );
+        }
+
+        // Validate the tag name *before* any interpolation. renderWithForm()
+        // below reuses $element->type too, so this single check covers both
+        // the plain and the form-wrapped output.
         $tag = $element->type;
+        self::assertValidTagName($tag);
+
         $props = $element->props;
         $hasAction = isset($props['wire:click']);
 
@@ -410,6 +455,7 @@ final class Renderer
             }
 
             $attrName = self::JSX_HTML_ATTR_MAP[$key] ?? $key;
+            self::assertValidAttributeName($attrName);
 
             // Handle boolean attributes
             if (is_bool($value)) {
@@ -451,6 +497,48 @@ final class Renderer
         }
 
         return $attributes ? ' ' . implode(' ', $attributes) : '';
+    }
+
+    /**
+     * Refuse tag names that could break out of `<tag ...>`. Throws rather
+     * than dropping the element: a bad tag name is always a bug or an
+     * attack, and silently rendering nothing would hide both.
+     */
+    private static function assertValidTagName(string $tag): void
+    {
+        if (preg_match(self::TAG_NAME_PATTERN, $tag) !== 1) {
+            throw new \RuntimeException(sprintf(
+                'Invalid HTML tag name %s: tag names must match %s.',
+                json_encode($tag, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                self::TAG_NAME_PATTERN,
+            ));
+        }
+    }
+
+    /**
+     * Refuse attribute names that could inject a second attribute or close
+     * the tag, and refuse inline event handlers outright. Applied to the
+     * canonical (post-JSX-map) name, so both `onclick` and a stray `onLoad`
+     * string prop are caught.
+     */
+    private static function assertValidAttributeName(string $attrName): void
+    {
+        if (preg_match(self::ATTRIBUTE_NAME_PATTERN, $attrName) !== 1) {
+            throw new \RuntimeException(sprintf(
+                'Invalid HTML attribute name %s: attribute names must match %s.',
+                json_encode($attrName, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                self::ATTRIBUTE_NAME_PATTERN,
+            ));
+        }
+
+        if (preg_match(self::EVENT_HANDLER_ATTRIBUTE_PATTERN, $attrName) === 1) {
+            throw new \RuntimeException(sprintf(
+                'Inline event handler attribute %s is not allowed. '
+                . 'Use the onClick/onChange/onInput/onSubmit/onFocus/onBlur/onLoad/onError props '
+                . 'with an Action (rendered as wire:* form actions) instead of raw JavaScript handlers.',
+                json_encode($attrName, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            ));
+        }
     }
 
     /**
