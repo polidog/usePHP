@@ -1054,6 +1054,41 @@ final class SecurityHardeningTest extends TestCase
         self::assertFalse($app->verifyActionSignature('Counter#0', '{"type":"setState"}', $signature));
     }
 
+    // ------------------------------------------------------------------
+    // #38: the PRG redirect after a POST action must never echo a
+    // client-controlled authority back in the Location header.
+    // ------------------------------------------------------------------
+
+    /**
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function redirectPathProvider(): iterable
+    {
+        yield 'plain path' => ['/counter', '/counter'];
+        yield 'strips query' => ['/counter?x=1&next=//evil.example', '/counter'];
+        yield 'protocol-relative authority is dropped' => ['//evil.example/counter', '/counter'];
+        yield 'protocol-relative authority without path' => ['//evil.example', '/'];
+        yield 'backslash authority' => ['/\\evil.example/counter', '/evil.example/counter'];
+        yield 'triple slash' => ['///evil.example/counter', '/evil.example/counter'];
+        yield 'mixed slashes' => ['/\\/evil.example', '/evil.example'];
+        yield 'absolute url keeps only the path' => ['https://evil.example/counter', '/counter'];
+        yield 'empty' => ['', '/'];
+        yield 'control characters' => ["/counter\r\nX-Injected: 1", '/'];
+        yield 'tab' => ["/coun\tter", '/'];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('redirectPathProvider')]
+    public function testNormalizeRedirectPathYieldsSameOriginPath(string $requestUri, string $expected): void
+    {
+        $path = UsePHP::normalizeRedirectPath($requestUri);
+
+        self::assertSame($expected, $path);
+        self::assertStringStartsWith('/', $path);
+        self::assertStringStartsNotWith('//', $path);
+        self::assertStringNotContainsString('\\', $path);
+        self::assertStringNotContainsString('?', $path);
+    }
+
     private function buildAppWithCounter(): UsePHP
     {
         $app = new UsePHP();
@@ -1088,13 +1123,15 @@ final class SecurityHardeningTest extends TestCase
             $_SERVER['HTTP_HOST'] = 'example.test';
             $_SERVER['HTTP_ORIGIN'] = 'http://example.test';
             // No X-UsePHP-Partial header: full-page submit → PRG redirect.
+            $actionJson = json_encode([
+                'type' => 'setState',
+                'payload' => ['index' => 0, 'value' => 1],
+                'componentId' => 'Counter#0',
+            ], JSON_THROW_ON_ERROR);
             $_POST = [
                 '_usephp_component' => 'Counter#0',
-                '_usephp_action' => json_encode([
-                    'type' => 'setState',
-                    'payload' => ['index' => 0, 'value' => 1],
-                    'componentId' => 'Counter#0',
-                ], JSON_THROW_ON_ERROR),
+                '_usephp_action' => $actionJson,
+                '_usephp_action_sig' => $app->signAction('Counter#0', $actionJson),
                 '_usephp_csrf' => $app->getCsrfToken(),
             ];
 
