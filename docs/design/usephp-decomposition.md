@@ -1,6 +1,6 @@
 # UsePHP 分割設計 — 責務分離と Relayer 連携
 
-Status: Draft (2026-08-23) — 境界型は PSR-7 で合意済み
+Status: Draft (2026-08-23、2026-10-26 に Relayer main 51266e2 と再照合) — 境界型は PSR-7 で合意済み
 
 ## 背景
 
@@ -32,15 +32,17 @@ usePHP の本来の顔は **描画エンジン**。standalone 用の HTTP カー
 | Relayer 側 | 触っているもの | 問題 |
 |---|---|---|
 | `AppRouter::run()` | `RenderContext::setApp($usephp)` を dispatch 全体に張る | compiled PSX が `getApp()->renderPsxComponent()` を呼ぶため |
-| 同上 | `$usephp->handleDeferred()` → `echo` | 引数なし・`$_SERVER` 直読み。Relayer の `Request` / locale 解決と噛み合わない |
+| 同上 | `$usephp->handleDeferred()` → `echo` | usePHP 側は `?RequestContext` を受けるが Relayer が引数なしで呼ぶため `$_SERVER` 直読みになる。Relayer #62 でスーパーグローバルを `Http\Request` に閉じ込めた方針と矛盾し、locale 解決とも噛み合わない |
 | `renderPageInternal()` | `ComponentState::getInstance/reset`、`getSnapshotSerializer()` を try/catch で null 化、`$_SERVER['HTTP_X_USEPHP_PARTIAL']` | |
-| `dispatchStateAction()` | `_usephp_action` / `_usephp_component` の JSON を再実装パース | usePHP の action プロトコルの重複実装。**CSRF 検証を通っていない** |
-| `LayoutRenderer` | `new Renderer($id, $serializer)` | `deferPrefix` / `csrfToken` が渡らず、CSRF は Relayer `CsrfToken` と二重実装 |
+| `dispatchStateAction()` | `_usephp_action` / `_usephp_component` の JSON を再実装パース | usePHP の action プロトコルの重複実装。CSRF は Relayer #69 で `CsrfToken::validate` を通すようになった (設計当初は未検証) |
+| `LayoutRenderer` | `new Renderer($id, $serializer, csrfToken: ...)` | `deferPrefix` が渡らない。`csrfToken` は #69 で渡るようになったが、CSRF は Relayer `CsrfToken` (`$_SESSION['usephp:csrf']`) と usePHP (`$_SESSION['_usephp_csrf']`) の二重実装のまま |
 | `PsxComponentRegistrar` | manifest 読込後に全コンポーネントを `registerComponent()` で上書き再登録し、compiled require と `FunctionComponent` 内側の差し替えを自前で実施 | usePHP に引数解決フックが無い |
-| `Relayer::endRequest()` | `ComponentState::clearInstances()` + `RenderContext::clearApp()` | static が 2 箇所に散っている |
+| `Relayer::endRequest()` | `ComponentState::clearInstances()` + `StorageFactory::reset()` + `RenderContext::clearApp()` | usePHP の static が 3 箇所に散っている |
+| `Form\FormAction` (#70) | `usephp-action:<b64(payload)>.<b64(hmac)>` 形式のトークンを `$_SESSION['usephp:form-action-key']` の鍵で HMAC 署名 | usePHP のセッション抽象に乗っていない。`$_SESSION` 直読みが `CsrfToken` / `FormAction` / `Auth\NativeSession` の 3 箇所にある |
+| `Http\Request` (#62) | `final readonly class Request` (`fromGlobals` / `withPath` / `withLocale`) | PSR-7 ではなく `psr/http-message` にも依存していない。PSR-7 境界に乗せるにはブリッジが要る |
 | `Auth\SessionStorage` | 独自 interface | usePHP 側にセッション抽象が無く合流できない |
 
-`_usephp_action` フィールドは Relayer のアクショントークン (`usephp-action:` 接頭辞) と
+`_usephp_action` フィールドは Relayer のアクショントークン (`usephp-action:` 接頭辞、#70 以降は HMAC 署名付き) と
 usePHP の JSON action の 2 プロトコルで共有されている。
 
 ## 決定事項
@@ -107,6 +109,7 @@ interface SessionInterface
 }
 // 標準実装: NativeSession ($_SESSION)、ArraySession (テスト)。
 // Relayer\Auth\SessionStorage extends SessionInterface { regenerateId(); clear(); }
+// Relayer の CsrfToken / FormAction (署名鍵) / NativeSession が直接触っている $_SESSION はすべてこの実装 1 つに乗せる。
 
 final class RouteInfo
 {
@@ -242,7 +245,7 @@ final class SnapshotStore   // SnapshotBehavior ごとの保存/復元。現状 
 
 final class RequestLifecycle
 {
-    public static function reset(): void;   // ComponentState::clearInstances + RenderContext::leaveAll
+    public static function reset(): void;   // ComponentState::clearInstances + StorageFactory::reset + RenderContext::leaveAll
 }
 ```
 
@@ -313,7 +316,10 @@ final class UsePHP
 ## Relayer 側の追従 (設計の受け入れ基準)
 
 - `Http\Request` に `toPsr7(): ServerRequestInterface` を追加 (`nyholm/psr7` を依存に追加)。
-  `Auth\SessionStorage extends SessionInterface`
+  Relayer の `Request` は PSR-7 ではない独自の readonly クラスで `psr/http-message` にも依存していないため、
+  この追加が Relayer 側の新規依存になる。locale prefix 除去済みパスは `withPath()` 適用後の `Request` を変換して渡す
+- `Auth\SessionStorage extends SessionInterface`。`CsrfToken` の `usephp:csrf` と
+  `FormAction` の署名鍵 `usephp:form-action-key` も同じ `SessionInterface` 実装経由に寄せ、Relayer から `$_SESSION` 直読みを無くす
 - `Relayer::buildUsePhp()`: `new UsePHP(session: ...)`、`setArgumentResolver(ContainerArgumentResolver)`。
   `PsxComponentRegistrar` の再登録ロジック (`registerContainerAwareComponents` 以下) は削除
 - `AppRouter::run()`: `setApp/clearApp` → `RenderContext::run($app->scope($route), ...)`、
@@ -323,7 +329,7 @@ final class UsePHP
   (これで state action にも CSRF が掛かる)
 - `LayoutRenderer`: `new Renderer` → `RenderContext::scope()->renderers->create(...)`
 - `CsrfToken` → `$app->csrf()`
-- `Relayer::endRequest()` → `RequestLifecycle::reset()`
+- `Relayer::endRequest()` → `RequestLifecycle::reset()` (`StorageFactory::reset()` も含むので Relayer 側の個別呼び出しは消す)
 
 ## 移行順 (各ステップで既存テスト緑、Relayer は各ステップ後に追従可能)
 
@@ -342,7 +348,9 @@ final class UsePHP
 - `ActionRequest::fromRequest` が「他人の `_usephp_action`」を判定する規則。現状は
   「JSON としてパース可能か」だが、Relayer 側のトークン接頭辞 `usephp-action:` を usePHP 側が
   知るべきではないので、JSON オブジェクトでなければ null で良いか要確認。
-- (決定) locale prefix 除去済みパスは Relayer が `withUri()` で渡す。
+- (決定) locale prefix 除去済みパスは Relayer が `withPath()` 済みの `Request` を `toPsr7()` して渡す。
+- `FormAction` の HMAC 署名鍵 (#70) を `SessionInterface` に乗せる際、鍵の生成タイミング (lazy start) を
+  `isStarted()` の契約と整合させる必要がある。トークン形式自体は `usephp-action:` 接頭辞のまま変わらないので #11 の判定規則には影響しない。
 - (決定) CSRF の発行・検証は `CsrfGuard` に一本化。`useRouter()` は `RouteInfo` のみに依存。
 
 ## 議論の経緯 (2026-08-22〜23)
@@ -358,11 +366,23 @@ final class UsePHP
 | 5 | Relayer 連携 | Kernel 層と Protocol 層の 2 層構成 | Relayer docs で「Relayer = ルーティング/DI/認証/キャッシュ、usePHP = 描画/状態/defer」と明文化されている。usePHP の本来の顔は描画エンジンで、Kernel は standalone 用の参照実装 |
 | 6 | リクエストの境界型 | PSR-7 `ServerRequestInterface` | 当初は独自 `RequestInterface` を提案したが「PSR じゃだめ？」→ 採用。ブリッジが揃い利用側負担が小さい。内部は `RequestContext::fromPsr7()` で変換し内部シグネチャを守る。`null` は `fromGlobals()` |
 | 7 | レスポンスの境界型 | 自前 `Response` + `toPsr7()` | PSR-7 Response の自前実装は Stream 込みで重く、Relayer も PSR-7 Response を使っていない |
-| 8 | CSRF | usePHP `CsrfGuard` に一本化 | Relayer `CsrfToken` と二重実装 (同じ `_usephp_csrf` フィールド名)。さらに Relayer の `dispatchStateAction` 経路は CSRF 未検証だった |
+| 8 | CSRF | usePHP `CsrfGuard` に一本化 | Relayer `CsrfToken` と二重実装 (同じ `_usephp_csrf` フィールド名)。設計時点では Relayer の `dispatchStateAction` 経路が CSRF 未検証だったが、Relayer #69 で検証が入った。一本化の理由は二重実装の解消に絞られる |
 | 9 | `useRouter()` の依存 | `RouteInfo { currentUrl, params }` のみ | Relayer は `PageContext` が params を持ち usePHP の `RouterInterface` に乗らない。`RenderScope` から `RouterInterface`/`RouteMatch` 依存を外す |
 | 10 | PSX の DI 連携 | `PsxArgumentResolver` フック | Relayer `PsxComponentRegistrar` が manifest 読込後に全コンポーネントを再登録し、compiled require と `fc()` 内側の差し替えまで自前実装していた。usePHP 側に引数解決フックが無いのが原因 |
 | 11 | `_usephp_action` の 2 プロトコル同居 | `ActionRequest::fromRequest()` は「JSON オブジェクトでなければ null (無視)、JSON だが壊れていれば例外」 | **仮置き**。usePHP が Relayer の `usephp-action:` 接頭辞を知るのは逆依存なので避ける |
-| 12 | locale prefix | 除去済みパスを Relayer が `withUri()` で渡す | usePHP は locale を知らない |
+| 12 | locale prefix | 除去済みパスを Relayer が `withPath()` 済みの `Request` で渡す | usePHP は locale を知らない |
+
+### Relayer との再照合 (2026-10-26)
+
+設計後に Relayer main が 7 コミット進んだ (52faf8f〜51266e2) ので差分を確認した。決定事項を覆すものは無い。
+
+| Relayer の変更 | 設計への影響 |
+|---|---|
+| #62 スーパーグローバルを `Http\Request` に閉じ込め | `handleDeferred()` を引数なしで呼ぶ箇所だけが取り残され、usePHP 側で `$_SERVER` を読む。`DeferEndpoint::handle(RequestContext)` で解消 |
+| #69 state action POST で CSRF 検証 | 入力表の「未検証」が解消。`Renderer` に `csrfToken` も渡るようになった。一本化 (決定 8) の動機は二重実装の解消のみ |
+| #70 フォームアクショントークンを HMAC 署名 | セッションに置く秘密が CSRF トークンと署名鍵の 2 つになった。`SessionInterface` 統合の対象に署名鍵を追加 |
+| `endRequest()` が `StorageFactory::reset()` も呼ぶ | `RequestLifecycle::reset()` の対象に `StorageFactory` を追加 |
+| `Request::withPath()` | 設計で `withUri()` と書いていたのは Relayer に存在しないメソッド名。`withPath()` に訂正 |
 
 ### 現在の状態と次の一手
 
