@@ -874,6 +874,9 @@ final class Renderer
             );
         }
         $snapshot = $state->createSnapshot();
+        // The snapshot goes through JSON like an action does, so an object in
+        // state would turn into an array on the next request.
+        Action::assertJsonRoundTrippable($snapshot->state, 'state');
         return $this->snapshotSerializer->serialize($snapshot);
     }
 }
