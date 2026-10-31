@@ -348,7 +348,9 @@ final class UsePHP
      *        via registerComponent().
      * @param string|null $cacheControl Optional Cache-Control header. When
      *        omitted, defaults to `private, max-age=0` so per-user fragments
-     *        do not leak through shared caches by accident.
+     *        do not leak through shared caches by accident. A response that
+     *        uses the session or sets a cookie is sent as `private, no-store`
+     *        whatever this says.
      */
     public function registerDeferred(
         string $name,
@@ -1851,7 +1853,8 @@ final class UsePHP
             $props[$keyStr] = $value;
         }
 
-        $this->emitHeader('Cache-Control: ' . ($registration['cacheControl'] ?? 'private, max-age=0'));
+        $cacheControl = $registration['cacheControl'] ?? 'private, max-age=0';
+        $this->emitHeader('Cache-Control: ' . $cacheControl);
 
         // Reset render context state — this is a fresh sub-render, not a
         // continuation of any page-level render pass.
@@ -1895,7 +1898,102 @@ final class UsePHP
         } finally {
             $this->deferFormQuery = null;
             $this->deferScopeName = null;
+            $this->keepVisitorResponseOutOfSharedCaches($name, $cacheControl);
         }
+    }
+
+    /**
+     * Take back a shared-cache policy from a defer response that belongs to
+     * one visitor. A CDN would otherwise hand its session cookie, CSRF token or
+     * session-bound signatures to the next visitor.
+     *
+     * This has to run after rendering: the session may start only then, when
+     * the first form is signed or `SessionStorage` is first read. What
+     * session_start() does to `Cache-Control` depends on `session.cache_limiter`
+     * and on who called it first, so neither the registered policy nor the sent
+     * header is enough alone. `session.cache_limiter = public` replaces even a
+     * registered `private, no-store`.
+     *
+     * session_id() also catches a session that was read and closed again.
+     *
+     * The request's cookie alone does not count. Until something starts the
+     * session its data is not loaded, so the response cannot depend on it.
+     */
+    private function keepVisitorResponseOutOfSharedCaches(string $name, string $cacheControl): void
+    {
+        $sent = \headers_list();
+        if (!self::allowsSharedCaching($cacheControl) && !self::sendsSharedCacheControl($sent)) {
+            return;
+        }
+
+        $reasons = [];
+        if (session_status() === PHP_SESSION_ACTIVE || (session_id() ?: '') !== '') {
+            $reasons[] = 'uses the session';
+        }
+        if (self::hasHeader($sent, 'set-cookie')) {
+            $reasons[] = 'sets a cookie';
+        }
+        if ($reasons === []) {
+            return;
+        }
+        $reason = \implode(' and ', $reasons);
+
+        if ($this->headerEmitter === null && \headers_sent()) {
+            \error_log(\sprintf(
+                "[usePHP] defer endpoint '%s' %s, but its headers were already sent, so it may stay cacheable with \"%s\"",
+                $name,
+                $reason,
+                $cacheControl,
+            ));
+            return;
+        }
+
+        $this->emitHeader('Cache-Control: private, no-store');
+        \error_log(\sprintf(
+            "[usePHP] defer endpoint '%s' (cacheControl \"%s\") would be stored by shared caches but %s; sent \"private, no-store\" instead",
+            $name,
+            $cacheControl,
+            $reason,
+        ));
+    }
+
+    /**
+     * A shared cache may store a response unless told otherwise. `private`
+     * with field names only covers those fields, so it does not count.
+     */
+    private static function allowsSharedCaching(string $cacheControl): bool
+    {
+        $directives = \array_map(trim(...), \explode(',', \strtolower($cacheControl)));
+
+        return !\in_array('private', $directives, true) && !\in_array('no-store', $directives, true);
+    }
+
+    /**
+     * @param list<string> $headers
+     */
+    private static function sendsSharedCacheControl(array $headers): bool
+    {
+        foreach ($headers as $header) {
+            if (\stripos($header, 'cache-control:') === 0 && self::allowsSharedCaching(\substr($header, 14))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param list<string> $headers
+     */
+    private static function hasHeader(array $headers, string $name): bool
+    {
+        foreach ($headers as $header) {
+            if (\stripos($header, $name . ':') === 0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

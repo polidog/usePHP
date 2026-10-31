@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Tests\Component;
 
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\Component;
@@ -183,6 +184,43 @@ class DeferAttributeTest extends TestCase
         self::assertStringContainsString('<header>static</header>', $html);
         // The Cache-Control on the registration must travel into the response.
         self::assertContains('Cache-Control: private, no-store', $headers);
+    }
+
+    #[RunInSeparateProcess]
+    public function testAPublicEndpointWithoutASessionStaysPublic(): void
+    {
+        self::assertSame(['Cache-Control: public, s-maxage=60'], $this->headersOfPublicEndpoint());
+    }
+
+    #[RunInSeparateProcess]
+    public function testAPublicEndpointWithASessionEndsUpPrivate(): void
+    {
+        ini_set('error_log', '/dev/null');
+        @session_start();
+        self::assertSame(PHP_SESSION_ACTIVE, session_status());
+
+        self::assertSame(
+            ['Cache-Control: public, s-maxage=60', 'Cache-Control: private, no-store'],
+            $this->headersOfPublicEndpoint(),
+        );
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function headersOfPublicEndpoint(): array
+    {
+        $app = new UsePHP();
+        $app->registerComponent('Announcement', static fn(): Element => H::p(children: 'static'));
+        $app->registerDeferred('announcement', 'Announcement', 'public, s-maxage=60');
+
+        $headers = [];
+        $app->withHeaderEmitter(function (string $header) use (&$headers): void {
+            $headers[] = $header;
+        });
+        $app->handleDeferred(new RequestContext(method: 'GET', path: '/_defer/announcement'));
+
+        return $headers;
     }
 
     public function testPsxBridgeEmitsPlaceholderOnPageSide(): void

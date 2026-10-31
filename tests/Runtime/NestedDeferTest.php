@@ -110,7 +110,8 @@ final class NestedDeferTest extends TestCase
         self::assertStringNotContainsString('inner:alice', $html, 'session-bound content leaked into the public fragment');
         self::assertStringContainsString('data-usephp-defer-url="/_defer/inner"', $html);
         self::assertStringContainsString('loading-inner', $html);
-        self::assertSame(['Cache-Control: public, s-maxage=60'], $this->headers);
+        // The endpoint's own policy applies, then gives way to the session setUp() started (#109).
+        self::assertSame(['Cache-Control: public, s-maxage=60', 'Cache-Control: private, no-store'], $this->headers);
     }
 
     public function testNestedDeferHydratesThroughItsOwnEndpointAndCachePolicy(): void
@@ -183,7 +184,8 @@ final class NestedDeferTest extends TestCase
         self::assertStringContainsString('class-outer', $html);
         self::assertStringNotContainsString('secret-inner', $html);
         self::assertStringContainsString('data-usephp-defer-url="/_defer/class-inner"', $html);
-        self::assertSame(['Cache-Control: public, s-maxage=60'], $this->headers);
+        // The endpoint's own policy applies, then gives way to the session setUp() started (#109).
+        self::assertSame(['Cache-Control: public, s-maxage=60', 'Cache-Control: private, no-store'], $this->headers);
     }
 
     public function testTargetRendersWhenRegisteredUnderDifferentNameThanItsDefer(): void
