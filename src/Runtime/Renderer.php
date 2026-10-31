@@ -517,7 +517,8 @@ final class Renderer
             // Block dangerous URL schemes in URL-context attributes. React
             // does this in v16.9+; we adopt the same default so a stringly
             // typed user input doesn't become a one-liner XSS vector.
-            if (isset(self::URL_ATTRIBUTES[$attrName]) && self::isDangerousUrl($stringValue)) {
+            // HTML attribute names are case-insensitive, so `HREF` counts too.
+            if (isset(self::URL_ATTRIBUTES[strtolower($attrName)]) && self::isDangerousUrl($stringValue)) {
                 continue;
             }
 
@@ -573,15 +574,16 @@ final class Renderer
 
     /**
      * Return true if $value is a URL that we refuse to emit into URL-context
-     * attributes (href/src/action/...). Matches the leading-whitespace and
-     * leading-control-character tolerance that browsers apply when parsing
-     * URLs, so an attacker cannot slip `\tjavascript:` past us.
+     * attributes (href/src/action/...). Applies the same preprocessing as the
+     * WHATWG URL parser, so an attacker cannot slip `\tjavascript:` or
+     * `java\tscript:` past us. The check only decides whether to drop the
+     * attribute; a value that passes is emitted unchanged.
      */
     private static function isDangerousUrl(string $value): bool
     {
-        // Strip leading whitespace + ASCII control bytes the way browsers do
-        // when resolving a URL. \0..\x20 covers TAB, LF, CR, NUL etc.
-        $trimmed = ltrim($value, "\x00..\x20");
+        // Browsers remove TAB, LF and CR from anywhere in a URL, then strip
+        // leading C0 controls and spaces.
+        $trimmed = ltrim(str_replace(["\t", "\r", "\n"], '', $value), "\x00..\x20");
         if ($trimmed === '') {
             return false;
         }
