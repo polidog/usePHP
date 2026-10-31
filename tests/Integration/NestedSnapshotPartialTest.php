@@ -275,12 +275,12 @@ final class NestedSnapshotPartialTest extends SnapshotInstancesServerTestCase
         $html = $this->http($base . '/nested')['body'];
 
         $response = $this->press($base, '/nested', $html, 'parent', null, self::PARTIAL, [
-            '_usephp_snapshots' => [new SnapshotSerializer(self::SECRET_VALUE)->serialize(new Snapshot('Nowhere', '0', [99]))],
+            '_usephp_snapshots' => [new SnapshotSerializer(self::SECRET_VALUE)->serialize(new Snapshot('Nowhere', '0', ['inert-sentinel']))],
         ]);
 
         self::assertSame(200, $response['status'], $response['body']);
         self::assertStringContainsString('parent=1', $response['body']);
-        self::assertStringNotContainsString('99', preg_replace('/(value|data-usephp-snapshot)="[^"]*"/', '', $response['body']) ?? '');
+        self::assertStringNotContainsString('inert-sentinel', preg_replace('/(value|data-usephp-snapshot)="[^"]*"/', '', $response['body']) ?? '');
     }
 
     public function testOnlySoManyCarriedSnapshotsAreRead(): void
