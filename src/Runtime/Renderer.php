@@ -9,6 +9,8 @@ use Polidog\UsePhp\Storage\SnapshotPersist;
 use Polidog\UsePhp\Storage\StorageType;
 use Polidog\UsePhp\UsePHP;
 
+use function Polidog\UsePhp\Html\resolveRenderables;
+
 /**
  * Renders Element tree to HTML string.
  * Supports partial updates with minimal JavaScript.
@@ -620,9 +622,11 @@ final class Renderer
     }
 
     /**
-     * Render children elements.
+     * Render children, flattening nested arrays. null and booleans render
+     * nothing, as in React, so `$cond ? <x/> : null` stays convenient. Any
+     * other type throws: dropping it would hide the bug.
      *
-     * @param array<Element|string|int|float> $children
+     * @param array<mixed> $children
      */
     private function renderChildren(array $children): string
     {
@@ -631,14 +635,31 @@ final class Renderer
         foreach ($children as $child) {
             if ($child instanceof Element) {
                 $html .= $this->renderElement($child);
-            } elseif (is_string($child)) {
-                $html .= self::escape($child);
-            } elseif (is_numeric($child)) {
+            } elseif (is_array($child)) {
+                $html .= $this->renderChildren($child);
+            } elseif ($child instanceof Renderable) {
+                $html .= $this->renderChildren(resolveRenderables([$child]));
+            } elseif ($child === null || is_bool($child)) {
+                continue;
+            } elseif (is_string($child) || $child instanceof \Stringable) {
+                $html .= self::escape((string) $child);
+            } elseif (is_int($child) || is_float($child)) {
                 $html .= (string) $child;
+            } else {
+                throw self::unrenderableChild($child);
             }
         }
 
         return $html;
+    }
+
+    private static function unrenderableChild(mixed $child): \RuntimeException
+    {
+        return new \RuntimeException(sprintf(
+            'Cannot render a child of type %s. Children must be an Element, Renderable, '
+            . 'string, number, Stringable, null, bool, or an array of those.',
+            get_debug_type($child),
+        ));
     }
 
     /**

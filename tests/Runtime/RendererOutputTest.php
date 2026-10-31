@@ -9,6 +9,7 @@ use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\Element;
+use Polidog\UsePhp\Runtime\Renderable;
 use Polidog\UsePhp\Runtime\Renderer;
 use Polidog\UsePhp\Runtime\Snapshot;
 use Polidog\UsePhp\Snapshot\SnapshotSerializer;
@@ -126,5 +127,88 @@ class RendererOutputTest extends TestCase
         $restored = $serializer->deserialize($json);
 
         self::assertSame([0 => "\u{FFFD}1"], $restored->state);
+    }
+
+    public function testNestedArrayChildrenAreFlattened(): void
+    {
+        self::assertSame('<p>nest:ab</p>', $this->render(H::p(children: ['nest:', ['a', ['b']]])));
+    }
+
+    public function testMappedChildrenKeepTheirPositionBetweenSiblings(): void
+    {
+        $items = array_map(fn(string $x): Element => H::li(children: $x), ['a', 'b']);
+
+        self::assertSame(
+            '<ul><li>first</li><li>a</li><li>b</li><li>last</li></ul>',
+            $this->render(H::ul(children: [H::li(children: 'first'), $items, H::li(children: 'last')])),
+        );
+    }
+
+    public function testNestedArraysAreRenderedWhenElementIsBuiltDirectly(): void
+    {
+        self::assertSame(
+            '<p>a<b>c</b>1</p>',
+            $this->render(new Element('p', [], [['a', [new Element('b', [], ['c'])]], 1])),
+        );
+    }
+
+    public function testRenderablesInNestedArraysAreResolved(): void
+    {
+        $renderable = new class implements Renderable {
+            public function render(): Element
+            {
+                return H::b(children: 'r');
+            }
+        };
+
+        self::assertSame('<p>a<b>r</b></p>', $this->render(H::p(children: ['a', [$renderable]])));
+        self::assertSame('<p><b>r</b></p>', $this->render(new Element('p', [], [$renderable])));
+    }
+
+    public function testFunctionComponentsInNestedArraysAreResolved(): void
+    {
+        $component = fn(array $props): Element => H::b(children: 'fc');
+
+        self::assertSame(
+            '<p>a<b>fc</b></p>',
+            $this->render(H::p(children: ['a', [H::component($component)]])),
+        );
+    }
+
+    public function testStringableChildIsRenderedAsEscapedText(): void
+    {
+        $stringable = new class implements \Stringable {
+            public function __toString(): string
+            {
+                return '<x>';
+            }
+        };
+
+        self::assertSame('<p>&lt;x&gt;</p>', $this->render(H::p(children: ['', $stringable])));
+    }
+
+    public function testNullAndBooleanChildrenRenderNothing(): void
+    {
+        self::assertSame('<p>a0</p>', $this->render(H::p(children: [null, true, 'a', false, [null], 0])));
+    }
+
+    /**
+     * @return iterable<string, array{mixed, string}>
+     */
+    public static function unrenderableChildProvider(): iterable
+    {
+        yield 'plain object' => [new \stdClass(), 'stdClass'];
+        yield 'date' => [new \DateTimeImmutable('2026-01-01'), 'DateTimeImmutable'];
+        yield 'closure' => [fn() => 'x', 'Closure'];
+        yield 'nested object' => [[['a', new \stdClass()]], 'stdClass'];
+    }
+
+    #[DataProvider('unrenderableChildProvider')]
+    public function testUnrenderableChildThrows(mixed $child, string $typeInMessage): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage($typeInMessage);
+
+        $this->render(new Element('p', [], [$child]));
     }
 }
