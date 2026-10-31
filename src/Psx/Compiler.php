@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Psx;
 
+use PhpParser\Error;
+use PhpParser\ParserFactory;
+
 /**
  * PSX (TSX-like syntax) compiler.
  *
@@ -17,8 +20,12 @@ namespace Polidog\UsePhp\Psx;
  * 3. PsxParser is run on each captured PSX region using that NamespaceContext
  *    so component tag names (PascalCase) resolve to FQCNs via PHP's `use`
  *    statements.
- * 4. The lowered PHP for each region is substituted back into the
+ * 4. TagOperandLowering rewrites `&&` / `||` that have a tag on the right, while
+ *    the source still parses.
+ * 5. The lowered PHP for each region is substituted back into the
  *    pre-processed source, replacing the placeholder.
+ * 6. The result of a whole-file compile is parsed, so that invalid output is a
+ *    compile error rather than a failure when the file is first loaded.
  *
  * Side-stream: per-tag line preservation lives inside PsxParser (each child
  * is prefixed with newlines matching the source between siblings) so the
@@ -42,11 +49,32 @@ final class Compiler implements CompilerInterface
     ) {}
 
     /**
-     * @param NamespaceContext|null $context Optional pre-existing context (used when
-     *        recursively compiling brace expressions inside an outer .psx file so
-     *        namespace + use resolution is preserved).
+     * Compiles a whole file. The result is checked to be valid PHP.
+     *
+     * @param NamespaceContext|null $context Optional pre-existing context; derived
+     *        from the source when omitted.
      */
     public function compile(string $source, ?NamespaceContext $context = null): string
+    {
+        $output = $this->lower($source, $context, isExpression: false);
+        $this->assertValidPhp($output, $source);
+        return $output;
+    }
+
+    /**
+     * Compiles the body of a `{...}` brace expression. It is not validated on its
+     * own: the file it belongs to is, once this result is part of it.
+     *
+     * @param NamespaceContext|null $context The outer file's context, so that
+     *        namespace + use resolution is preserved.
+     */
+    public function compileExpression(string $expression, ?NamespaceContext $context = null): string
+    {
+        $prefix = '<?php ';
+        return \substr($this->lower($prefix . $expression, $context, isExpression: true), \strlen($prefix));
+    }
+
+    private function lower(string $source, ?NamespaceContext $context, bool $isExpression): string
     {
         $this->lastReferences = [];
 
@@ -56,13 +84,21 @@ final class Compiler implements CompilerInterface
         // brace expression), otherwise derive it from the pre-processed source.
         $namespaceContext = $context ?? NamespaceContext::fromSource($processed);
 
-        $output = $processed;
+        $placeholders = [];
+        foreach (\array_keys($regions) as $idx) {
+            $placeholders[] = $this->preProcessor->placeholder($idx);
+        }
+
+        $output = $regions === []
+            ? $processed
+            : new TagOperandLowering()->lower($processed, $placeholders, $isExpression);
+
         foreach ($regions as $idx => $region) {
             $parser = $this->parserFactory->create($region['source'], 0, $namespaceContext);
             $result = $parser->parseElement();
             $lowered = $this->padToOriginalLineCount($region['source'], $result['php']);
             $output = \str_replace(
-                $this->preProcessor->placeholder($idx),
+                $placeholders[$idx],
                 $lowered,
                 $output,
             );
@@ -70,6 +106,24 @@ final class Compiler implements CompilerInterface
 
         $this->lastReferences = $namespaceContext->getResolvedReferences();
         return $output;
+    }
+
+    /**
+     * Line numbers in the output match the .psx source, so a parse error can
+     * point at the line the author wrote.
+     */
+    private function assertValidPhp(string $output, string $source): void
+    {
+        try {
+            new ParserFactory()->createForNewestSupportedVersion()->parse($output);
+        } catch (Error $e) {
+            $line = $e->getStartLine();
+            $sourceLine = \explode("\n", $source)[$line - 1] ?? '';
+            throw new \RuntimeException(
+                "PSX compile error at line $line: generated PHP is invalid: {$e->getRawMessage()}\n    $sourceLine",
+                previous: $e,
+            );
+        }
     }
 
     /**
