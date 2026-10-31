@@ -735,10 +735,14 @@ final class UsePHP
      * Return (and lazily generate) the per-session CSRF token used to
      * cross-check the hidden form field in {@see doHandleAction()}.
      *
-     * When no session is active the token is empty — `verifyCsrf()` then
-     * falls back to Origin/Referer alone, which is still sufficient against
-     * cross-site form submissions from a modern browser. Sessions add a
-     * second, state-bound layer.
+     * When no session is active the token is empty. A visitor with no session
+     * at all has no session state to attack, and `verifyCsrf()` falls back to
+     * Origin/Referer for them; a visitor who holds a session cookie gets the
+     * token layer as well, see {@see verifyCsrf()}.
+     *
+     * The session may start while a page renders (`SessionStorage` starts it
+     * on first use), so renderers take this method as a closure and read the
+     * token when they emit each form, not before rendering.
      */
     public function getCsrfToken(): string
     {
@@ -772,13 +776,43 @@ final class UsePHP
      * a random per-session key; the active session id is mixed into the
      * payload so a form rendered in one session cannot be replayed in another.
      *
-     * Returns null when no key is available (no secret and no active
-     * session) — such an action cannot be verified later and will be
-     * rejected by {@see doHandleAction()}.
+     * The form must be signed under the session its POST will run in, so a
+     * returning visitor's session is resumed here, the same way
+     * {@see doHandleAction()} resumes it. Without a secret the per-session
+     * key is the only key there is, so the session is started if needed.
+     *
+     * Returns null when no key is available (no secret and the session cannot
+     * start) — such an action cannot be verified later and will be rejected
+     * by {@see doHandleAction()}.
      *
      * @internal Exposed for tests and custom form rendering; not stable API.
      */
     public function signAction(string $componentId, string $actionJson): ?string
+    {
+        $this->resumeSessionFromCookie();
+        if ($this->snapshotSerializer === null) {
+            $this->startSessionIfPossible();
+        }
+
+        return $this->computeActionSignature($componentId, $actionJson);
+    }
+
+    /**
+     * Verify a signature produced by {@see signAction()}.
+     *
+     * Never starts a session: a POST without a session cookie must stay
+     * sessionless, and it must not be able to mint a key to verify against.
+     *
+     * @internal
+     */
+    public function verifyActionSignature(string $componentId, string $actionJson, string $signature): bool
+    {
+        $expected = $this->computeActionSignature($componentId, $actionJson);
+
+        return $expected !== null && hash_equals($expected, $signature);
+    }
+
+    private function computeActionSignature(string $componentId, string $actionJson): ?string
     {
         $payload = $this->actionSigningPayload($componentId, $actionJson);
 
@@ -799,15 +833,43 @@ final class UsePHP
     }
 
     /**
-     * Verify a signature produced by {@see signAction()}.
-     *
-     * @internal
+     * Start the PHP session unless that is impossible. Returns whether a
+     * session is active afterwards.
      */
-    public function verifyActionSignature(string $componentId, string $actionJson, string $signature): bool
+    private function startSessionIfPossible(): bool
     {
-        $expected = $this->signAction($componentId, $actionJson);
+        if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
+            // A malformed cookie makes session_start() warn and fail. That is
+            // client input, not an application error, and the caller decides.
+            @session_start();
+        }
 
-        return $expected !== null && hash_equals($expected, $signature);
+        return session_status() === PHP_SESSION_ACTIVE;
+    }
+
+    /**
+     * Resume the visitor's session if the request carries its cookie.
+     *
+     * Rendering a form and handling its POST both call this, so they agree on
+     * whether a session is active. A request without the cookie stays
+     * sessionless, which is what keeps Snapshot pages free of `Set-Cookie`.
+     */
+    private function resumeSessionFromCookie(): void
+    {
+        if ($this->hasSessionCookie()) {
+            $this->startSessionIfPossible();
+        }
+    }
+
+    private function hasSessionCookie(): bool
+    {
+        $name = session_name();
+        if ($name === false) {
+            return false;
+        }
+        $cookie = $_COOKIE[$name] ?? null;
+
+        return is_string($cookie) && $cookie !== '';
     }
 
     private function actionSigningPayload(string $componentId, string $actionJson): string
@@ -853,9 +915,12 @@ final class UsePHP
      *
      *  1. Origin/Referer same-origin check — primary defense, no state
      *     required, works for both Session and Snapshot storage.
-     *  2. Session-bound synchronizer token — additional defense, only
-     *     enforced when a session is active (so the snapshot-only mode
-     *     doesn't need a session just to submit a form).
+     *  2. Session-bound synchronizer token — enforced whenever the visitor
+     *     has a session. A request with no session cookie has no session
+     *     state to attack, so the snapshot-only mode doesn't need a session
+     *     just to submit a form. A request with the cookie whose session
+     *     could not be started (output already sent, malformed id) fails
+     *     closed: skipping the token there would let a client opt out of it.
      *
      * The check is intentionally strict on the source-origin side: a
      * request with neither Origin nor Referer is rejected, because modern
@@ -881,7 +946,11 @@ final class UsePHP
             return 'CSRF check failed: source origin does not match this host';
         }
 
-        // Session-bound token layer — only enforced when a session is active.
+        if (session_status() === PHP_SESSION_NONE && $this->hasSessionCookie()) {
+            return 'CSRF check failed: request has a session cookie but the session could not be started';
+        }
+
+        // Session-bound token layer — enforced for every visitor with a session.
         if (session_status() === PHP_SESSION_ACTIVE) {
             $sessionToken = $_SESSION['_usephp_csrf'] ?? null;
             $postToken = $_POST['_usephp_csrf'] ?? null;
@@ -1133,7 +1202,9 @@ final class UsePHP
      */
     private function restoreSnapshotFromSession(string $sessionKey, string $behavior): void
     {
-        if (session_status() !== PHP_SESSION_ACTIVE) {
+        // These routes keep their state in the session by declaration, so the
+        // app does not have to call session_start() itself.
+        if (!$this->startSessionIfPossible()) {
             return;
         }
         $stored = $_SESSION[$sessionKey] ?? null;
@@ -1457,6 +1528,12 @@ final class UsePHP
      */
     private function doHandleAction(): string
     {
+        // The CSRF token and the action signature are both bound to the
+        // session, so it has to be running before either is checked. Only the
+        // visitor's own cookie brings it up; a POST without one stays
+        // sessionless and is checked as such.
+        $this->resumeSessionFromCookie();
+
         $csrfReason = $this->verifyCsrf();
         if ($csrfReason !== null) {
             http_response_code(403);
@@ -1719,7 +1796,7 @@ final class UsePHP
             $this->tryGetSnapshotSerializer(),
             StorageType::Snapshot,
             $this->deferPrefix,
-            $this->getCsrfToken(),
+            $this->getCsrfToken(...),
             actionSigner: $this->actionSigner(),
         );
 
@@ -1812,7 +1889,7 @@ final class UsePHP
                 '_root_',
                 $this->tryGetSnapshotSerializer(),
                 deferPrefix: $this->deferPrefix,
-                csrfToken: $this->getCsrfToken(),
+                csrfToken: $this->getCsrfToken(...),
                 actionSigner: $this->actionSigner(),
             );
             return $renderer->renderElement($element);
@@ -1852,7 +1929,7 @@ final class UsePHP
                 $this->tryGetSnapshotSerializer(),
                 $storageType,
                 $this->deferPrefix,
-                $this->getCsrfToken(),
+                $this->getCsrfToken(...),
                 $this->registry->getPersist($componentName),
                 $this->actionSigner(),
             );
@@ -1887,7 +1964,7 @@ final class UsePHP
             $this->tryGetSnapshotSerializer(),
             $storageType,
             $this->deferPrefix,
-            $this->getCsrfToken(),
+            $this->getCsrfToken(...),
             actionSigner: $this->actionSigner(),
         );
 
