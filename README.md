@@ -982,6 +982,23 @@ What happens at runtime:
 4. The placeholder is replaced in place with the real component.
 5. Because each deferred endpoint has its own URL, each can carry its own cache policy — `public, s-maxage=60` for a shared announcement bar, `private, no-store` for a session-coupled `UserHeader`, etc.
 
+### Shared caches and sessions
+
+A policy that lets shared caches store the response (anything without `private` or `no-store`, such as `public, s-maxage=60`) is only kept for a response that doesn't belong to one visitor. After rendering, the endpoint checks the session and the headers about to go out. If a session is active or was read during the request, or the response sets any cookie, it sends `Cache-Control: private, no-store` instead and writes a warning to `error_log`.
+
+That happens when:
+
+- the fragment uses Session storage, or has a form and no snapshot secret, so usePHP starts a session to sign it,
+- the request carries the session cookie and the fragment has a form, because the form is signed for that session,
+- the app already called `session_start()` before usePHP ran, even if it closed the session again,
+- the component calls `setcookie()`, or `session.cache_limiter = public` turned the policy public.
+
+So a front controller that starts the session on every request turns off shared caching for its defer endpoints. Skip `session_start()` on the defer prefix to keep it.
+
+A session cookie alone changes nothing: until something starts the session its data isn't loaded, so a fragment that doesn't use it stays public for everyone. usePHP can't see a component reading `$_COOKIE` or other request headers directly. Such a component has to set `private` itself.
+
+Keep action buttons out of publicly cached fragments too. With a snapshot secret, a sessionless visitor gets a form signed for no session, which can be cached. A visitor who has a session and receives that cached copy gets `403` when submitting it, because the signature doesn't match their session.
+
 ### Passing data from the parent
 
 Any prop besides `fallback` is forwarded as a query parameter on the deferred
