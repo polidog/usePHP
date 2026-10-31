@@ -1,0 +1,5 @@
+# JavaScript tooling for the browser tests stays out of the Composer package.
+/tests/browser export-ignore
+/package.json export-ignore
+/package-lock.json export-ignore
+/playwright.config.ts export-ignore

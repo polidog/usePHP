@@ -1,0 +1,11 @@
+{
+  "name": "usephp-browser-tests",
+  "private": true,
+  "description": "Browser tests for public/usephp.js. Development only; not part of the Composer package.",
+  "scripts": {
+    "test:browser": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1"
+  }
+}

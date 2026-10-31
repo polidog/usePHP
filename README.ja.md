@@ -1381,6 +1381,19 @@ props の *キー* と `Element::$type` はエスケープされずにそのま�
 php -S localhost:8000 examples/index.php
 ```
 
+`public/usephp.js` のブラウザテストは `tests/browser/` にあり、PHP に加えて Node.js と Chromium が必要です。`php -S` はテストが空きポートで起動します。これらは開発専用で、Composer パッケージには含まれません。
+
+```bash
+npm ci
+npx playwright install chromium
+
+# ブラウザテスト実行
+npx playwright test
+
+# 手元の Chromium を使う
+USEPHP_CHROMIUM_PATH=/usr/bin/chromium npx playwright test
+```
+
 ## ライセンス
 
 MIT
