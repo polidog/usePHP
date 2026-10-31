@@ -250,4 +250,162 @@ final class ActionFlowRoutesTest extends ActionFlowServerTestCase
 
         self::assertSame(400, $response['status'], $response['body']);
     }
+
+    // ------------------------------------------------------------------
+    // #78: fc() + Session updates in place.
+    // ------------------------------------------------------------------
+
+    public function testSessionFcAnswersWithAPartial(): void
+    {
+        $base = $this->startServer();
+        $page = $this->http($base . '/session-fc');
+        $cookie = $page['cookie'];
+        $fields = self::firstFormFields($page['body']);
+
+        foreach (['count=1', 'count=2'] as $expected) {
+            $response = $this->http($base . '/session-fc', $fields, ['Origin' => $base] + self::PARTIAL, $cookie);
+
+            self::assertSame(200, $response['status'], $response['body']);
+            self::assertNull(self::location($response));
+            self::assertStringContainsString($expected, $response['body']);
+            // The wrapper stays on the page; the partial is only its contents.
+            self::assertStringNotContainsString('data-usephp=', $response['body']);
+            $fields = self::firstFormFields($response['body']);
+        }
+
+        self::assertStringContainsString('count=2', $this->http($base . '/session-fc', cookie: $cookie)['body']);
+    }
+
+    public function testSessionFcWithoutJavaScriptStillRedirects(): void
+    {
+        $base = $this->startServer();
+        $page = $this->http($base . '/session-fc');
+
+        $response = $this->http(
+            $base . '/session-fc',
+            self::firstFormFields($page['body']),
+            ['Origin' => $base],
+            $page['cookie'],
+        );
+
+        self::assertSame(303, $response['status'], $response['body']);
+    }
+
+    public function testSessionFcPartialContainsOnlyTheTargetInstance(): void
+    {
+        $base = $this->startServer();
+        $page = $this->http($base . '/two-session-fc');
+
+        $response = $this->http(
+            $base . '/two-session-fc',
+            self::firstFormFields($page['body']),
+            ['Origin' => $base] + self::PARTIAL,
+            $page['cookie'],
+        );
+
+        self::assertSame(200, $response['status'], $response['body']);
+        self::assertStringContainsString('count=1', $response['body']);
+        self::assertStringNotContainsString('count=0', $response['body']);
+        self::assertStringNotContainsString('page-chrome', $response['body']);
+    }
+
+    public function testSessionFcPartialKeepsTheRouteParams(): void
+    {
+        $base = $this->startServer();
+        $page = $this->http($base . '/tasks-fc/7');
+
+        $response = $this->http(
+            $base . '/tasks-fc/7',
+            self::firstFormFields($page['body']),
+            ['Origin' => $base] + self::PARTIAL,
+            $page['cookie'],
+        );
+
+        self::assertStringContainsString('task=7 likes=1', $response['body']);
+    }
+
+    public function testSessionFcOnAPersistentRouteAnswersWithAPartial(): void
+    {
+        // Session state does not travel through the redirect, so the route's
+        // snapshot behavior has nothing to do for it.
+        $base = $this->startServer(self::SECRET);
+        $path = '/session-fc-on-persistent-route';
+        $page = $this->http($base . $path);
+
+        $response = $this->http(
+            $base . $path,
+            self::firstFormFields($page['body']),
+            ['Origin' => $base] + self::PARTIAL,
+            $page['cookie'],
+        );
+
+        self::assertSame(200, $response['status'], $response['body']);
+        self::assertStringContainsString('count=1', $response['body']);
+    }
+
+    /**
+     * @return iterable<string, array{0: string}>
+     */
+    public static function snapshotFcRouteProvider(): iterable
+    {
+        yield 'sessionSnapshot()' => ['/snapshot-fc-on-session-route'];
+        yield 'persistentSnapshot()' => ['/snapshot-fc-on-persistent-route'];
+        yield 'sharedSnapshot()' => ['/snapshot-fc-on-shared-route'];
+    }
+
+    #[DataProvider('snapshotFcRouteProvider')]
+    public function testSnapshotFcOnASnapshotRouteKeepsTheRedirect(string $path): void
+    {
+        $base = $this->startServer(self::SECRET);
+        $page = $this->http($base . $path);
+        $cookie = $page['cookie'];
+
+        $response = $this->http(
+            $base . $path,
+            self::firstFormFields($page['body']),
+            ['Origin' => $base] + self::PARTIAL,
+            $cookie,
+        );
+
+        self::assertSame(303, $response['status'], $response['body']);
+        $target = self::location($response);
+        self::assertIsString($target);
+        self::assertStringContainsString('count=1', $this->http($base . $target, cookie: $cookie)['body']);
+    }
+
+    public function testSnapshotFcOnAPlainRouteStillAnswersWithAPartial(): void
+    {
+        $base = $this->startServer(self::SECRET);
+        $page = $this->http($base . '/snapshot-fc');
+
+        $response = $this->http(
+            $base . '/snapshot-fc',
+            self::firstFormFields($page['body']),
+            ['Origin' => $base] + self::PARTIAL,
+        );
+
+        self::assertSame(200, $response['status'], $response['body']);
+        self::assertStringContainsString('count=1', $response['body']);
+    }
+
+    public function testSessionFcOnAHandlerThatCannotBeReplayedFallsBackToTheRedirect(): void
+    {
+        $base = $this->startServer();
+        $page = $this->http($base . '/session-fc-printed');
+        $cookie = $page['cookie'];
+
+        $response = $this->http(
+            $base . '/session-fc-printed',
+            self::firstFormFields($page['body']),
+            ['Origin' => $base] + self::PARTIAL,
+            $cookie,
+        );
+
+        // What the handler printed while being replayed must not block the
+        // redirect or end up in the response.
+        self::assertSame(303, $response['status'], $response['body']);
+        self::assertSame('', $response['body']);
+        self::assertSame('/session-fc-printed', self::location($response));
+        self::assertStringContainsString('count=1', $this->http($base . '/session-fc-printed', cookie: $cookie)['body']);
+    }
 }

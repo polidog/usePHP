@@ -1699,11 +1699,9 @@ final class UsePHP
             }
 
             // fc() components are not in the registry, so re-render them by
-            // replaying the page route. Without this, a Snapshot-storage
-            // function component on a plain (Isolated) route would fall
-            // through to the redirect below and lose the state it just set.
-            if (!$isRegisteredComponent && $storageType === StorageType::Snapshot) {
-                $partial = $this->renderFunctionComponentPartial($instanceId);
+            // replaying the page route.
+            if (!$isRegisteredComponent && $storageType !== StorageType::Memory) {
+                $partial = $this->renderFunctionComponentPartial($instanceId, $storageType);
                 if ($partial !== null) {
                     return $partial;
                 }
@@ -1829,22 +1827,24 @@ final class UsePHP
      * (with the action applied) the component re-renders with the new
      * state. The instance's wrapper is then picked out of that tree.
      *
-     * Only Isolated routes take this path. It is the one combination where
-     * the PRG redirect would drop the state outright — nothing carries a
-     * snapshot across the redirect — so a partial response is the only way
-     * the action can take effect. Persistent/Session/Shared routes keep
-     * redirecting: the redirect is what writes the snapshot into the URL or
-     * the session, and answering with a partial would leave those stale.
+     * Session state already lives server-side, so the same replay gives it an
+     * in-place update instead of a full page navigation. Snapshot state on a
+     * Persistent/Session/Shared route keeps redirecting: the redirect is what
+     * writes the snapshot into the URL or the session, and answering with a
+     * partial would leave those stale (see snapshotRouteRequiresRedirect()).
      *
      * Returns null when the page cannot be replayed (no router match, a
-     * non-Isolated route, a class-component handler, a non-Element result,
-     * or the instance is missing from the tree); the caller then falls
-     * back to the PRG redirect.
+     * class-component handler, a non-Element result, or the instance is
+     * missing from the tree); the caller then falls back to the PRG redirect.
      */
-    private function renderFunctionComponentPartial(string $instanceId): ?string
+    private function renderFunctionComponentPartial(string $instanceId, StorageType $storageType): ?string
     {
+        if ($this->snapshotRouteRequiresRedirect($storageType)) {
+            return null;
+        }
+
         [$match, $pageRequest] = $this->resolveActionPageMatch();
-        if ($match === null || $match->snapshotBehavior !== SnapshotBehavior::Isolated) {
+        if ($match === null) {
             return null;
         }
 
@@ -1856,7 +1856,14 @@ final class UsePHP
         // Fresh render pass so auto-generated instance keys (e.g. "#0")
         // line up with the ones the original GET produced.
         RenderContext::beginRender();
-        $result = $handler($match->params, $pageRequest);
+        // The handler runs for its Element tree only. Anything it prints would
+        // corrupt the partial, or block the fallback redirect's headers.
+        ob_start();
+        try {
+            $result = $handler($match->params, $pageRequest);
+        } finally {
+            ob_end_clean();
+        }
         if (!$result instanceof Element) {
             return null;
         }
@@ -1869,15 +1876,15 @@ final class UsePHP
         $renderer = new Renderer(
             $instanceId,
             $this->tryGetSnapshotSerializer(),
-            StorageType::Snapshot,
+            $storageType,
             $this->deferPrefix,
             $this->getCsrfToken(...),
             actionSigner: $this->actionSigner(),
         );
 
-        // renderPartial() emits the wrapper's contents plus the refreshed
-        // snapshot as a data-usephp-snapshot-update field, which usephp.js
-        // copies back onto the wrapper for the next round trip.
+        // renderPartial() emits the wrapper's contents. For Snapshot storage it
+        // adds the refreshed snapshot as a data-usephp-snapshot-update field,
+        // which usephp.js copies back onto the wrapper for the next round trip.
         return $renderer->renderPartial(
             static fn(): Element => new Element('Fragment', [], $wrapper->children)
         );

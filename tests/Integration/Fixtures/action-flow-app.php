@@ -111,4 +111,30 @@ $router->get('/persistent-route', SnapshotClassCounter::class)->persistentSnapsh
 $router->get('/shared-route', SnapshotClassCounter::class)->sharedSnapshot('fixture');
 $router->get('/session-counter-on-persistent-route', SessionClassCounter::class)->persistentSnapshot();
 
+$router->get('/tasks-fc/{id:\d+}', static fn(): Element => fc(static function (array $props): Element {
+    $id = useRouter()['params']['id'] ?? '(none)';
+    [$likes, $setLikes] = useState(0);
+
+    return H::button(onClick: fn() => $setLikes($likes + 1), children: "task={$id} likes={$likes}");
+}, 'task-fc')([]));
+$router->get('/two-session-fc', static fn(): Element => H::div(children: [
+    H::p(children: 'page-chrome'),
+    $counterFc('first', StorageType::Session)([]),
+    $counterFc('second', StorageType::Session)([]),
+]));
+$router->get('/session-fc-on-persistent-route', static fn(): Element => $counterFc('on-persistent', StorageType::Session)([]))
+    ->persistentSnapshot();
+$router->get('/snapshot-fc-on-session-route', static fn(): Element => $counterFc('on-session', StorageType::Snapshot)([]))
+    ->sessionSnapshot();
+$router->get('/snapshot-fc-on-persistent-route', static fn(): Element => $counterFc('on-persistent-snap', StorageType::Snapshot)([]))
+    ->persistentSnapshot();
+$router->get('/snapshot-fc-on-shared-route', static fn(): Element => $counterFc('on-shared', StorageType::Snapshot)([]))
+    ->sharedSnapshot('fixture');
+// A handler that prints its page and returns nothing cannot be replayed.
+$router->get('/session-fc-printed', static function () use ($app, $counterFc): string {
+    echo $app->renderElement($counterFc('printed', StorageType::Session)([]));
+
+    return '';
+});
+
 $app->run();
