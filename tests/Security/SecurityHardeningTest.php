@@ -490,10 +490,8 @@ final class SecurityHardeningTest extends TestCase
         $app = new UsePHP()->setSnapshotSecret('s3cret');
         $app->getRouter()->get('/wizard/1', static fn() => H::div(children: 'step'))->sharedSnapshot('wizard');
 
-        // handleSnapshotRestoration() only reaches the Shared branch when the
-        // request carries a snapshot parameter at all (its value is not used
-        // for Shared — the state comes from $_SESSION). Mirror that here.
-        $request = new RequestContext(method: 'GET', path: '/wizard/1', query: ['_snapshot' => 'x']);
+        // Shared restores from $_SESSION; the request carries no snapshot.
+        $request = new RequestContext(method: 'GET', path: '/wizard/1');
         $match = $app->getRouter()->match($request);
         self::assertNotNull($match);
 
@@ -1291,7 +1289,7 @@ final class SecurityHardeningTest extends TestCase
     /**
      * Render a GET route the way UsePHP::run() would, as its own request.
      */
-    private function renderRoute(UsePHP $app, string $path): string
+    private function renderRoute(UsePHP $app, string $path, bool $restoreSnapshot = false): string
     {
         ComponentState::clearInstances();
         StorageFactory::reset();
@@ -1299,6 +1297,10 @@ final class SecurityHardeningTest extends TestCase
         $request = new RequestContext(method: 'GET', path: $path);
         $match = $app->getRouter()->match($request);
         self::assertNotNull($match);
+
+        if ($restoreSnapshot) {
+            $app->restoreSnapshot($request, $match);
+        }
 
         RenderContext::setApp($app);
         try {
@@ -1309,6 +1311,108 @@ final class SecurityHardeningTest extends TestCase
         self::assertInstanceOf(Element::class, $element);
 
         return $app->renderElement($element);
+    }
+
+    // ------------------------------------------------------------------
+    // #52 / #53: Session and Shared restore from $_SESSION on every GET,
+    // with or without a `?_snapshot=` query parameter.
+    // ------------------------------------------------------------------
+
+    public function testSharedRouteRestoresWithoutAQueryParameter(): void
+    {
+        $app = new UsePHP()->setSnapshotSecret('s3cret');
+        $app->getRouter()->get('/wizard/2', static fn() => H::div(children: 'step'))->sharedSnapshot('wizard');
+
+        $_SESSION['_usephp_shared_wizard'] = new SnapshotSerializer('s3cret')
+            ->withContext(session_id())
+            ->serialize(new Snapshot('Wizard', '0', [0 => 7]));
+
+        $request = new RequestContext(method: 'GET', path: '/wizard/2');
+        $match = $app->getRouter()->match($request);
+        self::assertNotNull($match);
+        $app->restoreSnapshot($request, $match);
+
+        $state = ComponentState::current();
+        self::assertNotNull($state, 'Shared state must restore from $_SESSION without ?_snapshot=');
+        self::assertSame(7, $state->getState(0, null));
+    }
+
+    public function testSessionRouteRestoresStateWrittenByThePrgRedirect(): void
+    {
+        $counter = fc(static function (array $props): Element {
+            [$count, $setCount] = useState($props['initial'] ?? 0);
+
+            return H::div(className: 'counter', children: [
+                H::span(className: 'display', children: "Count: {$count}"),
+                H::button(onClick: static fn() => $setCount($count + 1), children: '+'),
+            ]);
+        }, 'session-counter', StorageType::Snapshot);
+
+        $app = new UsePHP()->setSnapshotSecret('s3cret');
+        $app->withHeaderEmitter(static function (string $header): void {});
+        $app->withExitHandler(static function (): void {});
+        $app->getRouter()->get('/session-counter', static function () use ($counter): Element {
+            RenderContext::beginRender();
+            return $counter(['initial' => 0]);
+        })->sessionSnapshot();
+
+        $page = $this->renderRoute($app, '/session-counter', restoreSnapshot: true);
+        self::assertStringContainsString('Count: 0', $page);
+
+        self::assertSame(1, \preg_match('/data-usephp="([^"]+)"/', $page, $m));
+        $instanceId = \html_entity_decode($m[1], \ENT_QUOTES, 'UTF-8');
+        $instanceEscaped = \preg_quote(\htmlspecialchars($instanceId, \ENT_QUOTES, 'UTF-8'), '/');
+        self::assertSame(1, \preg_match(
+            '/name="_usephp_component" value="' . $instanceEscaped . '" \/>\s*'
+            . '<input type="hidden" name="_usephp_action" value="([^"]*)" \/>\s*'
+            . '<input type="hidden" name="_usephp_action_sig" value="([^"]*)" \/>'
+            . '(?:<input type="hidden" name="_usephp_csrf" value="[^"]*" \/>)?'
+            . '<input type="hidden" name="_usephp_snapshot" value="([^"]*)" \/>/',
+            $page,
+            $fields,
+        ), 'usePHP form fields not found');
+
+        // Full-page submit (no X-UsePHP-Partial): doHandleAction() takes the
+        // PRG path and writes the post-action snapshot into $_SESSION.
+        $savedServer = $_SERVER;
+        $savedPost = $_POST;
+        try {
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            $_SERVER['REQUEST_URI'] = '/session-counter';
+            $_SERVER['HTTP_HOST'] = 'example.test';
+            $_SERVER['HTTP_ORIGIN'] = 'http://example.test';
+            unset($_SERVER['HTTP_X_USEPHP_PARTIAL']);
+            $_POST = [
+                '_usephp_component' => $instanceId,
+                '_usephp_action' => \html_entity_decode($fields[1], \ENT_QUOTES, 'UTF-8'),
+                '_usephp_action_sig' => \html_entity_decode($fields[2], \ENT_QUOTES, 'UTF-8'),
+                '_usephp_snapshot' => \html_entity_decode($fields[3], \ENT_QUOTES, 'UTF-8'),
+                '_usephp_csrf' => $app->getCsrfToken(),
+            ];
+            ComponentState::clearInstances();
+            StorageFactory::reset();
+            http_response_code(200);
+
+            self::assertSame('', $app->handleAction());
+            self::assertSame(303, http_response_code());
+        } finally {
+            $_POST = $savedPost;
+            $_SERVER = $savedServer;
+            http_response_code(200);
+        }
+        self::assertArrayHasKey('_usephp_snapshot', $_SESSION);
+
+        // The redirected GET restores the state from $_SESSION (#52).
+        $after = $this->renderRoute($app, '/session-counter', restoreSnapshot: true);
+        self::assertStringContainsString('Count: 1', $after);
+        self::assertStringNotContainsString('Count: 0', $after);
+
+        // Bytes signed for another session id must not restore.
+        $_SESSION['_usephp_snapshot'] = new SnapshotSerializer('s3cret')
+            ->withContext('other-session')
+            ->serialize(new Snapshot('X', '0', [0 => 99]));
+        $again = $this->renderRoute($app, '/session-counter', restoreSnapshot: true);
+        self::assertStringContainsString('Count: 0', $again);
     }
 
     private function buildAppWithCounter(): UsePHP

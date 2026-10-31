@@ -1073,13 +1073,14 @@ final class UsePHP
         $router = $this->router ?? new NullRouter();
         $snapshotData = $router->extractSnapshot($request);
 
-        if ($snapshotData === null) {
-            return;
-        }
-
         switch ($match->snapshotBehavior) {
             case SnapshotBehavior::Persistent:
-                // Restore snapshot from URL
+                // Restore snapshot from URL. Only this behavior reads the
+                // request-carried value; Session/Shared restore from
+                // $_SESSION and must run whether or not the query has one.
+                if ($snapshotData === null) {
+                    break;
+                }
                 try {
                     $snapshot = $this->getSnapshotSerializer()->deserialize($snapshotData);
                     ComponentState::fromSnapshot($snapshot);
@@ -1099,26 +1100,19 @@ final class UsePHP
                 // one session (an attacker's own) be planted into another
                 // via a crafted link. Ignore it; the log line keeps probes
                 // visible to operators.
-                \error_log(
-                    '[usePHP] Snapshot ignored (behavior=Session): '
-                    . 'request-carried snapshots are not accepted on Session routes'
-                );
+                if ($snapshotData !== null) {
+                    \error_log(
+                        '[usePHP] Snapshot ignored (behavior=Session): '
+                        . 'request-carried snapshots are not accepted on Session routes'
+                    );
+                }
+                $this->restoreSnapshotFromSession('_usephp_snapshot', 'Session');
                 break;
 
             case SnapshotBehavior::Shared:
-                // Restore from session if in same group. The stored snapshot
-                // is verified with the session-bound serializer, so bytes
-                // that were signed for another session id are rejected.
-                if ($match->sharedGroup !== null && session_status() === PHP_SESSION_ACTIVE) {
-                    $sessionKey = '_usephp_shared_' . $match->sharedGroup;
-                    if (isset($_SESSION[$sessionKey])) {
-                        try {
-                            $snapshot = $this->sessionBoundSerializer()->deserialize($_SESSION[$sessionKey]);
-                            ComponentState::fromSnapshot($snapshot);
-                        } catch (SnapshotVerificationException $e) {
-                            $this->logSnapshotRejection('Shared', $e);
-                        }
-                    }
+                // Restore from session if in same group.
+                if ($match->sharedGroup !== null) {
+                    $this->restoreSnapshotFromSession('_usephp_shared_' . $match->sharedGroup, 'Shared');
                 }
                 break;
 
@@ -1126,6 +1120,31 @@ final class UsePHP
             default:
                 // No restoration for isolated pages
                 break;
+        }
+    }
+
+    /**
+     * Restore component state from a snapshot that doHandleAction() stored
+     * in `$_SESSION` on the PRG path (Session and Shared behaviors).
+     *
+     * The stored bytes are verified with the session-bound serializer, so a
+     * snapshot signed for another session id (or by the unbound serializer)
+     * is rejected and logged rather than restored.
+     */
+    private function restoreSnapshotFromSession(string $sessionKey, string $behavior): void
+    {
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            return;
+        }
+        $stored = $_SESSION[$sessionKey] ?? null;
+        if (!is_string($stored) || $stored === '') {
+            return;
+        }
+        try {
+            $snapshot = $this->sessionBoundSerializer()->deserialize($stored);
+            ComponentState::fromSnapshot($snapshot);
+        } catch (SnapshotVerificationException $e) {
+            $this->logSnapshotRejection($behavior, $e);
         }
     }
 
