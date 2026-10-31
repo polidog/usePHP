@@ -581,6 +581,23 @@
     // the button, nor aria-busy, which a parent's morph can remove.
     const busyComponents = new WeakSet();
 
+    // A component's update and its ancestors' and descendants' updates touch
+    // the same DOM: a parent's response would overwrite what a child just got,
+    // and a request sent meanwhile would carry a descendant's snapshot that is
+    // about to change. So they take turns, under the same rules as a double
+    // click. Siblings have nothing to wait for.
+    function busyRelative(component) {
+        if (busyComponents.has(component)) return component;
+        const enclosing = (el) => (el.parentElement ? el.parentElement.closest('[data-usephp]') : null);
+        for (let ancestor = enclosing(component); ancestor; ancestor = enclosing(ancestor)) {
+            if (busyComponents.has(ancestor)) return ancestor;
+        }
+        for (const descendant of component.querySelectorAll('[data-usephp]')) {
+            if (busyComponents.has(descendant)) return descendant;
+        }
+        return null;
+    }
+
     // A partial submit that came back non-OK (or threw) must NOT be
     // replayed as a full-page `form.submit()`: the request may already
     // have been processed server-side (render failed after the state
@@ -640,8 +657,12 @@
             return;
         }
 
-        queueResendIfBusy(component, form, { source, submitter, event });
-        if (busyComponents.has(component)) return;
+        const holder = busyRelative(component);
+        if (holder) {
+            // Queued on the holder, whose release sends it again.
+            queueResendIfBusy(holder, form, { source, submitter, event });
+            return;
+        }
         busyComponents.add(component);
 
         const submission = { form, sent: captureFields(component) };
@@ -769,7 +790,8 @@
     // when it is sent (useFormAction) is different: dropping it would leave
     // the server without what the user typed last. It is sent once more when
     // the lock is released, reading the values at that point. Only the latest
-    // request per control is kept, and they go out one at a time.
+    // request per control is kept, and they go out one at a time. One that
+    // finds a relative locked by then moves to that relative's queue.
     const WITH_VALUE = 'data-usephp-with-value';
     const queuedResends = new WeakMap();
     const sentSubmissions = new WeakMap();

@@ -376,6 +376,24 @@ $router->get('/resend', static fn(): Element => fc(static function (array $props
     ]);
 }, 'resend', StorageType::Snapshot)([]));
 
+// The field is in the child, the fixed-value button in the parent.
+$fieldChild = fc(static function (array $props): Element {
+    [$value, $setValue] = useState('');
+
+    return H::div(children: [
+        H::input(id: 'field', name: 'v', value: $value, onInput: useFormAction(['v' => $setValue])),
+        H::span(id: 'val', children: "val={$value}"),
+    ]);
+}, 'field-child', StorageType::Snapshot);
+$router->get('/resend-child', static fn(): Element => fc(static function (array $props) use ($fieldChild): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::div(children: [
+        H::button(onClick: fn() => $setCount($count + 1), children: "parent={$count}"),
+        $fieldChild([]),
+    ]);
+}, 'field-parent', StorageType::Snapshot)([]));
+
 // Text that looks like the renderer's own output.
 $router->get('/lookalike-page', static fn(): string => '<script>var a = \' data-usephp-snapshot="forged" <form data-usephp-form>\';</script>'
     . '<div data-usephp-snapshot="also forged"></div>'
