@@ -255,4 +255,47 @@ $router->get('/nested-with-sibling', static fn(): Element => H::div(children: [
 ]));
 $router->get('/nested-on-session-route', static fn(): Element => $parent([]))->sessionSnapshot();
 
+// Isolated routes: state has nowhere to live but the response.
+$router->get('/pair-isolated', $pair);
+$router->get('/mixed-isolated', static fn(): Element => H::div(children: [
+    $labeled('snap', 'snap'),
+    fc(static function (array $props): Element {
+        [$count, $setCount] = useState(0);
+
+        return H::button(onClick: fn() => $setCount($count + 1), children: "sess={$count}");
+    }, 'sess', StorageType::Session)([]),
+]));
+$router->get('/string-handler', static fn(): string => '<main>' . $app->renderElement($labeled('str', 'str')) . '</main>');
+$router->get('/string-handler-pair', static fn(): string => '<main>' . $app->renderElement($pair()) . '</main>');
+$router->get('/printing-handler', static function () use ($app, $labeled): string {
+    echo '<main>' . $app->renderElement($labeled('printed', 'printed')) . '</main>';
+
+    return '';
+});
+$router->get('/hideable', static fn(): string => isset($_GET['hide'])
+    ? '<p>hidden</p>'
+    : $app->renderElement($labeled('hideable', 'hideable')));
+
+$deferredCounter = static fn(string $name): \Polidog\UsePhp\Runtime\FunctionComponent => fc(static function (array $props) use ($name): Element {
+    [$count, $setCount] = useState(0);
+    $tag = (string) ($props['tag'] ?? 'none');
+
+    return H::button(onClick: fn() => $setCount($count + 1), children: "{$name}={$count} tag={$tag}");
+}, $name, StorageType::Snapshot, defer: new Defer($name));
+$deferred = $deferredCounter('ds');
+$decoy = $deferredCounter('decoy');
+$broken = fc(static function (array $props): Element {
+    throw new RuntimeException('broken deferred target');
+}, 'broken', StorageType::Snapshot, defer: new Defer('broken'));
+foreach (['ds' => $deferred, 'decoy' => $decoy, 'broken' => $broken] as $name => $component) {
+    $app->registerComponent('Deferred\\' . $name, $component);
+    $app->registerDeferred($name, 'Deferred\\' . $name);
+}
+$router->get('/defer-page', static fn(): Element => H::div(children: [
+    H::p(children: 'page-chrome'),
+    $decoy([]),
+    $broken([]),
+    $deferred(['tag' => 7]),
+]));
+
 $app->run();

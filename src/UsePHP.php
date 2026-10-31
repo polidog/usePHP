@@ -128,6 +128,14 @@ final class UsePHP
     private bool $renderingDeferredEndpoint = false;
 
     /**
+     * What the handler passed to {@see renderElement()} during a replay, for a
+     * handler that answers with a string. Null outside of a replay.
+     *
+     * @var list<Element>|null
+     */
+    private ?array $replayedElements = null;
+
+    /**
      * Whether the built-in CSRF check runs in {@see doHandleAction()}.
      *
      * Defaults to true so a usePHP-only deployment (without an upstream
@@ -1133,27 +1141,32 @@ final class UsePHP
             // Handle snapshot restoration for persistent/session behaviors
             $this->handleSnapshotRestoration($request, $match);
 
-            // Render the component
-            $handler = $match->handler;
-            $html = '';
-
-            if (is_string($handler) && class_exists($handler)) {
-                // Component class
-                $html = $this->render($handler);
-            } elseif (is_callable($handler)) {
-                // Callable handler
-                $result = $handler($match->params, $request);
-                if ($result instanceof Element) {
-                    $html = $this->renderElement($result);
-                } else {
-                    $html = (string) $result;
-                }
-            }
-
-            echo $html;
+            echo $this->renderRouteHandler($match, $request);
         } finally {
             RenderContext::clearApp();
         }
+    }
+
+    /**
+     * Run a matched route's handler and render what it gives back.
+     */
+    private function renderRouteHandler(RouteMatch $match, RequestContext $request): string
+    {
+        $handler = $match->handler;
+
+        if (is_string($handler) && class_exists($handler)) {
+            // Component class
+            return $this->render($handler);
+        }
+
+        if (is_callable($handler)) {
+            // Callable handler
+            $result = $handler($match->params, $request);
+
+            return $result instanceof Element ? $this->renderElement($result) : (string) $result;
+        }
+
+        return '';
     }
 
     /**
@@ -1823,6 +1836,22 @@ final class UsePHP
                     return $partial;
                 }
             }
+        } elseif ($storageType === StorageType::Snapshot || $carriedIds !== []) {
+            // A plain form POST, so JavaScript is off (or not loaded yet).
+            $page = $this->renderPageForPlainAction();
+            if ($page !== null) {
+                return $page;
+            }
+        }
+
+        if ($storageType === StorageType::Snapshot && !$this->snapshotRouteRequiresRedirect($storageType)) {
+            // Nothing the redirect leads to can read this state.
+            \error_log(sprintf(
+                '[usePHP] Snapshot state lost: %s could not be re-rendered in place, so this action falls back to a '
+                . 'redirect that starts from its initial state. The route handler must render the component through '
+                . 'an Element or UsePHP::renderElement(), or the route must declare sessionSnapshot().',
+                $instanceId,
+            ));
         }
 
         // Full page - PRG pattern with snapshot behavior handling.
@@ -1884,12 +1913,83 @@ final class UsePHP
     }
 
     /**
+     * Answer a plain form POST on an Isolated route with the page itself.
+     *
+     * An Isolated route keeps no state of its own, so a redirect would come
+     * back with the initial state. Replaying the route with the instance's state
+     * already primed gets the page the same way a GET would, whatever the
+     * handler returns. Returns null on the routes that do have a redirect to
+     * write to, and when there is no route to replay.
+     */
+    private function renderPageForPlainAction(): ?string
+    {
+        [$match, $pageRequest] = $this->resolveActionPageMatch();
+        if ($match === null || $match->snapshotBehavior !== SnapshotBehavior::Isolated) {
+            return null;
+        }
+
+        RenderContext::beginRender();
+        ob_start();
+        try {
+            $html = $this->renderRouteHandler($match, $pageRequest);
+            $printed = (string) ob_get_contents();
+        } finally {
+            ob_end_clean();
+        }
+
+        // The answer to a POST is not a page to keep.
+        $this->emitHeader('Cache-Control: no-store');
+
+        return self::carrySnapshotsInForms($printed . $html);
+    }
+
+    /**
+     * Put the page's snapshots into its action forms.
+     *
+     * Without JavaScript the next action is a plain POST of one form, and an
+     * Isolated page keeps state nowhere else, so each form has to bring along
+     * the other instances' current snapshots or the next answer would reset
+     * them. Rendered attribute values are already escaped for an attribute, and
+     * a page's text cannot produce the quote these patterns look for.
+     */
+    private static function carrySnapshotsInForms(string $html): string
+    {
+        preg_match_all('/\sdata-usephp-snapshot=(?:"([^"]*+)"|\'([^\']*+)\')/', $html, $matches, PREG_SET_ORDER);
+
+        $fields = '';
+        $count = 0;
+        $seen = [];
+        foreach ($matches as $match) {
+            $value = ($match[2] ?? '') !== '' ? $match[2] : ($match[1] ?? '');
+            if (isset($seen[$value]) || $count === self::MAX_CARRIED_SNAPSHOTS) {
+                continue;
+            }
+            $seen[$value] = true;
+            $count++;
+            $fields .= '<input type="hidden" name="_usephp_snapshots[]" value="' . $value . '" />';
+        }
+
+        // A form's own snapshot is ignored on the way back, so a page with a
+        // single instance has nothing to carry.
+        if ($count === 0 || preg_match_all('/\sdata-usephp=/', $html) < 2) {
+            return $html;
+        }
+
+        return preg_replace_callback(
+            '/<form\b[^>]*?\bdata-usephp-form\b[^>]*>/',
+            static fn(array $form): string => $form[0] . $fields,
+            $html,
+        ) ?? $html;
+    }
+
+    /**
      * Restore the snapshots of the other instances an action request carries.
      *
      * A re-render runs the handler again, and an instance's state lives in its
      * own snapshot, so the instances the re-render reaches need theirs back.
      * The page is the only place that has their current state: usephp.js sends
-     * what the descendants of the acting component hold.
+     * what the descendants of the acting component hold, and without JavaScript
+     * the forms carry the whole page's (see carrySnapshotsInForms()).
      *
      * Only signed bytes come in, with no id next to them, so each snapshot can
      * only ever land on the instance its signed memo names. Anything that does
@@ -2019,9 +2119,16 @@ final class UsePHP
      * the request. An id the tree does not have at all is fine: nothing reads
      * it, and it is what a descendant the action just hid looks like.
      *
+     * A handler may answer with a string, having rendered through
+     * {@see renderElement()}: the Elements it passed there are searched as well.
+     * Session state skips that, since it survives the fallback redirect anyway.
+     * An instance that came from a defer endpoint is not in the page's tree at
+     * all, only its placeholder is, so placeholders lead to their targets (see
+     * findWrapperInReplay()).
+     *
      * Returns null when the page cannot be replayed (no router match, a
-     * class-component handler, a non-Element result, or the instance is
-     * missing from the tree); the caller then falls back to the PRG redirect.
+     * class-component handler, or the instance is nowhere to be found); the
+     * caller then falls back to the PRG redirect.
      *
      * @param list<string> $carriedIds Instances restored by restoreCarriedSnapshots()
      */
@@ -2046,22 +2153,27 @@ final class UsePHP
         RenderContext::beginRender();
         // The handler runs for its Element tree only. Anything it prints would
         // corrupt the partial, or block the fallback redirect's headers.
+        $this->replayedElements = $storageType === StorageType::Session ? null : [];
         ob_start();
         try {
             $result = $handler($match->params, $pageRequest);
+            $roots = $result instanceof Element ? [$result] : ($this->replayedElements ?? []);
         } finally {
             ob_end_clean();
-        }
-        if (!$result instanceof Element) {
-            return null;
+            $this->replayedElements = null;
         }
 
-        $wrapper = self::findComponentElement($result, $instanceId);
-        if ($wrapper === null) {
+        $found = $this->findWrapperInReplay($roots, $instanceId);
+        if ($found === null) {
             return null;
         }
+        [$wrapper, $searched] = $found;
 
-        if (array_intersect($carriedIds, self::instanceIdsOutside($result, $instanceId)) !== []) {
+        $outside = [];
+        foreach ($searched as $root) {
+            $outside = [...$outside, ...self::instanceIdsOutside($root, $instanceId)];
+        }
+        if (array_intersect($carriedIds, $outside) !== []) {
             \error_log('[usePHP] An action on ' . $instanceId . ' carried a snapshot of an instance that is not its descendant');
 
             return $this->respondBadRequest('Invalid snapshot');
@@ -2082,6 +2194,111 @@ final class UsePHP
         return $renderer->renderPartial(
             static fn(): Element => new Element('Fragment', [], $wrapper->children)
         );
+    }
+
+    /**
+     * Find an instance's wrapper in what a replay produced, rendering defer
+     * placeholders' targets if it isn't there.
+     *
+     * The form of a deferred component POSTs to the page, whose replay only has
+     * the placeholder. The target gets the props its endpoint would, and each
+     * one only renders when the search reaches it, because deferred content is
+     * often deferred for being slow. One that fails says nothing about the
+     * instance being looked for, so the search goes on.
+     *
+     * @param list<Element> $roots
+     * @return array{0: Element, 1: list<Element>}|null The wrapper and every tree searched
+     */
+    private function findWrapperInReplay(array $roots, string $instanceId): ?array
+    {
+        $pending = $roots;
+        $searched = [];
+        $visited = [];
+
+        while (($root = array_shift($pending)) !== null) {
+            $searched[] = $root;
+
+            $wrapper = self::findComponentElement($root, $instanceId);
+            if ($wrapper !== null) {
+                return [$wrapper, $searched];
+            }
+
+            foreach (self::findDeferPlaceholders($root) as $placeholder) {
+                $name = (string) ($placeholder->props['__name'] ?? '');
+                $params = self::deferEndpointProps($placeholder);
+                $visit = $name . '?' . http_build_query($params);
+                if (isset($visited[$visit]) || !isset($this->deferredRegistry[$name])) {
+                    continue;
+                }
+                $visited[$visit] = true;
+
+                $target = $this->renderDeferredForReplay($name, $params);
+                if ($target !== null) {
+                    $pending[] = $target;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * What a defer endpoint would receive as props for this placeholder: the
+     * query string {@see Renderer::renderDeferred()} builds, read back.
+     *
+     * @return array<string, string>
+     */
+    private static function deferEndpointProps(Element $placeholder): array
+    {
+        $params = $placeholder->props['__params'] ?? [];
+        $props = [];
+        foreach (is_array($params) ? $params : [] as $key => $value) {
+            if (is_scalar($value)) {
+                $props[(string) $key] = is_bool($value) ? ($value ? '1' : '0') : (string) $value;
+            }
+        }
+
+        return $props;
+    }
+
+    /**
+     * @param array<string, string> $props
+     */
+    private function renderDeferredForReplay(string $name, array $props): ?Element
+    {
+        RenderContext::setApp($this);
+        RenderContext::beginRender();
+        $this->renderingDeferredEndpoint = true;
+        ob_start();
+        try {
+            return $this->renderDeferredTarget($this->deferredRegistry[$name]['component'], $props);
+        } catch (\Throwable $e) {
+            \error_log(sprintf("[usePHP] defer render failed for name '%s' during a replay: %s", $name, $e->getMessage()));
+
+            return null;
+        } finally {
+            ob_end_clean();
+            $this->renderingDeferredEndpoint = false;
+        }
+    }
+
+    /**
+     * @return list<Element>
+     */
+    private static function findDeferPlaceholders(Element $element): array
+    {
+        if ($element->type === '__defer__') {
+            return [$element];
+        }
+
+        $found = [];
+        foreach ($element->children as $child) {
+            if ($child instanceof Element) {
+                $found = [...$found, ...self::findDeferPlaceholders($child)];
+            }
+        }
+
+        return $found;
     }
 
     /**
@@ -2182,6 +2399,10 @@ final class UsePHP
     private function doRenderElement(Element $element): string
     {
         RenderContext::setApp($this);
+
+        if ($this->replayedElements !== null) {
+            $this->replayedElements[] = $element;
+        }
 
         try {
             $renderer = new Renderer(

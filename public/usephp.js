@@ -615,7 +615,10 @@
                 formData.set('_usephp_snapshot', currentSnapshot);
             }
             // The re-render reaches the snapshot components inside this one,
-            // and the page is what holds their current state.
+            // and the page is what holds their current state. Fields a no-JS
+            // response put into the form are for a whole-page answer, and a
+            // press before this script loaded can land on such a page.
+            formData.delete('_usephp_snapshots[]');
             component.querySelectorAll('[data-usephp-snapshot]').forEach((descendant) => {
                 formData.append('_usephp_snapshots[]', descendant.dataset.usephpSnapshot);
             });
