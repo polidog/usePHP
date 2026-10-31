@@ -52,4 +52,39 @@ class RendererOutputTest extends TestCase
             $this->render(H::a(href: "/pa\tth?x=a:b", children: 'x')),
         );
     }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function srcdocSpellingProvider(): iterable
+    {
+        yield 'JSX name' => ['srcDoc'];
+        yield 'HTML name' => ['srcdoc'];
+        yield 'upper case' => ['SRCDOC'];
+    }
+
+    #[DataProvider('srcdocSpellingProvider')]
+    public function testSrcdocWithValueIsRefused(string $prop): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('srcdoc');
+
+        $this->render(new Element('iframe', [$prop => '<script>parent.document.title="PWNED"</script>'], []));
+    }
+
+    public function testSrcdocWithHarmlessLookingValueIsRefusedToo(): void
+    {
+        // The value is HTML, not a URL: no scheme check can tell it apart.
+        $this->expectException(\RuntimeException::class);
+
+        $this->render(new Element('iframe', ['srcdoc' => 'https://example.com/'], []));
+    }
+
+    public function testEmptySrcdocIsAllowed(): void
+    {
+        self::assertSame(
+            '<iframe srcdoc=""></iframe>',
+            $this->render(new Element('iframe', ['srcdoc' => ''], [])),
+        );
+    }
 }

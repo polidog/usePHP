@@ -65,7 +65,6 @@ final class Renderer
         'src' => true,
         'action' => true,
         'formaction' => true,
-        'srcdoc' => true,
         'data' => true,
         'poster' => true,
         'background' => true,
@@ -513,6 +512,16 @@ final class Renderer
             }
 
             $stringValue = (string) $value;
+
+            // srcdoc holds an HTML document, not a URL, so no scheme check
+            // can make it safe: the iframe runs whatever scripts it contains
+            // in the page's origin. Refuse it instead of dropping it silently.
+            if (strtolower($attrName) === 'srcdoc' && $stringValue !== '') {
+                throw new \RuntimeException(
+                    'The srcdoc attribute is not supported because its value is rendered as HTML '
+                    . 'in the same origin. Use src with a separate URL instead.',
+                );
+            }
 
             // Block dangerous URL schemes in URL-context attributes. React
             // does this in v16.9+; we adopt the same default so a stringly
