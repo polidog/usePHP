@@ -124,4 +124,60 @@ final class ActionFlowRoutesTest extends ActionFlowServerTestCase
         self::assertSame(200, $response['status'], $response['body']);
         self::assertStringContainsString('count=0', $response['body']);
     }
+
+    // ------------------------------------------------------------------
+    // #64: the redirect keeps the query, except for the snapshot it replaces.
+    // ------------------------------------------------------------------
+
+    public function testRedirectKeepsTheQueryOnAPlainRoute(): void
+    {
+        $base = $this->startServer();
+        $page = $this->http($base . '/session-fc?tab=2');
+
+        $response = $this->http(
+            $base . '/session-fc?tab=2',
+            self::firstFormFields($page['body']),
+            ['Origin' => $base],
+            $page['cookie'],
+        );
+
+        self::assertSame(303, $response['status'], $response['body']);
+        self::assertSame('/session-fc?tab=2', self::location($response));
+    }
+
+    public function testRedirectKeepsTheQueryNextToANewSnapshot(): void
+    {
+        $base = $this->startServer(self::SECRET);
+        $page = $this->http($base . '/persistent-route?page=3');
+        $url = '/persistent-route?page=3';
+
+        foreach (['count=1', 'count=2'] as $expected) {
+            $response = $this->http($base . $url, self::firstFormFields($page['body']), ['Origin' => $base]);
+            self::assertSame(303, $response['status'], $response['body']);
+
+            $url = self::location($response);
+            self::assertIsString($url);
+            self::assertStringStartsWith('/persistent-route?page=3&_snapshot=', $url);
+            self::assertSame(1, substr_count($url, '_snapshot='));
+
+            $page = $this->http($base . $url);
+            self::assertStringContainsString($expected, $page['body']);
+        }
+    }
+
+    public function testProtocolRelativeRequestRedirectsToAPathAndKeepsTheQuery(): void
+    {
+        $base = $this->startServer();
+        $page = $this->http($base . '/session-fc');
+
+        $response = $this->http(
+            $base . '//evil.example/session-fc?tab=2',
+            self::firstFormFields($page['body']),
+            ['Origin' => $base],
+            $page['cookie'],
+        );
+
+        self::assertSame(303, $response['status'], $response['body']);
+        self::assertSame('/session-fc?tab=2', self::location($response));
+    }
 }

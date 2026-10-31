@@ -1332,6 +1332,37 @@ final class UsePHP
     }
 
     /**
+     * The URL a PRG redirect goes back to: {@see normalizeRedirectPath()} plus
+     * the request's query string, so an action does not lose the page's search
+     * conditions or page number.
+     *
+     * Only the path can make a `Location` leave the origin, so only the path
+     * needs normalising; the query follows the first `?` and is plain data.
+     * Control characters anywhere still reject the whole target. The snapshot
+     * parameter is removed: the redirect either writes a new one or the state
+     * it holds is out of date.
+     *
+     * @internal Exposed for tests; not part of the public API.
+     */
+    public static function normalizeRedirectTarget(string $requestUri, string $snapshotParam = '_snapshot'): string
+    {
+        $path = self::normalizeRedirectPath($requestUri);
+        if (preg_match('/[\x00-\x1F\x7F]/', $requestUri) === 1) {
+            return $path;
+        }
+
+        $queryStart = strpos($requestUri, '?');
+        if ($queryStart === false) {
+            return $path;
+        }
+
+        $query = explode('#', substr($requestUri, $queryStart + 1), 2)[0];
+        $query = SimpleRouter::removeQueryParam($query, $snapshotParam);
+
+        return $query === '' ? $path : $path . '?' . $query;
+    }
+
+    /**
      * Handle a POST action and return the partial HTML.
      * Returns null if not a valid action request.
      */
@@ -1665,8 +1696,11 @@ final class UsePHP
         // The redirect target is derived from the raw request line, which the
         // client controls — normalise it to a same-origin path first so a
         // request for `//evil.example/page` cannot turn the 303 into an open
-        // redirect (see normalizeRedirectPath()).
-        $redirectUrl = self::normalizeRedirectPath($_SERVER['REQUEST_URI'] ?? '/');
+        // redirect (see normalizeRedirectTarget()).
+        $redirectUrl = self::normalizeRedirectTarget(
+            $_SERVER['REQUEST_URI'] ?? '/',
+            $this->router instanceof SimpleRouter ? $this->router->getSnapshotParam() : '_snapshot',
+        );
 
         // Actions POST to the page's own URL, so the snapshot behavior that
         // applies is the one declared on the GET route that rendered the
