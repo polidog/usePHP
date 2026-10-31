@@ -1641,7 +1641,11 @@ final class UsePHP
 
         // Partial update (AJAX) - return only component HTML
         if ($isPartial) {
-            if ($isRegisteredComponent) {
+            // 'restore' changes nothing and usephp.js treats a redirect as a
+            // rejected snapshot, so it answers with a partial on any route.
+            if ($isRegisteredComponent
+                && ($action->type === 'restore' || !$this->snapshotRouteRequiresRedirect($storageType))
+            ) {
                 return $this->doRenderComponentPartialWithInstanceId($instanceId, $componentName);
             }
 
@@ -1649,7 +1653,7 @@ final class UsePHP
             // replaying the page route. Without this, a Snapshot-storage
             // function component on a plain (Isolated) route would fall
             // through to the redirect below and lose the state it just set.
-            if ($storageType === StorageType::Snapshot) {
+            if (!$isRegisteredComponent && $storageType === StorageType::Snapshot) {
                 $partial = $this->renderFunctionComponentPartial($instanceId);
                 if ($partial !== null) {
                     return $partial;
@@ -1741,6 +1745,25 @@ final class UsePHP
         }
 
         return [$this->currentMatch, $pageRequest];
+    }
+
+    /**
+     * Whether a partial response would lose this action's state.
+     *
+     * Persistent/Session/Shared routes write the snapshot into the URL or the
+     * session on the PRG redirect, so answering with a partial would leave
+     * those stale and a reload would go back to the old state. Other storage
+     * types and Isolated routes have nothing for the redirect to write.
+     */
+    private function snapshotRouteRequiresRedirect(StorageType $storageType): bool
+    {
+        if ($storageType !== StorageType::Snapshot) {
+            return false;
+        }
+
+        [$match] = $this->resolveActionPageMatch();
+
+        return $match !== null && $match->snapshotBehavior !== SnapshotBehavior::Isolated;
     }
 
     /**

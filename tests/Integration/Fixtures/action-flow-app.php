@@ -76,4 +76,9 @@ $router->get('/session-fc', static fn(): Element => $counterFc('session-fc', Sto
 $router->get('/memory-fc', static fn(): Element => $counterFc('memory-fc', StorageType::Memory)([]));
 $router->get('/snapshot-fc', static fn(): Element => $counterFc('snapshot-fc', StorageType::Snapshot)([]));
 
+$router->get('/session-route', SnapshotClassCounter::class)->sessionSnapshot();
+$router->get('/persistent-route', SnapshotClassCounter::class)->persistentSnapshot();
+$router->get('/shared-route', SnapshotClassCounter::class)->sharedSnapshot('fixture');
+$router->get('/session-counter-on-persistent-route', SessionClassCounter::class)->persistentSnapshot();
+
 $app->run();
