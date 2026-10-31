@@ -1379,8 +1379,11 @@ function resolveFunctionComponent(Element $element): Element
     $component = $element->props['__component'];
     /** @var array<string, mixed> $props */
     $props = $element->props['__props'];
-    /** @var string|null $key */
+    /** @var int|string|null $key */
     $key = $element->props['__key'];
+    if (is_int($key)) {
+        $key = (string) $key;
+    }
 
     $componentName = getFunctionComponentName($component);
     $instanceId = RenderContext::beginComponent($componentName, $key);

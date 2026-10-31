@@ -611,6 +611,55 @@ class FunctionComponentTest extends TestCase
         $this->assertSame([7], ComponentState::fromSnapshot($snapshot)->createSnapshot()->state);
     }
 
+    public function testIntPropsKeyIsCastToString(): void
+    {
+        $Row = fc(fn(array $props): Element => H::span());
+
+        $this->assertStringEndsWith('#42', $Row(['key' => 42])->props['data-usephp']);
+        $this->assertStringEndsWith('#0', $Row(['key' => 0])->props['data-usephp']);
+    }
+
+    public function testIntPropsKeyUnderFixedKey(): void
+    {
+        $Row = fc(fn(array $props): Element => H::span(), 'krow');
+
+        $this->assertStringEndsWith('#krow/42', $Row(['key' => 42])->props['data-usephp']);
+    }
+
+    public function testIntKeyThroughPsxComponentCall(): void
+    {
+        $app = RenderContext::getApp();
+        $app->registerComponent('Row', fc(fn(array $props): Element => H::span()));
+
+        $element = $app->renderPsxComponent('Row', ['key' => 1]);
+
+        $this->assertStringEndsWith('#1', $element->props['data-usephp']);
+    }
+
+    public function testIntKeyThroughHComponent(): void
+    {
+        $Row = function (array $props): Element {
+            [$q] = useState('value');
+
+            return H::span(children: $q);
+        };
+
+        H::div(children: [H::component($Row, ['key' => 42])]);
+
+        $keys = array_filter(array_keys($_SESSION), static fn(string $key): bool => str_contains($key, '#42:state:0'));
+        $this->assertCount(1, $keys);
+    }
+
+    public function testNonScalarPropsKeyIsRejected(): void
+    {
+        $Row = fc(fn(array $props): Element => H::span(), 'krow');
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('string or int');
+
+        $Row(['key' => ['not', 'a', 'key']]);
+    }
+
     public function testFcSnapshotContainsCorrectState(): void
     {
         $Counter = fc(function (array $props): Element {

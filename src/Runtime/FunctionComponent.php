@@ -122,6 +122,16 @@ final class FunctionComponent
             return $this->key;
         }
 
+        if (\is_int($propsKey)) {
+            $propsKey = (string) $propsKey;
+        }
+
+        if (!\is_string($propsKey)) {
+            throw new \InvalidArgumentException(
+                'fc(): the "key" prop must be a string or int, got ' . get_debug_type($propsKey),
+            );
+        }
+
         return $this->key === null ? $propsKey : "{$this->key}/{$propsKey}";
     }
 }
