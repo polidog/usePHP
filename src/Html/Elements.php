@@ -623,8 +623,6 @@ final class H
         ?string $style = null,
         Action|\Closure|null $onChange = null,
         Action|\Closure|null $onInput = null,
-        Action|\Closure|null $onFocus = null,
-        Action|\Closure|null $onBlur = null,
         mixed ...$attrs,
     ): Element {
         return self::element('input', get_defined_vars());
@@ -969,8 +967,6 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        Action|\Closure|null $onLoad = null,
-        Action|\Closure|null $onError = null,
         mixed ...$attrs,
     ): Element {
         return self::element('img', get_defined_vars());
@@ -1411,15 +1407,23 @@ function createElement(string $type, array $params): Element
         'onChange' => 'change',
         'onInput' => 'input',
         'onSubmit' => 'submit',
-        'onFocus' => 'focus',
-        'onBlur' => 'blur',
-        'onLoad' => 'load',
-        'onError' => 'error',
     ];
+
+    // A server round trip per focus change re-renders the element that was
+    // just focused, and one per image load reloads the image and fires again.
+    $unsupportedEvents = ['onFocus', 'onBlur', 'onLoad', 'onError'];
 
     foreach ($params as $key => $value) {
         if ($value === null) {
             continue;
+        }
+
+        if (in_array($key, $unsupportedEvents, true)) {
+            throw new \InvalidArgumentException(sprintf(
+                '%s is not supported: usePHP handles events on the server. '
+                . 'Supported events are onClick, onChange, onInput and onSubmit.',
+                $key,
+            ));
         }
 
         if ($key === 'children') {
@@ -1437,6 +1441,15 @@ function createElement(string $type, array $params): Element
             if ($value instanceof Action) {
                 $action = $value;
             } elseif ($value instanceof \Closure) {
+                // The Closure runs now, while rendering, not when the event
+                // fires, so there is no event value to give it.
+                if (new \ReflectionFunction($value)->getNumberOfRequiredParameters() > 0) {
+                    throw new \InvalidArgumentException(sprintf(
+                        '%s closures take no arguments: they run during rendering to build the '
+                        . 'Action. To receive what the user typed, use useFormAction().',
+                        $key,
+                    ));
+                }
                 // Execute the Closure to get the Action
                 $action = $value();
             } else {

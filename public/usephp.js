@@ -749,6 +749,50 @@
         fireTrigger(trigger, 'click');
     });
 
+    document.addEventListener('change', function(e) {
+        const trigger = e.target instanceof Element
+            ? e.target.closest('[data-usephp-on-change]')
+            : null;
+        if (trigger) fireTrigger(trigger, 'change');
+    });
+
+    // `input` fires per keystroke, so it waits for a pause in typing. Each
+    // element has its own timer; partial updates hand them over to the
+    // re-rendered element (see applyPartial).
+    const INPUT_DEBOUNCE_MS = 300;
+    const pendingInputs = new Map();
+
+    function scheduleInput(trigger) {
+        clearTimeout(pendingInputs.get(trigger));
+        pendingInputs.set(trigger, setTimeout(function() {
+            pendingInputs.delete(trigger);
+            if (trigger.isConnected) fireTrigger(trigger, 'input');
+        }, INPUT_DEBOUNCE_MS));
+    }
+
+    document.addEventListener('input', function(e) {
+        if (e.isComposing || !(e.target instanceof Element)) return;
+        const trigger = e.target.closest('[data-usephp-on-input]');
+        if (trigger) scheduleInput(trigger);
+    });
+
+    // While an IME is composing, the text isn't final and replacing the
+    // element would abort the composition.
+    document.addEventListener('compositionstart', function(e) {
+        if (!(e.target instanceof Element)) return;
+        const trigger = e.target.closest('[data-usephp-on-input]');
+        if (trigger && pendingInputs.has(trigger)) {
+            clearTimeout(pendingInputs.get(trigger));
+            pendingInputs.delete(trigger);
+        }
+    });
+
+    document.addEventListener('compositionend', function(e) {
+        if (!(e.target instanceof Element)) return;
+        const trigger = e.target.closest('[data-usephp-on-input]');
+        if (trigger) scheduleInput(trigger);
+    });
+
     // =====================================================================
     // Deferred component hydration
     // =====================================================================
@@ -979,6 +1023,67 @@
     // Partial responses
     // =====================================================================
 
+    // Replacing a component's contents would take the focus and the caret
+    // away from whoever is typing in it, and drop text typed while a request
+    // was in flight. Remember those controls by id or name, and put them
+    // back on their re-rendered counterparts.
+    function controlSelector(el) {
+        if (el.id) return '[id="' + CSS.escape(el.id) + '"]';
+        if (!el.name) return null;
+        const selector = el.tagName.toLowerCase() + '[name="' + CSS.escape(el.name) + '"]';
+        return el.type === 'radio' || el.type === 'checkbox'
+            ? selector + '[value="' + CSS.escape(el.value) + '"]'
+            : selector;
+    }
+
+    function captureLiveControls(component) {
+        const active = document.activeElement;
+        const controls = new Set();
+        if (active && active !== document.body && component.contains(active)) controls.add(active);
+        pendingInputs.forEach((timer, el) => {
+            if (component.contains(el)) controls.add(el);
+        });
+
+        const live = [];
+        controls.forEach((el) => {
+            const selector = controlSelector(el);
+            const pending = pendingInputs.has(el);
+            if (pending) {
+                clearTimeout(pendingInputs.get(el));
+                pendingInputs.delete(el);
+            }
+            if (!selector) return;
+            live.push({
+                selector,
+                pending,
+                focused: el === active,
+                value: el.hasAttribute('data-usephp-on-input') ? el.value : null,
+                selectionStart: el.selectionStart,
+                selectionEnd: el.selectionEnd,
+            });
+        });
+        return live;
+    }
+
+    function restoreLiveControls(component, live) {
+        live.forEach((control) => {
+            const el = component.querySelector(control.selector);
+            if (!el) return;
+            try {
+                if (control.value !== null) el.value = control.value;
+                if (control.focused) {
+                    el.focus({ preventScroll: true });
+                    if (control.selectionStart !== null && control.selectionStart !== undefined) {
+                        el.setSelectionRange(control.selectionStart, control.selectionEnd);
+                    }
+                }
+            } catch {
+                // Not every control supports a caret or a scripted value.
+            }
+            if (control.pending) scheduleInput(el);
+        });
+    }
+
     // Swap a component's contents for the partial HTML the server returned
     // and pick up the refreshed snapshot it carries. Shared by the form
     // submit path and the snapshot restore path below.
@@ -988,7 +1093,9 @@
         // would make the parser drop the action forms in the response.
         const template = document.createElement('template');
         template.innerHTML = html;
+        const live = captureLiveControls(component);
         component.replaceChildren(template.content);
+        restoreLiveControls(component, live);
 
         // Update snapshot on component from hidden field in response
         const snapshotField = component.querySelector('[data-usephp-snapshot-update]');

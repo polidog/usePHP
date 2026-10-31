@@ -401,7 +401,7 @@ final class Renderer
         $tag = $element->type;
         self::assertValidTagName($tag);
 
-        $props = $this->bindActions($tag, $element->props);
+        [$props, $submitFields] = $this->bindActions($tag, $element->props);
         $attributes = $this->renderAttributes($props);
 
         // Self-closing tags
@@ -427,7 +427,7 @@ final class Renderer
             $children .= $this->flushActionForms();
         }
 
-        $html = "<{$tag}{$attributes}>{$children}</{$tag}>";
+        $html = "<{$tag}{$attributes}>{$submitFields}{$children}</{$tag}>";
 
         return $isForm && $this->openFormDepth === 0 ? $html . $this->flushActionForms() : $html;
     }
@@ -448,15 +448,19 @@ final class Renderer
      * Turn the `wire:*` props into what the browser needs to fire the action.
      *
      * A button (or submit input) is associated with its action form through
-     * the `form` attribute, which works without JavaScript. Any other
-     * element cannot submit a form by itself; it names the form in a
-     * `data-usephp-on-*` attribute that usephp.js acts on.
+     * the `form` attribute, which works without JavaScript, and a <form>
+     * with onSubmit becomes an action form itself. Any other element cannot
+     * submit a form by itself; it names the form in a `data-usephp-on-*`
+     * attribute that usephp.js acts on.
      *
      * @param array<string, mixed> $props
-     * @return array<string, mixed>
+     * @return array{array<string, mixed>, string} The props to render, and the
+     *         hidden fields to put inside the element when it is an onSubmit form.
      */
     private function bindActions(string $tag, array $props): array
     {
+        $submitFields = '';
+
         foreach ($props as $key => $action) {
             if (!str_starts_with($key, 'wire:')) {
                 continue;
@@ -472,21 +476,44 @@ final class Renderer
                 ));
             }
 
-            if ($event !== 'click') {
-                throw new \RuntimeException(sprintf('Unsupported event binding %s.', $key));
-            }
-
-            if ($tag === 'button' || ($tag === 'input' && in_array($props['type'] ?? null, ['submit', 'image'], true))) {
+            if ($event === 'submit') {
+                self::assertSubmitTarget($tag, $props);
+                $submitFields = $this->renderActionFields($action);
+                $props = ['method' => 'post', 'data-usephp-form' => true] + $props;
+            } elseif ($event === 'click' && ($tag === 'button'
+                || ($tag === 'input' && in_array($props['type'] ?? null, ['submit', 'image'], true)))
+            ) {
                 if ($tag === 'button') {
                     $props['type'] = 'submit';
                 }
                 $props['form'] = $this->addActionForm($action);
+            } elseif (in_array($event, ['click', 'change', 'input'], true)) {
+                $props['data-usephp-on-' . $event] = $this->addActionForm($action);
             } else {
-                $props['data-usephp-on-click'] = $this->addActionForm($action);
+                throw new \RuntimeException(sprintf('Unsupported event binding %s.', $key));
             }
         }
 
-        return $props;
+        return [$props, $submitFields];
+    }
+
+    /**
+     * onSubmit takes the form over: it posts the action to the current page,
+     * with or without JavaScript. An action URL or GET method on the same
+     * form would only be honored by one of the two, so they are refused.
+     *
+     * @param array<string, mixed> $props
+     */
+    private static function assertSubmitTarget(string $tag, array $props): void
+    {
+        if (strtolower($tag) !== 'form') {
+            throw new \RuntimeException(sprintf('onSubmit only works on <form>; got <%s>.', $tag));
+        }
+        if (isset($props['action']) || strtolower((string) ($props['method'] ?? 'post')) !== 'post') {
+            throw new \RuntimeException(
+                'onSubmit posts the action to the current page; remove action and method from the <form>.',
+            );
+        }
     }
 
     /**
@@ -653,7 +680,7 @@ final class Renderer
         if (preg_match(self::EVENT_HANDLER_ATTRIBUTE_PATTERN, $attrName) === 1) {
             throw new \RuntimeException(sprintf(
                 'Inline event handler attribute %s is not allowed. '
-                . 'Use the onClick/onChange/onInput/onSubmit/onFocus/onBlur/onLoad/onError props '
+                . 'Use the onClick/onChange/onInput/onSubmit props '
                 . 'with an Action (rendered as wire:* form actions) instead of raw JavaScript handlers.',
                 json_encode($attrName, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
             ));
