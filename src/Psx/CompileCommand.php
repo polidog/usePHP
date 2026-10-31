@@ -23,6 +23,9 @@ use PhpParser\PrettyPrinter\Standard;
  *   {@see self::CACHE_VERSION}) matches the sidecar `*.meta` file and
  *   every previously resolved component reference still resolves.
  *
+ * Paths default to `<cwd>/components`. A path that does not exist is an error
+ * (exit 1); an existing directory without .psx files is not.
+ *
  * Options:
  *   --check          Don't write files; exit non-zero if anything is out of date.
  *   --clean          Remove the cache directory's contents.
@@ -61,6 +64,15 @@ final class CompileCommand
 
         if ($clean) {
             return $this->doClean($cacheDir);
+        }
+
+        // A mistyped path must fail instead of looking like an empty project:
+        // otherwise `compile nope --check` passes CI without checking anything.
+        // Runs before ensureCacheDir() so the typo leaves nothing on disk.
+        $missing = \array_values(\array_filter($paths, static fn(string $path): bool => !\file_exists($path)));
+        if ($missing !== []) {
+            $this->println("\033[31mError: path not found: " . \implode(', ', $missing) . "\033[0m");
+            return 1;
         }
 
         if (!$this->ensureCacheDir($cacheDir)) {

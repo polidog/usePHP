@@ -4,7 +4,7 @@
 declare(strict_types=1);
 
 /**
- * usePHP CLI - Asset publishing tool
+ * usePHP CLI - Asset publishing and PSX compilation
  */
 
 $autoloadPaths = [
@@ -83,13 +83,20 @@ Usage:
 
 Commands:
   publish    Copy usephp.js to your project's public directory
-  compile    Compile .psx files to .psx.php and generate the manifest
+  compile    Compile .psx files into the cache directory and generate the manifest
   help       Show this help message
 
 Compile options:
-  --check               Verify generated files are up to date (CI use)
-  --clean               Remove generated .psx.php files and the manifest
-  --manifest=PATH       Manifest output path (default: ./psx-manifest.php)
+  usephp compile [options] [paths...]
+
+  Paths are files or directories (default: ./components). A path that does not
+  exist is an error.
+
+  --check               Verify compiled files are up to date, without writing them (CI use)
+  --clean               Remove the contents of the cache directory
+  --watch               Recompile when a .psx file changes (Ctrl+C to stop)
+  --cache=PATH          Cache directory for compiled files and the manifest
+                        (default: ./var/cache/psx)
 
 Examples:
   ./vendor/bin/usephp publish
