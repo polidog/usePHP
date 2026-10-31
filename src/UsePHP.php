@@ -17,6 +17,7 @@ use Polidog\UsePhp\Router\SnapshotBehavior;
 use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\ComponentState;
 use Polidog\UsePhp\Runtime\Element;
+use Polidog\UsePhp\Runtime\FunctionComponent;
 use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\Runtime\Renderer;
 use Polidog\UsePhp\Runtime\Snapshot;
@@ -118,14 +119,13 @@ final class UsePHP
     private string $deferPrefix = Renderer::DEFAULT_DEFER_PREFIX;
 
     /**
-     * True while {@see doHandleDeferred()} is rendering an endpoint response.
-     * Read by {@see \Polidog\UsePhp\Runtime\FunctionComponent} so the wrapper
-     * skips its placeholder branch and renders the inner component inline.
-     * Class-based defer targets don't need this flag — they're routed through
-     * the dedicated class-component path inside {@see renderDeferredTarget()}
-     * only on the endpoint side, so there is no placeholder branch to skip.
+     * The registered name of the endpoint {@see doHandleDeferred()} is
+     * rendering, or null outside of one. Read through
+     * {@see isDeferredEndpointTarget()} so that only the endpoint's own
+     * component skips its placeholder branch; class-based defer targets are
+     * routed through {@see renderDeferredTarget()} and have no such branch.
      */
-    private bool $renderingDeferredEndpoint = false;
+    private ?string $deferredEndpointName = null;
 
     /**
      * Whether the built-in CSRF check runs in {@see doHandleAction()}.
@@ -380,15 +380,28 @@ final class UsePHP
     }
 
     /**
-     * Whether a defer endpoint render is currently in flight. The wrapping
-     * `FunctionComponent` (and the class-component path) consults this to
-     * decide between emitting a placeholder and actually rendering inline.
+     * Whether $component is what the defer endpoint currently being rendered
+     * serves: the registered target itself, or a component declaring the
+     * endpoint's name (a plain callable may delegate to it, and a placeholder
+     * for its own URL would refetch forever).
+     *
+     * Every other deferred component stays a placeholder even during an
+     * endpoint render. It has its own endpoint and its own Cache-Control, so
+     * inlining it would serve its output under this endpoint's policy, and
+     * a public parent would then expose session-dependent content to a CDN.
      *
      * @internal Not part of the public stable API.
      */
-    public function isRenderingDeferredEndpoint(): bool
+    public function isDeferredEndpointTarget(FunctionComponent $component): bool
     {
-        return $this->renderingDeferredEndpoint;
+        if ($this->deferredEndpointName === null) {
+            return false;
+        }
+
+        $target = $this->deferredRegistry[$this->deferredEndpointName]['component'] ?? null;
+
+        return ($target !== null && ($this->psxLoaded[$target] ?? null) === $component)
+            || $component->defer?->name === $this->deferredEndpointName;
     }
 
     /**
@@ -1384,10 +1397,10 @@ final class UsePHP
         // continuation of any page-level render pass.
         RenderContext::beginRender();
 
-        // Flip the endpoint-render flag so deferred wrappers (FunctionComponent
-        // wrappers from `fc(..., defer: ...)`) skip their placeholder branch
-        // and actually render the inner component here.
-        $this->renderingDeferredEndpoint = true;
+        // Name the endpoint being rendered so its own FunctionComponent wrapper
+        // skips the placeholder branch. Nested deferred components keep theirs
+        // (see isDeferredEndpointTarget()).
+        $this->deferredEndpointName = $name;
 
         try {
             $element = $this->renderDeferredTarget($registration['component'], $props);
@@ -1407,7 +1420,7 @@ final class UsePHP
             $this->emitHeader('Cache-Control: no-store');
             return 'Failed to render deferred component.';
         } finally {
-            $this->renderingDeferredEndpoint = false;
+            $this->deferredEndpointName = null;
         }
 
         return $this->renderElement($element);
@@ -1759,7 +1772,9 @@ final class UsePHP
      */
     private function doCreateElement(string $componentName, ?string $key = null): Element
     {
+        $outerApp = RenderContext::getApp();
         RenderContext::setApp($this);
+        $parentState = ComponentState::current();
 
         try {
             $component = $this->registry->create($componentName);
@@ -1796,7 +1811,8 @@ final class UsePHP
 
             return new Element('div', $props, [$innerElement]);
         } finally {
-            RenderContext::clearApp();
+            ComponentState::setCurrent($parentState);
+            RenderContext::setApp($outerApp);
         }
     }
 
@@ -1805,7 +1821,9 @@ final class UsePHP
      */
     private function doRenderElement(Element $element): string
     {
+        $outerApp = RenderContext::getApp();
         RenderContext::setApp($this);
+        $parentState = ComponentState::current();
 
         try {
             $renderer = new Renderer(
@@ -1817,7 +1835,8 @@ final class UsePHP
             );
             return $renderer->renderElement($element);
         } finally {
-            RenderContext::clearApp();
+            ComponentState::setCurrent($parentState);
+            RenderContext::setApp($outerApp);
         }
     }
 
@@ -1826,7 +1845,9 @@ final class UsePHP
      */
     private function doRenderComponent(string $componentName, ?string $key = null): string
     {
+        $outerApp = RenderContext::getApp();
         RenderContext::setApp($this);
+        $parentState = ComponentState::current();
 
         try {
             $component = $this->registry->create($componentName);
@@ -1859,7 +1880,8 @@ final class UsePHP
 
             return $renderer->render(fn() => $component->render());
         } finally {
-            RenderContext::clearApp();
+            ComponentState::setCurrent($parentState);
+            RenderContext::setApp($outerApp);
         }
     }
 

@@ -22,9 +22,10 @@ use Polidog\UsePhp\Storage\StorageType;
  * so a manual `registerDeferred()` call is unnecessary in the normal flow.
  *
  * When `$defer` is set, invoking the component emits an `H::defer(...)`
- * placeholder on the page-render path, and runs the inner callable on the
- * defer-endpoint render path (so the same component definition serves both
- * sides of the round trip).
+ * placeholder on the page-render path, and runs the inner callable only when
+ * rendering its own defer endpoint (so the same component definition serves
+ * both sides of the round trip). A deferred component nested inside another
+ * endpoint stays a placeholder and loads through its own endpoint.
  */
 final class FunctionComponent
 {
@@ -54,7 +55,7 @@ final class FunctionComponent
     {
         if ($this->defer !== null) {
             $app = RenderContext::getApp();
-            if ($app === null || !$app->isRenderingDeferredEndpoint()) {
+            if ($app === null || !$app->isDeferredEndpointTarget($this)) {
                 return $this->defer->buildPlaceholder($props);
             }
         }
@@ -68,16 +69,20 @@ final class FunctionComponent
     private function renderInline(array $props): Element
     {
         $componentName = getFunctionComponentName($this->inner);
-        $instanceKey = $this->key ?? ($props['key'] ?? null);
+        $instanceKey = $this->instanceKey($props['key'] ?? null);
         unset($props['key']);
 
         $instanceId = RenderContext::beginComponent($componentName, $instanceKey);
+        $parentState = ComponentState::current();
         $state = ComponentState::getInstance($instanceId, $this->storageType);
         ComponentState::reset();
 
-        $result = ($this->inner)($props);
-
-        RenderContext::endComponent();
+        try {
+            $result = ($this->inner)($props);
+        } finally {
+            RenderContext::endComponent();
+            ComponentState::setCurrent($parentState);
+        }
 
         $wrapperProps = ['data-usephp' => $instanceId];
 
@@ -100,5 +105,33 @@ final class FunctionComponent
         }
 
         return new Element('div', $wrapperProps, [$result]);
+    }
+
+    /**
+     * The `fc()` key namespaces the props key ("row/k1"), so a component defined
+     * with a fixed key can still be rendered as several independent instances.
+     * With only one of the two, the id stays what it has always been, so state
+     * already stored under it remains valid.
+     *
+     * Rendering two instances under the same id is not detected: they share one
+     * slot of state.
+     */
+    private function instanceKey(mixed $propsKey): ?string
+    {
+        if ($propsKey === null) {
+            return $this->key;
+        }
+
+        if (\is_int($propsKey)) {
+            $propsKey = (string) $propsKey;
+        }
+
+        if (!\is_string($propsKey)) {
+            throw new \InvalidArgumentException(
+                'fc(): the "key" prop must be a string or int, got ' . get_debug_type($propsKey),
+            );
+        }
+
+        return $this->key === null ? $propsKey : "{$this->key}/{$propsKey}";
     }
 }

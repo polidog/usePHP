@@ -4,9 +4,13 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Tests\Storage;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Polidog\UsePhp\Runtime\Snapshot;
 use Polidog\UsePhp\Storage\MemoryStorage;
 use Polidog\UsePhp\Storage\SessionStorage;
+use Polidog\UsePhp\Storage\SnapshotStorage;
+use Polidog\UsePhp\Storage\StateStorageInterface;
 use Polidog\UsePhp\Storage\StorageFactory;
 use Polidog\UsePhp\Storage\StorageType;
 
@@ -19,6 +23,43 @@ class StorageTest extends TestCase
         }
         $_SESSION = [];
         StorageFactory::reset();
+    }
+
+    /**
+     * @return iterable<string, array{StateStorageInterface}>
+     */
+    public static function allStorages(): iterable
+    {
+        yield 'memory' => [new MemoryStorage()];
+        yield 'session' => [new SessionStorage()];
+        yield 'snapshot' => [new SnapshotStorage()];
+    }
+
+    #[DataProvider('allStorages')]
+    public function testNullValueCountsAsSet(StateStorageInterface $storage): void
+    {
+        $storage->set('key', null);
+
+        $this->assertTrue($storage->has('key'));
+        $this->assertNull($storage->get('key', 'default'));
+
+        $storage->delete('key');
+
+        $this->assertFalse($storage->has('key'));
+        $this->assertSame('default', $storage->get('key', 'default'));
+    }
+
+    public function testNullStateSurvivesSnapshotRoundTrip(): void
+    {
+        $storage = new SnapshotStorage();
+        $storage->set('usephp:C#0:state:0', null);
+        $exported = $storage->exportState('C#0');
+        $this->assertSame([0 => null], $exported['state']);
+
+        $restored = new SnapshotStorage();
+        $restored->initializeFromSnapshot(new Snapshot('C', '0', $exported['state']), 'C#0');
+
+        $this->assertTrue($restored->has('usephp:C#0:state:0'));
     }
 
     public function testMemoryStorageBasicOperations(): void
