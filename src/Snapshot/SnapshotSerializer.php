@@ -78,13 +78,22 @@ final class SnapshotSerializer
     /**
      * Deserialize and verify a snapshot from JSON.
      *
-     * @throws SnapshotVerificationException If checksum verification fails
+     * The input comes from the client, and the HMAC can only be checked after
+     * parsing it, so anything malformed is reported the same way as a bad
+     * checksum: callers need to handle just the one exception.
+     *
+     * @throws SnapshotVerificationException If the input is malformed or checksum verification fails
      */
     public function deserialize(string $json): Snapshot
     {
-        $snapshot = Snapshot::fromJson($json);
+        try {
+            $snapshot = Snapshot::fromJson($json);
+            $verified = $this->verifyChecksum($snapshot);
+        } catch (\JsonException|\InvalidArgumentException $e) {
+            throw new SnapshotVerificationException('Snapshot is malformed', previous: $e);
+        }
 
-        if (!$this->verifyChecksum($snapshot)) {
+        if (!$verified) {
             throw new SnapshotVerificationException('Snapshot checksum verification failed');
         }
 
