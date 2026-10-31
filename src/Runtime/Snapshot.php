@@ -64,7 +64,7 @@ final readonly class Snapshot
      */
     public function toJson(): string
     {
-        $json = json_encode($this->toArray(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        $json = json_encode($this->toArray(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PRESERVE_ZERO_FRACTION);
         return $json;
     }
 

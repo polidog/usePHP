@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Runtime;
 
+use function Polidog\UsePhp\Html\resolveRenderables;
+
 use Polidog\UsePhp\Snapshot\SnapshotSerializer;
 use Polidog\UsePhp\Storage\SnapshotPersist;
 use Polidog\UsePhp\Storage\StorageType;
@@ -22,6 +24,21 @@ final class Renderer
         'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
         'link', 'meta', 'param', 'source', 'track', 'wbr',
     ];
+
+    /**
+     * Elements whose content the HTML parser reads as raw text: entities are
+     * not decoded and only the matching end tag closes them.
+     */
+    private const RAW_TEXT_TAGS = ['script' => true, 'style' => true];
+
+    /**
+     * Inside these, `<script>` and `<style>` are not raw text. The parser reads
+     * their content as markup, so an unescaped `<img>` breaks out and runs.
+     * Entities are decoded there, so normal escaping is both safe and correct.
+     * `<foreignObject>` switches back to HTML parsing, where the escaped text
+     * stays literal; that is the safe side, so it gets no special case.
+     */
+    private const FOREIGN_CONTENT_ROOTS = ['svg' => true, 'math' => true];
 
     /**
      * Grammar for element (tag) names we are willing to write into the
@@ -65,11 +82,21 @@ final class Renderer
         'src' => true,
         'action' => true,
         'formaction' => true,
-        'srcdoc' => true,
         'data' => true,
         'poster' => true,
         'background' => true,
         'xlink:href' => true,
+    ];
+
+    /**
+     * Non-`aria-*` attributes where a PHP bool is written as "true"/"false".
+     *
+     * @see self::isBooleanStringAttribute()
+     */
+    private const BOOLEAN_STRING_ATTRIBUTES = [
+        'contenteditable' => true,
+        'draggable' => true,
+        'spellcheck' => true,
     ];
 
     /**
@@ -250,6 +277,7 @@ final class Renderer
     private string $deferPrefix;
     private string $csrfToken;
     private ?SnapshotPersist $persist;
+    private int $foreignContentDepth = 0;
 
     /**
      * Signs the (componentId, action JSON) pair embedded in each action form
@@ -296,12 +324,12 @@ final class Renderer
         $inner = $this->renderElement($element);
 
         // Build attributes
-        $attrs = sprintf('data-usephp="%s"', htmlspecialchars($this->componentId, ENT_QUOTES, 'UTF-8'));
+        $attrs = sprintf('data-usephp="%s"', self::escape($this->componentId));
 
         // Add snapshot attribute if using snapshot storage
         if ($this->shouldEmbedSnapshot($state)) {
             $snapshotJson = $this->serializeSnapshot($state);
-            $attrs .= sprintf(' data-usephp-snapshot=\'%s\'', htmlspecialchars($snapshotJson, ENT_QUOTES, 'UTF-8'));
+            $attrs .= sprintf(' data-usephp-snapshot=\'%s\'', self::escape($snapshotJson));
             if ($this->persist !== null) {
                 $attrs .= sprintf(' data-usephp-persist="%s"', $this->persist->value);
             }
@@ -329,7 +357,7 @@ final class Renderer
             $snapshotJson = $this->serializeSnapshot($state);
             $inner .= sprintf(
                 '<input type="hidden" name="_usephp_snapshot" value="%s" data-usephp-snapshot-update />',
-                htmlspecialchars($snapshotJson, ENT_QUOTES, 'UTF-8')
+                self::escape($snapshotJson)
             );
         }
 
@@ -342,7 +370,7 @@ final class Renderer
     public function renderElement(Element|string $element): string
     {
         if (is_string($element)) {
-            return htmlspecialchars($element, ENT_QUOTES, 'UTF-8');
+            return self::escape($element);
         }
 
         // Handle Fragment
@@ -386,7 +414,7 @@ final class Renderer
             return "<{$tag}{$attributes} />";
         }
 
-        $children = $this->renderChildren($element->children);
+        $children = $this->renderContent($tag, $element->children);
 
         return "<{$tag}{$attributes}>{$children}</{$tag}>";
     }
@@ -409,14 +437,14 @@ final class Renderer
         }
 
         $attributes = $this->renderAttributes($props);
-        $children = $this->renderChildren($element->children);
+        $children = $this->renderContent($tag, $element->children);
 
         // Build the form with hidden action data
         $actionJsonRaw = $action->toJson();
-        $actionJson = htmlspecialchars($actionJsonRaw, ENT_QUOTES, 'UTF-8');
+        $actionJson = self::escape($actionJsonRaw);
         // Prefer componentId from Action, fall back to Renderer's componentId
         $componentId = $action->componentId ?? $this->componentId;
-        $componentIdEscaped = htmlspecialchars($componentId, ENT_QUOTES, 'UTF-8');
+        $componentIdEscaped = self::escape($componentId);
 
         // Sign the action so doHandleAction() only replays actions this
         // server rendered: the client cannot change index/value/storageType
@@ -427,7 +455,7 @@ final class Renderer
             if ($signature !== null) {
                 $signatureField = sprintf(
                     '<input type="hidden" name="_usephp_action_sig" value="%s" />',
-                    htmlspecialchars($signature, ENT_QUOTES, 'UTF-8')
+                    self::escape($signature)
                 );
             }
         }
@@ -444,7 +472,7 @@ final class Renderer
             $snapshotJson = $this->serializeSnapshot($state);
             $snapshotField = sprintf(
                 '<input type="hidden" name="_usephp_snapshot" value="%s" />',
-                htmlspecialchars($snapshotJson, ENT_QUOTES, 'UTF-8')
+                self::escape($snapshotJson)
             );
         }
 
@@ -455,7 +483,7 @@ final class Renderer
         if ($this->csrfToken !== '') {
             $csrfField = sprintf(
                 '<input type="hidden" name="_usephp_csrf" value="%s" />',
-                htmlspecialchars($this->csrfToken, ENT_QUOTES, 'UTF-8')
+                self::escape($this->csrfToken)
             );
         }
 
@@ -489,7 +517,9 @@ final class Renderer
 
             // Handle boolean attributes
             if (is_bool($value)) {
-                if ($value) {
+                if (self::isBooleanStringAttribute($attrName)) {
+                    $attributes[] = sprintf('%s="%s"', $attrName, $value ? 'true' : 'false');
+                } elseif ($value) {
                     $attributes[] = $attrName;
                 }
                 continue;
@@ -514,19 +544,51 @@ final class Renderer
 
             $stringValue = (string) $value;
 
+            // srcdoc holds an HTML document, not a URL, so no scheme check
+            // can make it safe: the iframe runs whatever scripts it contains
+            // in the page's origin. Refuse it instead of dropping it silently.
+            if (strtolower($attrName) === 'srcdoc' && $stringValue !== '') {
+                throw new \RuntimeException(
+                    'The srcdoc attribute is not supported because its value is rendered as HTML '
+                    . 'in the same origin. Use src with a separate URL instead.',
+                );
+            }
+
             // Block dangerous URL schemes in URL-context attributes. React
             // does this in v16.9+; we adopt the same default so a stringly
             // typed user input doesn't become a one-liner XSS vector.
-            if (isset(self::URL_ATTRIBUTES[$attrName]) && self::isDangerousUrl($stringValue)) {
+            // HTML attribute names are case-insensitive, so `HREF` counts too.
+            if (isset(self::URL_ATTRIBUTES[strtolower($attrName)]) && self::isDangerousUrl($stringValue)) {
                 continue;
             }
 
             // Handle regular attributes
-            $escapedValue = htmlspecialchars($stringValue, ENT_QUOTES, 'UTF-8');
+            $escapedValue = self::escape($stringValue);
             $attributes[] = sprintf('%s="%s"', $attrName, $escapedValue);
         }
 
         return $attributes ? ' ' . implode(' ', $attributes) : '';
+    }
+
+    /**
+     * True for attributes whose value is the string "true" or "false" rather
+     * than their presence: leaving out `aria-hidden` or `spellcheck` does not
+     * mean false, and a bare `aria-hidden` is not true either.
+     */
+    private static function isBooleanStringAttribute(string $attrName): bool
+    {
+        $name = strtolower($attrName);
+
+        return str_starts_with($name, 'aria-') || isset(self::BOOLEAN_STRING_ATTRIBUTES[$name]);
+    }
+
+    /**
+     * Escape text for HTML. Without ENT_SUBSTITUTE, one invalid UTF-8 byte
+     * makes htmlspecialchars() return an empty string for the whole value.
+     */
+    private static function escape(string $value): string
+    {
+        return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
     /**
@@ -573,15 +635,16 @@ final class Renderer
 
     /**
      * Return true if $value is a URL that we refuse to emit into URL-context
-     * attributes (href/src/action/...). Matches the leading-whitespace and
-     * leading-control-character tolerance that browsers apply when parsing
-     * URLs, so an attacker cannot slip `\tjavascript:` past us.
+     * attributes (href/src/action/...). Applies the same preprocessing as the
+     * WHATWG URL parser, so an attacker cannot slip `\tjavascript:` or
+     * `java\tscript:` past us. The check only decides whether to drop the
+     * attribute; a value that passes is emitted unchanged.
      */
     private static function isDangerousUrl(string $value): bool
     {
-        // Strip leading whitespace + ASCII control bytes the way browsers do
-        // when resolving a URL. \0..\x20 covers TAB, LF, CR, NUL etc.
-        $trimmed = ltrim($value, "\x00..\x20");
+        // Browsers remove TAB, LF and CR from anywhere in a URL, then strip
+        // leading C0 controls and spaces.
+        $trimmed = ltrim(str_replace(["\t", "\r", "\n"], '', $value), "\x00..\x20");
         if ($trimmed === '') {
             return false;
         }
@@ -600,9 +663,86 @@ final class Renderer
     }
 
     /**
-     * Render children elements.
+     * Render the body of a `<$tag>` element, choosing the escaping that the
+     * HTML parser's handling of that element requires.
      *
-     * @param array<Element|string|int|float> $children
+     * @param array<mixed> $children
+     */
+    private function renderContent(string $tag, array $children): string
+    {
+        $lowerTag = strtolower($tag);
+
+        if (isset(self::RAW_TEXT_TAGS[$lowerTag]) && $this->foreignContentDepth === 0) {
+            return self::renderRawText($lowerTag, $children);
+        }
+
+        if (!isset(self::FOREIGN_CONTENT_ROOTS[$lowerTag])) {
+            return $this->renderChildren($children);
+        }
+
+        $this->foreignContentDepth++;
+        try {
+            return $this->renderChildren($children);
+        } finally {
+            $this->foreignContentDepth--;
+        }
+    }
+
+    /**
+     * Join the children of a `<script>` or `<style>` without escaping. The
+     * parser does not decode entities in these elements, so escaping corrupts
+     * the code. It would not make the content safe either: the only sequence
+     * that matters to the parser is the end tag, so that is refused, and it is
+     * checked on the joined text so it cannot be split across children.
+     * Never pass untrusted input here.
+     *
+     * @param array<mixed> $children
+     */
+    private static function renderRawText(string $lowerTag, array $children): string
+    {
+        $text = self::joinRawText($children);
+
+        if (stripos($text, '</' . $lowerTag) !== false) {
+            throw new \RuntimeException(sprintf(
+                'The content of <%1$s> must not contain "</%1$s": it would close the element early.',
+                $lowerTag,
+            ));
+        }
+
+        return $text;
+    }
+
+    /**
+     * @param array<mixed> $children
+     */
+    private static function joinRawText(array $children): string
+    {
+        $text = '';
+
+        foreach ($children as $child) {
+            if (is_array($child)) {
+                $text .= self::joinRawText($child);
+            } elseif ($child === null || is_bool($child)) {
+                continue;
+            } elseif (is_string($child) || is_int($child) || is_float($child) || $child instanceof \Stringable) {
+                $text .= (string) $child;
+            } else {
+                throw new \RuntimeException(sprintf(
+                    'Cannot render a child of type %s inside <script> or <style>: only text is allowed.',
+                    get_debug_type($child),
+                ));
+            }
+        }
+
+        return $text;
+    }
+
+    /**
+     * Render children, flattening nested arrays. null and booleans render
+     * nothing, as in React, so `$cond ? <x/> : null` stays convenient. Any
+     * other type throws: dropping it would hide the bug.
+     *
+     * @param array<mixed> $children
      */
     private function renderChildren(array $children): string
     {
@@ -611,14 +751,31 @@ final class Renderer
         foreach ($children as $child) {
             if ($child instanceof Element) {
                 $html .= $this->renderElement($child);
-            } elseif (is_string($child)) {
-                $html .= htmlspecialchars($child, ENT_QUOTES, 'UTF-8');
-            } elseif (is_numeric($child)) {
+            } elseif (is_array($child)) {
+                $html .= $this->renderChildren($child);
+            } elseif ($child instanceof Renderable) {
+                $html .= $this->renderChildren(resolveRenderables([$child]));
+            } elseif ($child === null || is_bool($child)) {
+                continue;
+            } elseif (is_string($child) || $child instanceof \Stringable) {
+                $html .= self::escape((string) $child);
+            } elseif (is_int($child) || is_float($child)) {
                 $html .= (string) $child;
+            } else {
+                throw self::unrenderableChild($child);
             }
         }
 
         return $html;
+    }
+
+    private static function unrenderableChild(mixed $child): \RuntimeException
+    {
+        return new \RuntimeException(sprintf(
+            'Cannot render a child of type %s. Children must be an Element, Renderable, '
+            . 'string, number, Stringable, null, bool, or an array of those.',
+            get_debug_type($child),
+        ));
     }
 
     /**
@@ -701,12 +858,12 @@ final class Renderer
         // `reloadDefer()`. Absent the opt-in there is no name attribute and
         // the markup is byte-identical to before this feature existed.
         $nameAttr = $reloadable === true
-            ? ' data-usephp-defer-name="' . htmlspecialchars($name, ENT_QUOTES, 'UTF-8') . '"'
+            ? ' data-usephp-defer-name="' . self::escape($name) . '"'
             : '';
 
         return sprintf(
             '<div data-usephp-defer-url="%s"%s%s%s>%s</div>',
-            htmlspecialchars($url, ENT_QUOTES, 'UTF-8'),
+            self::escape($url),
             $cacheAttr,
             $cacheTtlAttr,
             $nameAttr,
@@ -742,6 +899,9 @@ final class Renderer
             );
         }
         $snapshot = $state->createSnapshot();
+        // The snapshot goes through JSON like an action does, so an object in
+        // state would turn into an array on the next request.
+        Action::assertJsonRoundTrippable($snapshot->state, 'state');
         return $this->snapshotSerializer->serialize($snapshot);
     }
 }
