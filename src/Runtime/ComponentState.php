@@ -30,7 +30,7 @@ final class ComponentState
      * live only on this instance and never reach the state storage: writing
      * one to $_SESSION makes the end-of-request session write fatal.
      *
-     * @var array<int, callable>
+     * @var array<int, \Closure>
      */
     private array $effectCleanups = [];
 
@@ -209,7 +209,7 @@ final class ComponentState
     /**
      * Keep an effect cleanup function for the rest of this request.
      */
-    public function setEffectCleanup(int $index, callable $cleanup): void
+    public function setEffectCleanup(int $index, \Closure $cleanup): void
     {
         $this->effectCleanups[$index] = $cleanup;
     }

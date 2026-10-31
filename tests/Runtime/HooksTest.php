@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Tests\Runtime;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\ComponentState;
@@ -20,6 +21,8 @@ use Polidog\UsePhp\UsePHP;
 
 class HooksTest extends TestCase
 {
+    private static int $cleanupCalls = 0;
+
     protected function setUp(): void
     {
         // Start session for tests
@@ -250,6 +253,57 @@ class HooksTest extends TestCase
         $state->runEffectCleanup(0);
 
         $this->assertFalse($cleanupRan);
+    }
+
+    public static function recordCleanupCall(): void
+    {
+        self::$cleanupCalls++;
+    }
+
+    /**
+     * @return iterable<string, array{mixed}>
+     */
+    public static function nonCleanupEffectReturnValues(): iterable
+    {
+        yield 'int' => [1];
+        yield 'text' => ['text'];
+        yield 'bool' => [true];
+        yield 'plain array' => [['a', 'b']];
+        yield 'object' => [new \stdClass()];
+        // Callable-shaped data the application merely returned. Running it
+        // later would let an effect's result decide what gets executed.
+        yield 'function name' => ['system'];
+        yield 'static method string' => [self::class . '::recordCleanupCall'];
+        yield 'static method array' => [[self::class, 'recordCleanupCall']];
+        yield 'invokable object' => [new class {
+            public function __invoke(): void
+            {
+                HooksTest::recordCleanupCall();
+            }
+        }];
+    }
+
+    #[DataProvider('nonCleanupEffectReturnValues')]
+    public function testEffectReturnValueThatIsNotAClosureIsIgnored(mixed $returned): void
+    {
+        self::$cleanupCalls = 0;
+        $id = 'effect-return-' . uniqid();
+        $renderer = new Renderer($id);
+        $stateKey = "usephp:{$id}:state:0";
+        $component = function () use ($returned): Element {
+            [$count] = useState(0);
+            useEffect(fn() => $returned, [$count]);
+
+            return H::div();
+        };
+
+        $renderer->render($component);
+        // Re-running the effect would invoke anything kept as a cleanup; for
+        // 'system' that throws an ArgumentCountError.
+        $_SESSION[$stateKey] = 1;
+        $renderer->render($component);
+
+        $this->assertSame(0, self::$cleanupCalls);
     }
 
     public function testMultipleUseEffects(): void
