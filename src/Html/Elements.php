@@ -1335,14 +1335,21 @@ function createElement(string $type, array $params): Element
  * - Tracks the component in RenderContext's component stack
  * - Sets up ComponentState if not already set
  *
- * @param array<Element|Renderable|string> $children
- * @return array<Element|string>
+ * Nested arrays are flattened in place, so a component inside
+ * `{array_map(...)}` is expanded in document order like its siblings.
+ *
+ * @param array<mixed> $children
+ * @return list<mixed>
  */
 function resolveRenderables(array $children): array
 {
     $resolved = [];
     foreach ($children as $child) {
-        if ($child instanceof Element && $child->type === '__function_component__') {
+        if (is_array($child)) {
+            foreach (resolveRenderables($child) as $nested) {
+                $resolved[] = $nested;
+            }
+        } elseif ($child instanceof Element && $child->type === '__function_component__') {
             // Function component Element
             $resolved[] = resolveFunctionComponent($child);
         } elseif ($child instanceof BaseComponent) {
