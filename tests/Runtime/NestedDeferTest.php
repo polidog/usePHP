@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Polidog\UsePhp\Tests\Runtime;
 
 use PHPUnit\Framework\TestCase;
+use Polidog\UsePhp\Component\BaseComponent;
+use Polidog\UsePhp\Component\Component;
 use Polidog\UsePhp\Component\Defer;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Router\RequestContext;
@@ -15,6 +17,17 @@ use function Polidog\UsePhp\Runtime\fc;
 
 use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\UsePHP;
+
+#[Component(name: 'NestedDeferClassTarget')]
+final class NestedDeferClassTarget extends BaseComponent
+{
+    public function render(): Element
+    {
+        $inner = fc(fn(array $p): Element => H::div(children: 'secret-inner'), defer: new Defer('class-inner'));
+
+        return H::div(children: ['class-outer', $inner()]);
+    }
+}
 
 /**
  * A defer endpoint serves exactly one component, under that component's own
@@ -157,6 +170,20 @@ final class NestedDeferTest extends TestCase
 
         self::assertStringNotContainsString('secret-inner', $html);
         self::assertStringContainsString('data-usephp-defer-url="/_defer/inner"', $html);
+    }
+
+    public function testClassTargetDoesNotUnlockNestedDefer(): void
+    {
+        $app = $this->newApp();
+        $app->register(NestedDeferClassTarget::class);
+        $app->registerDeferred('class-target', NestedDeferClassTarget::class, 'public, s-maxage=60');
+
+        $html = $this->fetchEndpoint($app, 'class-target');
+
+        self::assertStringContainsString('class-outer', $html);
+        self::assertStringNotContainsString('secret-inner', $html);
+        self::assertStringContainsString('data-usephp-defer-url="/_defer/class-inner"', $html);
+        self::assertSame(['Cache-Control: public, s-maxage=60'], $this->headers);
     }
 
     public function testTargetRendersWhenRegisteredUnderDifferentNameThanItsDefer(): void
