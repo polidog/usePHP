@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Runtime;
 
+use function Polidog\UsePhp\Html\resolveRenderables;
+
 use Polidog\UsePhp\Snapshot\SnapshotSerializer;
 use Polidog\UsePhp\Storage\SnapshotPersist;
 use Polidog\UsePhp\Storage\StorageType;
 use Polidog\UsePhp\UsePHP;
-
-use function Polidog\UsePhp\Html\resolveRenderables;
 
 /**
  * Renders Element tree to HTML string.
@@ -86,6 +86,17 @@ final class Renderer
         'poster' => true,
         'background' => true,
         'xlink:href' => true,
+    ];
+
+    /**
+     * Non-`aria-*` attributes where a PHP bool is written as "true"/"false".
+     *
+     * @see self::isBooleanStringAttribute()
+     */
+    private const BOOLEAN_STRING_ATTRIBUTES = [
+        'contenteditable' => true,
+        'draggable' => true,
+        'spellcheck' => true,
     ];
 
     /**
@@ -506,7 +517,9 @@ final class Renderer
 
             // Handle boolean attributes
             if (is_bool($value)) {
-                if ($value) {
+                if (self::isBooleanStringAttribute($attrName)) {
+                    $attributes[] = sprintf('%s="%s"', $attrName, $value ? 'true' : 'false');
+                } elseif ($value) {
                     $attributes[] = $attrName;
                 }
                 continue;
@@ -555,6 +568,18 @@ final class Renderer
         }
 
         return $attributes ? ' ' . implode(' ', $attributes) : '';
+    }
+
+    /**
+     * True for attributes whose value is the string "true" or "false" rather
+     * than their presence: leaving out `aria-hidden` or `spellcheck` does not
+     * mean false, and a bare `aria-hidden` is not true either.
+     */
+    private static function isBooleanStringAttribute(string $attrName): bool
+    {
+        $name = strtolower($attrName);
+
+        return str_starts_with($name, 'aria-') || isset(self::BOOLEAN_STRING_ATTRIBUTES[$name]);
     }
 
     /**

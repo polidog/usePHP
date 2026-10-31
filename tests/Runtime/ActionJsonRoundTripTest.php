@@ -87,7 +87,7 @@ class ActionJsonRoundTripTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('DateTimeImmutable');
 
-        (new Renderer('test'))->renderElement(new Element(
+        new Renderer('test')->renderElement(new Element(
             'button',
             ['wire:click' => Action::setState(0, ['dt' => new \DateTimeImmutable('2026-01-01')], 'test#0')],
             ['x'],

@@ -18,7 +18,7 @@ class RendererOutputTest extends TestCase
 {
     private function render(Element $element): string
     {
-        return (new Renderer('test'))->renderElement($element);
+        return new Renderer('test')->renderElement($element);
     }
 
     /**
@@ -95,7 +95,7 @@ class RendererOutputTest extends TestCase
     public function testInvalidUtf8TextIsSubstitutedNotEmptied(): void
     {
         self::assertSame("<p>abc\u{FFFD}def</p>", $this->render(H::p(children: "abc\xB1def")));
-        self::assertSame("abc\u{FFFD}def", (new Renderer('test'))->renderElement("abc\xB1def"));
+        self::assertSame("abc\u{FFFD}def", new Renderer('test')->renderElement("abc\xB1def"));
     }
 
     public function testInvalidUtf8AttributeIsSubstitutedNotEmptied(): void
@@ -340,6 +340,42 @@ class RendererOutputTest extends TestCase
         self::assertSame(
             '<div><svg><style>a &gt; b {}</style></svg><style>c > d {}</style></div>',
             $html,
+        );
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function booleanStringAttributeProvider(): iterable
+    {
+        yield 'aria-hidden' => ['aria-hidden', 'aria-hidden'];
+        yield 'aria-pressed' => ['aria-pressed', 'aria-pressed'];
+        yield 'upper case aria' => ['ARIA-checked', 'ARIA-checked'];
+        yield 'contentEditable' => ['contentEditable', 'contenteditable'];
+        yield 'contenteditable' => ['contenteditable', 'contenteditable'];
+        yield 'draggable' => ['draggable', 'draggable'];
+        yield 'spellCheck' => ['spellCheck', 'spellcheck'];
+        yield 'spellcheck' => ['spellcheck', 'spellcheck'];
+    }
+
+    #[DataProvider('booleanStringAttributeProvider')]
+    public function testBooleanStringAttributeIsWrittenOut(string $prop, string $attribute): void
+    {
+        self::assertSame(
+            "<div {$attribute}=\"false\">x</div>",
+            $this->render(new Element('div', [$prop => false], ['x'])),
+        );
+        self::assertSame(
+            "<div {$attribute}=\"true\">x</div>",
+            $this->render(new Element('div', [$prop => true], ['x'])),
+        );
+    }
+
+    public function testOrdinaryBooleanAttributeKeepsPresenceSemantics(): void
+    {
+        self::assertSame(
+            '<input disabled />',
+            $this->render(new Element('input', ['disabled' => true, 'hidden' => false], [])),
         );
     }
 }
