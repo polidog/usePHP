@@ -64,4 +64,68 @@ final class ClientScriptTest extends TestCase
             $html,
         );
     }
+
+    /**
+     * Issue #79: replacing the component's contents wholesale drops unsent
+     * input, focus and selection, so partial responses are morphed in place.
+     * The behaviour itself needs a browser; this guards the wiring.
+     */
+    public function testPartialResponseIsMorphedIntoTheExistingDom(): void
+    {
+        $script = self::clientScript();
+
+        self::assertStringNotContainsString('component.innerHTML', $script);
+        self::assertMatchesRegularExpression('/function applyPartial\(component, html, submission\)/', $script);
+        self::assertStringContainsString('morphChildren(component, template.content, submission);', $script);
+        // The refreshed snapshot is lifted off the parsed response, so the
+        // bookkeeping field never reaches the morph.
+        self::assertStringContainsString("template.content.querySelector('[data-usephp-snapshot-update]')", $script);
+    }
+
+    public function testMorphNeverReusesAnElementWithADifferentIdentity(): void
+    {
+        $script = self::clientScript();
+
+        // A retyped or renamed field must not inherit the old field's value,
+        // and an in-flight defer fetch must not land in another URL's slot.
+        foreach (['id', 'name', 'type', 'data-usephp', 'data-usephp-defer-url'] as $attribute) {
+            self::assertStringContainsString("'{$attribute}'", self::between($script, 'const MORPH_IDENTITY', ';'));
+        }
+    }
+
+    public function testSubmitRecordsFieldValuesBeforeTheRequest(): void
+    {
+        $submit = self::submitHandler();
+
+        $captured = \strpos($submit, 'captureFields(component)');
+        $fetched = \strpos($submit, 'await fetch(');
+
+        self::assertNotFalse($captured);
+        self::assertNotFalse($fetched);
+        self::assertLessThan($fetched, $captured, 'Edits made during the request are detected against this capture.');
+        self::assertStringContainsString('applyPartial(component, await response.text(), submission)', $submit);
+    }
+
+    private static function clientScript(): string
+    {
+        $script = \file_get_contents(__DIR__ . '/../../public/usephp.js');
+        self::assertIsString($script);
+
+        return $script;
+    }
+
+    private static function submitHandler(): string
+    {
+        return self::between(self::clientScript(), "document.addEventListener('submit'", 'Deferred component hydration');
+    }
+
+    private static function between(string $haystack, string $from, string $to): string
+    {
+        $start = \strpos($haystack, $from);
+        self::assertNotFalse($start, "Missing marker: {$from}");
+        $end = \strpos($haystack, $to, $start);
+        self::assertNotFalse($end, "Missing marker: {$to}");
+
+        return \substr($haystack, $start, $end - $start);
+    }
 }
