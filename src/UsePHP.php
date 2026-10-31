@@ -1700,7 +1700,7 @@ final class UsePHP
 
             // fc() components are not in the registry, so re-render them by
             // replaying the page route.
-            if (!$isRegisteredComponent && $storageType !== StorageType::Memory) {
+            if (!$isRegisteredComponent) {
                 $partial = $this->renderFunctionComponentPartial($instanceId, $storageType);
                 if ($partial !== null) {
                     return $partial;
@@ -1828,10 +1828,12 @@ final class UsePHP
      * state. The instance's wrapper is then picked out of that tree.
      *
      * Session state already lives server-side, so the same replay gives it an
-     * in-place update instead of a full page navigation. Snapshot state on a
-     * Persistent/Session/Shared route keeps redirecting: the redirect is what
-     * writes the snapshot into the URL or the session, and answering with a
-     * partial would leave those stale (see snapshotRouteRequiresRedirect()).
+     * in-place update instead of a full page navigation. Memory state ends with
+     * this request, so a partial is the only way its action can take effect.
+     * Snapshot state on a Persistent/Session/Shared route keeps redirecting: the
+     * redirect is what writes the snapshot into the URL or the session, and
+     * answering with a partial would leave those stale (see
+     * snapshotRouteRequiresRedirect()).
      *
      * Returns null when the page cannot be replayed (no router match, a
      * class-component handler, a non-Element result, or the instance is

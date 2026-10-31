@@ -73,6 +73,21 @@ final class PostLikes extends BaseComponent
     }
 }
 
+#[Component(storage: 'memory')]
+final class MemoryTwoStates extends BaseComponent
+{
+    public function render(): Element
+    {
+        [$a, $setA] = $this->useState(0);
+        [$b, $setB] = $this->useState(0);
+
+        return H::div(children: [
+            H::button(onClick: fn() => $setA($a + 1), children: "a={$a}"),
+            H::button(onClick: fn() => $setB($b + 1), children: "b={$b}"),
+        ]);
+    }
+}
+
 if (getenv('USEPHP_TEST_SESSION_START') !== false) {
     session_start();
 }
@@ -89,6 +104,7 @@ $app->register(SessionClassCounter::class);
 $app->register(MemoryClassCounter::class);
 $app->register(SnapshotClassCounter::class);
 $app->register(TaskDetail::class);
+$app->register(MemoryTwoStates::class);
 $app->register(PostLikes::class);
 
 $counterFc = static fn(string $key, StorageType $storage) => fc(static function (array $props): Element {
@@ -136,5 +152,16 @@ $router->get('/session-fc-printed', static function () use ($app, $counterFc): s
 
     return '';
 });
+
+$router->get('/memory-two-states-class', MemoryTwoStates::class);
+$router->get('/memory-two-states-fc', static fn(): Element => fc(static function (array $props): Element {
+    [$a, $setA] = useState(0);
+    [$b, $setB] = useState(0);
+
+    return H::div(children: [
+        H::button(onClick: fn() => $setA($a + 1), children: "a={$a}"),
+        H::button(onClick: fn() => $setB($b + 1), children: "b={$b}"),
+    ]);
+}, 'memory-two-states', StorageType::Memory)([]));
 
 $app->run();

@@ -408,4 +408,76 @@ final class ActionFlowRoutesTest extends ActionFlowServerTestCase
         self::assertSame('/session-fc-printed', self::location($response));
         self::assertStringContainsString('count=1', $this->http($base . '/session-fc-printed', cookie: $cookie)['body']);
     }
+
+    // ------------------------------------------------------------------
+    // #96: fc() + Memory has no state to go back to after a redirect, so the
+    // partial response is the only place an action can take effect.
+    // ------------------------------------------------------------------
+
+    /**
+     * @return iterable<string, array{0: array<string, string>}>
+     */
+    public static function memoryEnvironmentProvider(): iterable
+    {
+        yield 'no session_start, no secret' => [[]];
+        yield 'no session_start, secret' => [self::SECRET];
+        yield 'session_start, no secret' => [['USEPHP_TEST_SESSION_START' => '1']];
+        yield 'session_start, secret' => [self::SECRET + ['USEPHP_TEST_SESSION_START' => '1']];
+    }
+
+    /**
+     * @param array<string, string> $env
+     */
+    #[DataProvider('memoryEnvironmentProvider')]
+    public function testMemoryFcUpdatesAcrossActions(array $env): void
+    {
+        $base = $this->startServer($env);
+        $page = $this->http($base . '/memory-fc');
+        $cookie = $page['cookie'];
+        $fields = self::firstFormFields($page['body']);
+
+        foreach (['count=1', 'count=2', 'count=3'] as $expected) {
+            $response = $this->http($base . '/memory-fc', $fields, ['Origin' => $base] + self::PARTIAL, $cookie);
+
+            self::assertSame(200, $response['status'], $response['body']);
+            self::assertNull(self::location($response));
+            self::assertStringContainsString($expected, $response['body']);
+            $fields = self::firstFormFields($response['body']);
+        }
+
+        // Memory state ends with the request: a reload starts over.
+        self::assertStringContainsString('count=0', $this->http($base . '/memory-fc', cookie: $cookie)['body']);
+    }
+
+    /**
+     * The other useState of a Memory component is not carried between actions:
+     * each POST starts from an empty store and applies only the signed value.
+     * This holds for class components and fc() alike. Use Session or Snapshot
+     * storage for components with more than one piece of state.
+     *
+     * @return iterable<string, array{0: string}>
+     */
+    public static function memoryTwoStatesProvider(): iterable
+    {
+        yield 'class' => ['/memory-two-states-class'];
+        yield 'fc' => ['/memory-two-states-fc'];
+    }
+
+    #[DataProvider('memoryTwoStatesProvider')]
+    public function testMemoryComponentLosesItsOtherStateOnEachAction(string $path): void
+    {
+        $base = $this->startServer();
+        $page = $this->http($base . $path);
+        $cookie = $page['cookie'];
+        $headers = ['Origin' => $base] + self::PARTIAL;
+
+        $first = $this->http($base . $path, self::firstFormFields($page['body']), $headers, $cookie);
+        self::assertStringContainsString('a=1', $first['body']);
+        self::assertStringContainsString('b=0', $first['body']);
+
+        self::assertSame(2, preg_match_all('/<form\b.*?<\/form>/s', $first['body'], $forms));
+        $second = $this->http($base . $path, self::firstFormFields($forms[0][1]), $headers, $cookie);
+        self::assertStringContainsString('b=1', $second['body']);
+        self::assertStringContainsString('a=0', $second['body']);
+    }
 }
