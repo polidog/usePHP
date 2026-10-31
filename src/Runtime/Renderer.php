@@ -275,7 +275,8 @@ final class Renderer
     private ?SnapshotSerializer $snapshotSerializer;
     private ?StorageType $storageType;
     private string $deferPrefix;
-    private string $csrfToken;
+    /** @var string|\Closure(): string */
+    private string|\Closure $csrfToken;
     private ?SnapshotPersist $persist;
     private int $foreignContentDepth = 0;
 
@@ -289,17 +290,25 @@ final class Renderer
      */
     private ?\Closure $actionSigner;
 
+    private ?string $deferQuery;
+
     /**
+     * @param string|\Closure(): string $csrfToken A closure is read when each
+     *        form is emitted, so a session started during rendering still
+     *        puts its token into the form.
      * @param \Closure(string, string): ?string|null $actionSigner
+     * @param string|null $deferQuery Query string of the defer endpoint request
+     *        this fragment answers, carried by its forms for the re-render.
      */
     public function __construct(
         string $componentId,
         ?SnapshotSerializer $snapshotSerializer = null,
         ?StorageType $storageType = null,
         string $deferPrefix = self::DEFAULT_DEFER_PREFIX,
-        string $csrfToken = '',
+        string|\Closure $csrfToken = '',
         ?SnapshotPersist $persist = null,
         ?\Closure $actionSigner = null,
+        ?string $deferQuery = null,
     ) {
         $this->componentId = $componentId;
         $this->snapshotSerializer = $snapshotSerializer;
@@ -308,6 +317,7 @@ final class Renderer
         $this->csrfToken = $csrfToken;
         $this->persist = $persist;
         $this->actionSigner = $actionSigner;
+        $this->deferQuery = $deferQuery;
     }
 
     /**
@@ -478,12 +488,23 @@ final class Renderer
 
         // Embed the per-session CSRF token so doHandleAction() can
         // synchronize-validate it. Empty when no session is active, in
-        // which case the server falls back to Origin/Referer alone.
+        // which case the POST carries no session cookie and the server falls
+        // back to Origin/Referer alone. Read after the signer above, which
+        // may have started the session.
         $csrfField = '';
-        if ($this->csrfToken !== '') {
+        $csrfToken = $this->csrfToken instanceof \Closure ? ($this->csrfToken)() : $this->csrfToken;
+        if ($csrfToken !== '') {
             $csrfField = sprintf(
                 '<input type="hidden" name="_usephp_csrf" value="%s" />',
-                self::escape($this->csrfToken)
+                self::escape($csrfToken)
+            );
+        }
+
+        $deferQueryField = '';
+        if ($this->deferQuery !== null) {
+            $deferQueryField = sprintf(
+                '<input type="hidden" name="_usephp_defer_query" value="%s" />',
+                self::escape($this->deferQuery)
             );
         }
 
@@ -492,7 +513,7 @@ final class Renderer
             <form method="post" data-usephp-form style="display:inline;">
             <input type="hidden" name="_usephp_component" value="{$componentIdEscaped}" />
             <input type="hidden" name="_usephp_action" value="{$actionJson}" />
-            {$signatureField}{$csrfField}{$snapshotField}{$innerElement}
+            {$signatureField}{$csrfField}{$snapshotField}{$deferQueryField}{$innerElement}
             </form>
             HTML;
     }

@@ -748,10 +748,14 @@ final class UsePHP
      * Return (and lazily generate) the per-session CSRF token used to
      * cross-check the hidden form field in {@see doHandleAction()}.
      *
-     * When no session is active the token is empty — `verifyCsrf()` then
-     * falls back to Origin/Referer alone, which is still sufficient against
-     * cross-site form submissions from a modern browser. Sessions add a
-     * second, state-bound layer.
+     * When no session is active the token is empty. A visitor with no session
+     * at all has no session state to attack, and `verifyCsrf()` falls back to
+     * Origin/Referer for them; a visitor who holds a session cookie gets the
+     * token layer as well, see {@see verifyCsrf()}.
+     *
+     * The session may start while a page renders (`SessionStorage` starts it
+     * on first use), so renderers take this method as a closure and read the
+     * token when they emit each form, not before rendering.
      */
     public function getCsrfToken(): string
     {
@@ -770,6 +774,12 @@ final class UsePHP
     }
 
     /**
+     * Query string of the defer endpoint request being rendered, for the forms
+     * in that fragment. See {@see doHandleDeferred()}.
+     */
+    private ?string $deferFormQuery = null;
+
+    /**
      * Upper bound for a hook index accepted from the client. Components
      * never have anywhere near this many hooks; the bound keeps a replayed
      * or forged action from fanning out storage keys.
@@ -785,13 +795,43 @@ final class UsePHP
      * a random per-session key; the active session id is mixed into the
      * payload so a form rendered in one session cannot be replayed in another.
      *
-     * Returns null when no key is available (no secret and no active
-     * session) — such an action cannot be verified later and will be
-     * rejected by {@see doHandleAction()}.
+     * The form must be signed under the session its POST will run in, so a
+     * returning visitor's session is resumed here, the same way
+     * {@see doHandleAction()} resumes it. Without a secret the per-session
+     * key is the only key there is, so the session is started if needed.
+     *
+     * Returns null when no key is available (no secret and the session cannot
+     * start) — such an action cannot be verified later and will be rejected
+     * by {@see doHandleAction()}.
      *
      * @internal Exposed for tests and custom form rendering; not stable API.
      */
     public function signAction(string $componentId, string $actionJson): ?string
+    {
+        $this->resumeSessionFromCookie();
+        if ($this->snapshotSerializer === null) {
+            $this->startSessionIfPossible();
+        }
+
+        return $this->computeActionSignature($componentId, $actionJson);
+    }
+
+    /**
+     * Verify a signature produced by {@see signAction()}.
+     *
+     * Never starts a session: a POST without a session cookie must stay
+     * sessionless, and it must not be able to mint a key to verify against.
+     *
+     * @internal
+     */
+    public function verifyActionSignature(string $componentId, string $actionJson, string $signature): bool
+    {
+        $expected = $this->computeActionSignature($componentId, $actionJson);
+
+        return $expected !== null && hash_equals($expected, $signature);
+    }
+
+    private function computeActionSignature(string $componentId, string $actionJson): ?string
     {
         $payload = $this->actionSigningPayload($componentId, $actionJson);
 
@@ -812,15 +852,43 @@ final class UsePHP
     }
 
     /**
-     * Verify a signature produced by {@see signAction()}.
-     *
-     * @internal
+     * Start the PHP session unless that is impossible. Returns whether a
+     * session is active afterwards.
      */
-    public function verifyActionSignature(string $componentId, string $actionJson, string $signature): bool
+    private function startSessionIfPossible(): bool
     {
-        $expected = $this->signAction($componentId, $actionJson);
+        if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
+            // A malformed cookie makes session_start() warn and fail. That is
+            // client input, not an application error, and the caller decides.
+            @session_start();
+        }
 
-        return $expected !== null && hash_equals($expected, $signature);
+        return session_status() === PHP_SESSION_ACTIVE;
+    }
+
+    /**
+     * Resume the visitor's session if the request carries its cookie.
+     *
+     * Rendering a form and handling its POST both call this, so they agree on
+     * whether a session is active. A request without the cookie stays
+     * sessionless, which is what keeps Snapshot pages free of `Set-Cookie`.
+     */
+    private function resumeSessionFromCookie(): void
+    {
+        if ($this->hasSessionCookie()) {
+            $this->startSessionIfPossible();
+        }
+    }
+
+    private function hasSessionCookie(): bool
+    {
+        $name = session_name();
+        if ($name === false) {
+            return false;
+        }
+        $cookie = $_COOKIE[$name] ?? null;
+
+        return is_string($cookie) && $cookie !== '';
     }
 
     private function actionSigningPayload(string $componentId, string $actionJson): string
@@ -866,9 +934,12 @@ final class UsePHP
      *
      *  1. Origin/Referer same-origin check — primary defense, no state
      *     required, works for both Session and Snapshot storage.
-     *  2. Session-bound synchronizer token — additional defense, only
-     *     enforced when a session is active (so the snapshot-only mode
-     *     doesn't need a session just to submit a form).
+     *  2. Session-bound synchronizer token — enforced whenever the visitor
+     *     has a session. A request with no session cookie has no session
+     *     state to attack, so the snapshot-only mode doesn't need a session
+     *     just to submit a form. A request with the cookie whose session
+     *     could not be started (output already sent, malformed id) fails
+     *     closed: skipping the token there would let a client opt out of it.
      *
      * The check is intentionally strict on the source-origin side: a
      * request with neither Origin nor Referer is rejected, because modern
@@ -894,7 +965,11 @@ final class UsePHP
             return 'CSRF check failed: source origin does not match this host';
         }
 
-        // Session-bound token layer — only enforced when a session is active.
+        if (session_status() === PHP_SESSION_NONE && $this->hasSessionCookie()) {
+            return 'CSRF check failed: request has a session cookie but the session could not be started';
+        }
+
+        // Session-bound token layer — enforced for every visitor with a session.
         if (session_status() === PHP_SESSION_ACTIVE) {
             $sessionToken = $_SESSION['_usephp_csrf'] ?? null;
             $postToken = $_POST['_usephp_csrf'] ?? null;
@@ -1284,7 +1359,9 @@ final class UsePHP
      */
     private function restoreSnapshotFromSession(string $sessionKey, string $behavior): void
     {
-        if (session_status() !== PHP_SESSION_ACTIVE) {
+        // These routes keep their state in the session by declaration, so the
+        // app does not have to call session_start() itself.
+        if (!$this->startSessionIfPossible()) {
             return;
         }
         $stored = $_SESSION[$sessionKey] ?? null;
@@ -1409,6 +1486,37 @@ final class UsePHP
         $path = str_replace('\\', '/', $path);
 
         return '/' . ltrim($path, '/');
+    }
+
+    /**
+     * The URL a PRG redirect goes back to: {@see normalizeRedirectPath()} plus
+     * the request's query string, so an action does not lose the page's search
+     * conditions or page number.
+     *
+     * Only the path can make a `Location` leave the origin, so only the path
+     * needs normalising; the query follows the first `?` and is plain data.
+     * Control characters anywhere still reject the whole target. The snapshot
+     * parameter is removed: the redirect either writes a new one or the state
+     * it holds is out of date.
+     *
+     * @internal Exposed for tests; not part of the public API.
+     */
+    public static function normalizeRedirectTarget(string $requestUri, string $snapshotParam = '_snapshot'): string
+    {
+        $path = self::normalizeRedirectPath($requestUri);
+        if (preg_match('/[\x00-\x1F\x7F]/', $requestUri) === 1) {
+            return $path;
+        }
+
+        $queryStart = strpos($requestUri, '?');
+        if ($queryStart === false) {
+            return $path;
+        }
+
+        $query = explode('#', substr($requestUri, $queryStart + 1), 2)[0];
+        $query = SimpleRouter::removeQueryParam($query, $snapshotParam);
+
+        return $query === '' ? $path : $path . '?' . $query;
     }
 
     /**
@@ -1561,7 +1669,15 @@ final class UsePHP
             $this->deferredEndpointName = null;
         }
 
-        return $this->renderElement($element);
+        // Class components read their defer params from $_GET, but their forms
+        // POST to the page's URL. The form carries the query along so a partial
+        // re-render can see it again.
+        $this->deferFormQuery = $request->queryString !== '' ? $request->queryString : null;
+        try {
+            return $this->renderElement($element);
+        } finally {
+            $this->deferFormQuery = null;
+        }
     }
 
     /**
@@ -1608,6 +1724,12 @@ final class UsePHP
      */
     private function doHandleAction(): string
     {
+        // The CSRF token and the action signature are both bound to the
+        // session, so it has to be running before either is checked. Only the
+        // visitor's own cookie brings it up; a POST without one stays
+        // sessionless and is checked as such.
+        $this->resumeSessionFromCookie();
+
         $csrfReason = $this->verifyCsrf();
         if ($csrfReason !== null) {
             http_response_code(403);
@@ -1715,16 +1837,22 @@ final class UsePHP
 
         // Partial update (AJAX) - return only component HTML
         if ($isPartial) {
-            if ($isRegisteredComponent) {
+            // Actions are dispatched before routing. Resolve the page's route
+            // so the re-render sees the same useRouter() params as its GET.
+            $this->resolveActionPageMatch();
+
+            // 'restore' changes nothing and usephp.js treats a redirect as a
+            // rejected snapshot, so it answers with a partial on any route.
+            if ($isRegisteredComponent
+                && ($action->type === 'restore' || !$this->snapshotRouteRequiresRedirect($storageType))
+            ) {
                 return $this->doRenderComponentPartialWithInstanceId($instanceId, $componentName);
             }
 
             // fc() components are not in the registry, so re-render them by
-            // replaying the page route. Without this, a Snapshot-storage
-            // function component on a plain (Isolated) route would fall
-            // through to the redirect below and lose the state it just set.
-            if ($storageType === StorageType::Snapshot) {
-                $partial = $this->renderFunctionComponentPartial($instanceId);
+            // replaying the page route.
+            if (!$isRegisteredComponent) {
+                $partial = $this->renderFunctionComponentPartial($instanceId, $storageType);
                 if ($partial !== null) {
                     return $partial;
                 }
@@ -1735,8 +1863,11 @@ final class UsePHP
         // The redirect target is derived from the raw request line, which the
         // client controls — normalise it to a same-origin path first so a
         // request for `//evil.example/page` cannot turn the 303 into an open
-        // redirect (see normalizeRedirectPath()).
-        $redirectUrl = self::normalizeRedirectPath($_SERVER['REQUEST_URI'] ?? '/');
+        // redirect (see normalizeRedirectTarget()).
+        $redirectUrl = self::normalizeRedirectTarget(
+            $_SERVER['REQUEST_URI'] ?? '/',
+            $this->router instanceof SimpleRouter ? $this->router->getSnapshotParam() : '_snapshot',
+        );
 
         // Actions POST to the page's own URL, so the snapshot behavior that
         // applies is the one declared on the GET route that rendered the
@@ -1818,6 +1949,25 @@ final class UsePHP
     }
 
     /**
+     * Whether a partial response would lose this action's state.
+     *
+     * Persistent/Session/Shared routes write the snapshot into the URL or the
+     * session on the PRG redirect, so answering with a partial would leave
+     * those stale and a reload would go back to the old state. Other storage
+     * types and Isolated routes have nothing for the redirect to write.
+     */
+    private function snapshotRouteRequiresRedirect(StorageType $storageType): bool
+    {
+        if ($storageType !== StorageType::Snapshot) {
+            return false;
+        }
+
+        [$match] = $this->resolveActionPageMatch();
+
+        return $match !== null && $match->snapshotBehavior !== SnapshotBehavior::Isolated;
+    }
+
+    /**
      * Re-render a function component instance for a partial (AJAX) response.
      *
      * `fc()` components are closures held by user code, not registry
@@ -1828,22 +1978,26 @@ final class UsePHP
      * (with the action applied) the component re-renders with the new
      * state. The instance's wrapper is then picked out of that tree.
      *
-     * Only Isolated routes take this path. It is the one combination where
-     * the PRG redirect would drop the state outright — nothing carries a
-     * snapshot across the redirect — so a partial response is the only way
-     * the action can take effect. Persistent/Session/Shared routes keep
-     * redirecting: the redirect is what writes the snapshot into the URL or
-     * the session, and answering with a partial would leave those stale.
+     * Session state already lives server-side, so the same replay gives it an
+     * in-place update instead of a full page navigation. Memory state ends with
+     * this request, so a partial is the only way its action can take effect.
+     * Snapshot state on a Persistent/Session/Shared route keeps redirecting: the
+     * redirect is what writes the snapshot into the URL or the session, and
+     * answering with a partial would leave those stale (see
+     * snapshotRouteRequiresRedirect()).
      *
      * Returns null when the page cannot be replayed (no router match, a
-     * non-Isolated route, a class-component handler, a non-Element result,
-     * or the instance is missing from the tree); the caller then falls
-     * back to the PRG redirect.
+     * class-component handler, a non-Element result, or the instance is
+     * missing from the tree); the caller then falls back to the PRG redirect.
      */
-    private function renderFunctionComponentPartial(string $instanceId): ?string
+    private function renderFunctionComponentPartial(string $instanceId, StorageType $storageType): ?string
     {
+        if ($this->snapshotRouteRequiresRedirect($storageType)) {
+            return null;
+        }
+
         [$match, $pageRequest] = $this->resolveActionPageMatch();
-        if ($match === null || $match->snapshotBehavior !== SnapshotBehavior::Isolated) {
+        if ($match === null) {
             return null;
         }
 
@@ -1855,7 +2009,14 @@ final class UsePHP
         // Fresh render pass so auto-generated instance keys (e.g. "#0")
         // line up with the ones the original GET produced.
         RenderContext::beginRender();
-        $result = $handler($match->params, $pageRequest);
+        // The handler runs for its Element tree only. Anything it prints would
+        // corrupt the partial, or block the fallback redirect's headers.
+        ob_start();
+        try {
+            $result = $handler($match->params, $pageRequest);
+        } finally {
+            ob_end_clean();
+        }
         if (!$result instanceof Element) {
             return null;
         }
@@ -1868,15 +2029,15 @@ final class UsePHP
         $renderer = new Renderer(
             $instanceId,
             $this->tryGetSnapshotSerializer(),
-            StorageType::Snapshot,
+            $storageType,
             $this->deferPrefix,
-            $this->getCsrfToken(),
+            $this->getCsrfToken(...),
             actionSigner: $this->actionSigner(),
         );
 
-        // renderPartial() emits the wrapper's contents plus the refreshed
-        // snapshot as a data-usephp-snapshot-update field, which usephp.js
-        // copies back onto the wrapper for the next round trip.
+        // renderPartial() emits the wrapper's contents. For Snapshot storage it
+        // adds the refreshed snapshot as a data-usephp-snapshot-update field,
+        // which usephp.js copies back onto the wrapper for the next round trip.
         return $renderer->renderPartial(
             static fn(): Element => new Element('Fragment', [], $wrapper->children)
         );
@@ -1968,8 +2129,9 @@ final class UsePHP
                 '_root_',
                 $this->tryGetSnapshotSerializer(),
                 deferPrefix: $this->deferPrefix,
-                csrfToken: $this->getCsrfToken(),
+                csrfToken: $this->getCsrfToken(...),
                 actionSigner: $this->actionSigner(),
+                deferQuery: $this->deferFormQuery,
             );
             return $renderer->renderElement($element);
         } finally {
@@ -2011,7 +2173,7 @@ final class UsePHP
                 $this->tryGetSnapshotSerializer(),
                 $storageType,
                 $this->deferPrefix,
-                $this->getCsrfToken(),
+                $this->getCsrfToken(...),
                 $this->registry->getPersist($componentName),
                 $this->actionSigner(),
             );
@@ -2034,6 +2196,17 @@ final class UsePHP
             return '';
         }
 
+        // A form from the defer endpoint brings the endpoint's query with it.
+        // The client already chooses the query string of this POST, so taking
+        // it from a field gives it nothing new and needs no signature.
+        $deferQuery = $_POST['_usephp_defer_query'] ?? null;
+        if (!is_string($deferQuery) || $deferQuery === '') {
+            $deferQuery = null;
+        } else {
+            parse_str($deferQuery, $deferParams);
+            $_GET = $deferParams;
+        }
+
         $storageType = $this->registry->getStorageType($componentName);
         $state = ComponentState::getInstance($instanceId, $storageType);
         ComponentState::reset();
@@ -2047,8 +2220,9 @@ final class UsePHP
             $this->tryGetSnapshotSerializer(),
             $storageType,
             $this->deferPrefix,
-            $this->getCsrfToken(),
+            $this->getCsrfToken(...),
             actionSigner: $this->actionSigner(),
+            deferQuery: $deferQuery,
         );
 
         return $renderer->renderPartial(fn() => $component->render());
