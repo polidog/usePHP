@@ -7,8 +7,11 @@ namespace Polidog\UsePhp\Tests\Runtime;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\Renderer;
+use Polidog\UsePhp\Runtime\Snapshot;
+use Polidog\UsePhp\Snapshot\SnapshotSerializer;
 
 class RendererOutputTest extends TestCase
 {
@@ -86,5 +89,42 @@ class RendererOutputTest extends TestCase
             '<iframe srcdoc=""></iframe>',
             $this->render(new Element('iframe', ['srcdoc' => ''], [])),
         );
+    }
+
+    public function testInvalidUtf8TextIsSubstitutedNotEmptied(): void
+    {
+        self::assertSame("<p>abc\u{FFFD}def</p>", $this->render(H::p(children: "abc\xB1def")));
+        self::assertSame("abc\u{FFFD}def", (new Renderer('test'))->renderElement("abc\xB1def"));
+    }
+
+    public function testInvalidUtf8AttributeIsSubstitutedNotEmptied(): void
+    {
+        self::assertSame(
+            "<a href=\"/a\u{FFFD}\">x</a>",
+            $this->render(H::a(href: "/a\xB1", children: 'x')),
+        );
+    }
+
+    public function testInvalidUtf8StateValueDoesNotBreakTheActionForm(): void
+    {
+        $html = $this->render(H::button(
+            onClick: fn() => Action::setState(0, "\xB1\x31", 'test#0'),
+            children: 'x',
+        ));
+
+        self::assertSame(1, preg_match('/name="_usephp_action" value="([^"]*)"/', $html, $m));
+        $action = json_decode(html_entity_decode($m[1], ENT_QUOTES, 'UTF-8'), true, 512, JSON_THROW_ON_ERROR);
+        self::assertIsArray($action);
+        self::assertSame("\u{FFFD}1", $action['payload']['value']);
+    }
+
+    public function testInvalidUtf8SnapshotStateSurvivesTheChecksum(): void
+    {
+        $serializer = new SnapshotSerializer('test-secret-key-with-enough-entropy');
+
+        $json = $serializer->serialize(new Snapshot('Comp', '0', [0 => "\xB1\x31"]));
+        $restored = $serializer->deserialize($json);
+
+        self::assertSame([0 => "\u{FFFD}1"], $restored->state);
     }
 }

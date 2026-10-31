@@ -295,12 +295,12 @@ final class Renderer
         $inner = $this->renderElement($element);
 
         // Build attributes
-        $attrs = sprintf('data-usephp="%s"', htmlspecialchars($this->componentId, ENT_QUOTES, 'UTF-8'));
+        $attrs = sprintf('data-usephp="%s"', self::escape($this->componentId));
 
         // Add snapshot attribute if using snapshot storage
         if ($this->shouldEmbedSnapshot($state)) {
             $snapshotJson = $this->serializeSnapshot($state);
-            $attrs .= sprintf(' data-usephp-snapshot=\'%s\'', htmlspecialchars($snapshotJson, ENT_QUOTES, 'UTF-8'));
+            $attrs .= sprintf(' data-usephp-snapshot=\'%s\'', self::escape($snapshotJson));
             if ($this->persist !== null) {
                 $attrs .= sprintf(' data-usephp-persist="%s"', $this->persist->value);
             }
@@ -328,7 +328,7 @@ final class Renderer
             $snapshotJson = $this->serializeSnapshot($state);
             $inner .= sprintf(
                 '<input type="hidden" name="_usephp_snapshot" value="%s" data-usephp-snapshot-update />',
-                htmlspecialchars($snapshotJson, ENT_QUOTES, 'UTF-8')
+                self::escape($snapshotJson)
             );
         }
 
@@ -341,7 +341,7 @@ final class Renderer
     public function renderElement(Element|string $element): string
     {
         if (is_string($element)) {
-            return htmlspecialchars($element, ENT_QUOTES, 'UTF-8');
+            return self::escape($element);
         }
 
         // Handle Fragment
@@ -412,10 +412,10 @@ final class Renderer
 
         // Build the form with hidden action data
         $actionJsonRaw = $action->toJson();
-        $actionJson = htmlspecialchars($actionJsonRaw, ENT_QUOTES, 'UTF-8');
+        $actionJson = self::escape($actionJsonRaw);
         // Prefer componentId from Action, fall back to Renderer's componentId
         $componentId = $action->componentId ?? $this->componentId;
-        $componentIdEscaped = htmlspecialchars($componentId, ENT_QUOTES, 'UTF-8');
+        $componentIdEscaped = self::escape($componentId);
 
         // Sign the action so doHandleAction() only replays actions this
         // server rendered: the client cannot change index/value/storageType
@@ -426,7 +426,7 @@ final class Renderer
             if ($signature !== null) {
                 $signatureField = sprintf(
                     '<input type="hidden" name="_usephp_action_sig" value="%s" />',
-                    htmlspecialchars($signature, ENT_QUOTES, 'UTF-8')
+                    self::escape($signature)
                 );
             }
         }
@@ -443,7 +443,7 @@ final class Renderer
             $snapshotJson = $this->serializeSnapshot($state);
             $snapshotField = sprintf(
                 '<input type="hidden" name="_usephp_snapshot" value="%s" />',
-                htmlspecialchars($snapshotJson, ENT_QUOTES, 'UTF-8')
+                self::escape($snapshotJson)
             );
         }
 
@@ -454,7 +454,7 @@ final class Renderer
         if ($this->csrfToken !== '') {
             $csrfField = sprintf(
                 '<input type="hidden" name="_usephp_csrf" value="%s" />',
-                htmlspecialchars($this->csrfToken, ENT_QUOTES, 'UTF-8')
+                self::escape($this->csrfToken)
             );
         }
 
@@ -532,11 +532,20 @@ final class Renderer
             }
 
             // Handle regular attributes
-            $escapedValue = htmlspecialchars($stringValue, ENT_QUOTES, 'UTF-8');
+            $escapedValue = self::escape($stringValue);
             $attributes[] = sprintf('%s="%s"', $attrName, $escapedValue);
         }
 
         return $attributes ? ' ' . implode(' ', $attributes) : '';
+    }
+
+    /**
+     * Escape text for HTML. Without ENT_SUBSTITUTE, one invalid UTF-8 byte
+     * makes htmlspecialchars() return an empty string for the whole value.
+     */
+    private static function escape(string $value): string
+    {
+        return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
     /**
@@ -623,7 +632,7 @@ final class Renderer
             if ($child instanceof Element) {
                 $html .= $this->renderElement($child);
             } elseif (is_string($child)) {
-                $html .= htmlspecialchars($child, ENT_QUOTES, 'UTF-8');
+                $html .= self::escape($child);
             } elseif (is_numeric($child)) {
                 $html .= (string) $child;
             }
@@ -712,12 +721,12 @@ final class Renderer
         // `reloadDefer()`. Absent the opt-in there is no name attribute and
         // the markup is byte-identical to before this feature existed.
         $nameAttr = $reloadable === true
-            ? ' data-usephp-defer-name="' . htmlspecialchars($name, ENT_QUOTES, 'UTF-8') . '"'
+            ? ' data-usephp-defer-name="' . self::escape($name) . '"'
             : '';
 
         return sprintf(
             '<div data-usephp-defer-url="%s"%s%s%s>%s</div>',
-            htmlspecialchars($url, ENT_QUOTES, 'UTF-8'),
+            self::escape($url),
             $cacheAttr,
             $cacheTtlAttr,
             $nameAttr,

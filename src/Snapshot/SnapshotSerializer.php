@@ -120,7 +120,7 @@ final class SnapshotSerializer
             $payload = ['ctx' => $this->context] + $payload;
         }
 
-        $data = json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        $data = json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 
         // HMAC with secret key for security
         return hash_hmac(self::CHECKSUM_ALGORITHM, $data, $this->secretKey);

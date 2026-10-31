@@ -62,7 +62,7 @@ final readonly class Action
 
     public function toJson(): string
     {
-        return json_encode($this->toArray(), JSON_THROW_ON_ERROR);
+        return json_encode($this->toArray(), JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE);
     }
 
     public static function setState(int $stateIndex, mixed $value, ?string $componentId = null, ?StorageType $storageType = null): self
