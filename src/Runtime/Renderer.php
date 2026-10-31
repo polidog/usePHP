@@ -293,6 +293,24 @@ final class Renderer
     private ?string $deferQuery;
 
     /**
+     * Action forms rendered but not yet written out. An action form cannot
+     * be emitted next to the element it belongs to: inside an application's
+     * <form> the HTML parser would drop the nested start tag and let its
+     * end tag close the outer form, and <p> or <tbody> would be broken up
+     * too. The element references the form by id instead, and the form is
+     * written at the next safe place (see flushActionForms()).
+     *
+     * @var list<string>
+     */
+    private array $pendingActionForms = [];
+
+    /** Nesting depth of renderElement(), to find the outermost call. */
+    private int $renderDepth = 0;
+
+    /** Number of <form> elements currently open in the output. */
+    private int $openFormDepth = 0;
+
+    /**
      * @param string|\Closure(): string $csrfToken A closure is read when each
      *        form is emitted, so a session started during rendering still
      *        puts its token into the form.
@@ -379,6 +397,20 @@ final class Renderer
      */
     public function renderElement(Element|string $element): string
     {
+        $this->renderDepth++;
+        try {
+            $html = $this->renderNode($element);
+        } finally {
+            $this->renderDepth--;
+        }
+
+        // Whatever no wrapper or application form picked up goes after the
+        // outermost element, so a direct call still returns complete output.
+        return $this->renderDepth === 0 ? $html . $this->flushActionForms() : $html;
+    }
+
+    private function renderNode(Element|string $element): string
+    {
         if (is_string($element)) {
             return self::escape($element);
         }
@@ -403,20 +435,11 @@ final class Renderer
             );
         }
 
-        // Validate the tag name *before* any interpolation. renderWithForm()
-        // below reuses $element->type too, so this single check covers both
-        // the plain and the form-wrapped output.
+        // Validate the tag name *before* any interpolation.
         $tag = $element->type;
         self::assertValidTagName($tag);
 
-        $props = $element->props;
-        $hasAction = isset($props['wire:click']);
-
-        // If element has an action, wrap it in a form
-        if ($hasAction) {
-            return $this->renderWithForm($element);
-        }
-
+        [$props, $submitFields] = $this->bindActions($tag, $element->props);
         $attributes = $this->renderAttributes($props);
 
         // Self-closing tags
@@ -424,31 +447,168 @@ final class Renderer
             return "<{$tag}{$attributes} />";
         }
 
-        $children = $this->renderContent($tag, $element->children);
+        $isForm = strtolower($tag) === 'form';
+        if ($isForm) {
+            $this->openFormDepth++;
+        }
+        try {
+            $children = $this->renderContent($tag, $element->children);
+        } finally {
+            if ($isForm) {
+                $this->openFormDepth--;
+            }
+        }
 
-        return "<{$tag}{$attributes}>{$children}</{$tag}>";
+        // A component wrapper is the natural home for its action forms: a
+        // partial update replaces them along with the elements using them.
+        if (isset($props['data-usephp']) && $this->openFormDepth === 0) {
+            $children .= $this->flushActionForms();
+        }
+
+        $html = "<{$tag}{$attributes}>{$submitFields}{$children}</{$tag}>";
+
+        return $isForm && $this->openFormDepth === 0 ? $html . $this->flushActionForms() : $html;
     }
 
     /**
-     * Render an element wrapped in a form for action handling.
+     * Write out the action forms collected so far. Only called where no
+     * <form> is open.
      */
-    private function renderWithForm(Element $element): string
+    private function flushActionForms(): string
     {
-        $action = $element->props['wire:click'];
-        $tag = $element->type;
+        $html = implode('', $this->pendingActionForms);
+        $this->pendingActionForms = [];
 
-        // Remove wire:click from props
-        $props = $element->props;
-        unset($props['wire:click']);
+        return $html;
+    }
 
-        // For button, make it a submit button
-        if ($tag === 'button') {
-            $props['type'] = 'submit';
+    /**
+     * Turn the `wire:*` props into what the browser needs to fire the action.
+     *
+     * A button (or submit input) is associated with its action form through
+     * the `form` attribute, which works without JavaScript, and a <form>
+     * with onSubmit becomes an action form itself. Any other element cannot
+     * submit a form by itself; it names the form in a `data-usephp-on-*`
+     * attribute that usephp.js acts on.
+     *
+     * @param array<string, mixed> $props
+     * @return array{array<string, mixed>, string} The props to render, and the
+     *         hidden fields to put inside the element when it is an onSubmit form.
+     */
+    private function bindActions(string $tag, array $props): array
+    {
+        $submitFields = '';
+
+        foreach ($props as $key => $action) {
+            if (!str_starts_with($key, 'wire:')) {
+                continue;
+            }
+            unset($props[$key]);
+
+            $event = substr($key, 5);
+            if (!$action instanceof Action) {
+                throw new \RuntimeException(sprintf(
+                    '%s must be an Action; got %s.',
+                    $key,
+                    get_debug_type($action),
+                ));
+            }
+
+            if ($action->type === Action::SET_FIELDS && $event !== 'submit') {
+                self::assertFieldTrigger($event, $tag, $props, $action);
+                $props['data-usephp-with-value'] = true;
+            }
+
+            if ($event === 'submit') {
+                self::assertSubmitTarget($tag, $props);
+                $submitFields = $this->renderActionFields($action);
+                $props = ['method' => 'post', 'data-usephp-form' => true] + $props;
+                if ($action->type === Action::SET_FIELDS) {
+                    $props['data-usephp-with-value'] = true;
+                }
+            } elseif ($event === 'click' && ($tag === 'button'
+                || ($tag === 'input' && in_array($props['type'] ?? null, ['submit', 'image'], true)))
+            ) {
+                if ($tag === 'button') {
+                    $props['type'] = 'submit';
+                }
+                $props['form'] = $this->addActionForm($action);
+            } elseif (in_array($event, ['click', 'change', 'input'], true)) {
+                $props['data-usephp-on-' . $event] = $this->addActionForm($action);
+            } else {
+                throw new \RuntimeException(sprintf('Unsupported event binding %s.', $key));
+            }
         }
 
-        $attributes = $this->renderAttributes($props);
-        $children = $this->renderContent($tag, $element->children);
+        return [$props, $submitFields];
+    }
 
+    /**
+     * Outside a form's onSubmit, the only value that gets sent is that of the
+     * control firing the event. Any other field in the map would arrive
+     * missing and silently clear its hook, so the mismatch is refused here.
+     *
+     * @param array<string, mixed> $props
+     */
+    private static function assertFieldTrigger(string $event, string $tag, array $props, Action $action): void
+    {
+        $problem = match (true) {
+            $event === 'click' => 'onClick sends no field values; use onSubmit on the form, or onChange/onInput on the control',
+            !in_array($tag, ['input', 'select', 'textarea'], true) => sprintf('<%s> has no value to send', $tag),
+            !empty($props['multiple']) || ($props['type'] ?? null) === 'file' => 'a multiple or file control has no single string value',
+            ($action->payload['fields'] ?? null) === null
+                || array_keys((array) $action->payload['fields']) !== [$props['name'] ?? null] => 'the control can only send its own field, named by its name attribute',
+            default => null,
+        };
+
+        if ($problem !== null) {
+            throw new \RuntimeException('useFormAction() cannot be used here: ' . $problem . '.');
+        }
+    }
+
+    /**
+     * onSubmit takes the form over: it posts the action to the current page,
+     * with or without JavaScript. An action URL or GET method on the same
+     * form would only be honored by one of the two, so they are refused.
+     *
+     * @param array<string, mixed> $props
+     */
+    private static function assertSubmitTarget(string $tag, array $props): void
+    {
+        if (strtolower($tag) !== 'form') {
+            throw new \RuntimeException(sprintf('onSubmit only works on <form>; got <%s>.', $tag));
+        }
+        if (isset($props['action']) || strtolower((string) ($props['method'] ?? 'post')) !== 'post') {
+            throw new \RuntimeException(
+                'onSubmit posts the action to the current page; remove action and method from the <form>.',
+            );
+        }
+    }
+
+    /**
+     * Queue a hidden form carrying $action and return its id. The id is
+     * random so it stays unique on the page across separately rendered
+     * elements and partial updates.
+     */
+    private function addActionForm(Action $action): string
+    {
+        $id = 'usephp-f-' . bin2hex(random_bytes(8));
+
+        $this->pendingActionForms[] = sprintf(
+            '<form method="post" data-usephp-form id="%s" hidden>%s</form>',
+            $id,
+            $this->renderActionFields($action),
+        );
+
+        return $id;
+    }
+
+    /**
+     * The hidden fields an action POST needs: instance id, signed action,
+     * CSRF token and, for snapshot storage, the snapshot.
+     */
+    private function renderActionFields(Action $action): string
+    {
         // Build the form with hidden action data
         $actionJsonRaw = $action->toJson();
         $actionJson = self::escape($actionJsonRaw);
@@ -470,9 +630,6 @@ final class Renderer
             }
         }
 
-        $innerElement = in_array($tag, self::SELF_CLOSING_TAGS, true)
-            ? "<{$tag}{$attributes} />"
-            : "<{$tag}{$attributes}>{$children}</{$tag}>";
 
         // Add snapshot hidden field if using snapshot storage
         // Use action's componentId to get the correct state from cache
@@ -508,14 +665,9 @@ final class Renderer
             );
         }
 
-        // data-usephp-form enables JS enhancement, falls back to normal form if no JS
-        return <<<HTML
-            <form method="post" data-usephp-form style="display:inline;">
-            <input type="hidden" name="_usephp_component" value="{$componentIdEscaped}" />
-            <input type="hidden" name="_usephp_action" value="{$actionJson}" />
-            {$signatureField}{$csrfField}{$snapshotField}{$deferQueryField}{$innerElement}
-            </form>
-            HTML;
+        return '<input type="hidden" name="_usephp_component" value="' . $componentIdEscaped . '" />'
+            . '<input type="hidden" name="_usephp_action" value="' . $actionJson . '" />'
+            . $signatureField . $csrfField . $snapshotField . $deferQueryField;
     }
 
     /**
@@ -528,11 +680,6 @@ final class Renderer
         $attributes = [];
 
         foreach ($props as $key => $value) {
-            // Skip wire:* attributes (handled separately)
-            if (str_starts_with($key, 'wire:')) {
-                continue;
-            }
-
             $attrName = self::JSX_HTML_ATTR_MAP[$key] ?? $key;
             self::assertValidAttributeName($attrName);
 
@@ -647,7 +794,7 @@ final class Renderer
         if (preg_match(self::EVENT_HANDLER_ATTRIBUTE_PATTERN, $attrName) === 1) {
             throw new \RuntimeException(sprintf(
                 'Inline event handler attribute %s is not allowed. '
-                . 'Use the onClick/onChange/onInput/onSubmit/onFocus/onBlur/onLoad/onError props '
+                . 'Use the onClick/onChange/onInput/onSubmit props '
                 . 'with an Action (rendered as wire:* form actions) instead of raw JavaScript handlers.',
                 json_encode($attrName, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
             ));

@@ -552,6 +552,10 @@
         if (!trigger) return;
         if (trigger.tagName === 'FORM') return;
         if (trigger.closest('[data-usephp-form]')) return;
+        // An action button or trigger lives outside its form but submits
+        // it all the same; the submit path reloads after the response.
+        if (trigger.form && trigger.form.matches('[data-usephp-form]')) return;
+        if (trigger.hasAttribute('data-usephp-on-click')) return;
         // A reload link that also navigated away would be self-defeating;
         // suppress default activation for anchors.
         if (trigger.tagName === 'A') e.preventDefault();
@@ -607,29 +611,53 @@
         component.setAttribute('data-usephp-error', '');
     }
 
-    document.addEventListener('submit', async function(e) {
+    document.addEventListener('submit', function(e) {
         const form = e.target;
         if (!form.matches('[data-usephp-form]')) return;
 
         e.preventDefault();
+        submitAction(form, { source: e.submitter || null, submitter: e.submitter || null });
+    });
 
-        const component = form.closest('[data-usephp]');
+    // The component an action form updates. The form may sit outside the
+    // wrapper (when the component is inside an application's <form>), so the
+    // instance id it carries is what counts.
+    function componentForForm(form) {
+        const field = form.querySelector('input[name="_usephp_component"]');
+        const id = field ? field.value : '';
+        const closest = form.closest('[data-usephp]');
+        if (!id || (closest && closest.dataset.usephp === id)) return closest;
+        return document.querySelector('[data-usephp="' + CSS.escape(id) + '"]') || closest;
+    }
+
+    // `source` is the element that fired the action, `event` the trigger event
+    // it fired on. `submitter` is passed to FormData so a named submit button
+    // is sent just as without JavaScript.
+    async function submitAction(form, { source = null, submitter = null, event = null } = {}) {
+        const component = componentForForm(form);
         if (!component) {
             form.submit();
             return;
         }
 
+        queueResendIfBusy(component, form, { source, submitter, event });
         if (busyComponents.has(component)) return;
         busyComponents.add(component);
+
+        const submission = { form, sent: captureFields(component) };
+        sentSubmissions.set(component, submission);
 
         component.setAttribute('aria-busy', 'true');
         component.removeAttribute('data-usephp-error');
 
         try {
-            const submission = { form, sent: captureFields(component) };
-
             // Get current snapshot from component if using snapshot storage
-            const formData = new FormData(form);
+            const formData = submitter ? new FormData(form, submitter) : new FormData(form);
+            if (source && source.hasAttribute('data-usephp-with-value') && source.name
+                && ((source.type !== 'checkbox' && source.type !== 'radio') || source.checked)
+            ) {
+                formData.set(source.name, source.value);
+            }
             const currentSnapshot = component.dataset.usephpSnapshot;
             if (currentSnapshot && !formData.has('_usephp_snapshot')) {
                 formData.set('_usephp_snapshot', currentSnapshot);
@@ -641,9 +669,14 @@
                 body: formData
             });
 
+
             // If redirected, the server doesn't support partial updates for this component
             // Fall back to page navigation (PRG pattern)
             if (response.redirected) {
+                // A queued value still has to reach the server, and navigating
+                // now would abort it. Its own response redirects in turn.
+                if (hasResends(component)) return;
+
                 // The server only ever redirects to its own origin (PRG
                 // back to the page). Refuse to navigate anywhere else so a
                 // misbehaving proxy or a server bug cannot turn the partial
@@ -665,7 +698,12 @@
 
             if (response.ok) {
                 // Read first: the morph may turn this form into another one.
-                const reloadTargets = form.getAttribute('data-usephp-reload-defer');
+                const reloadFrom = [form, source].find(
+                    (el) => el && el.hasAttribute('data-usephp-reload-defer'),
+                );
+                const reloadTargets = reloadFrom
+                    ? reloadFrom.getAttribute('data-usephp-reload-defer')
+                    : null;
 
                 applyPartial(component, await response.text(), submission);
 
@@ -693,8 +731,180 @@
             reportSubmitFailure(form, component, { error });
         } finally {
             busyComponents.delete(component);
+            sentSubmissions.delete(component);
             component.removeAttribute('aria-busy');
+            flushResends(component);
         }
+    }
+
+    // =====================================================================
+    // Action triggers
+    // =====================================================================
+    //
+    // An element that can't submit a form by itself names its action form in
+    // `data-usephp-on-*`. All that happens here is replaying that form, which
+    // carries the action and signature the server rendered. These elements
+    // do nothing without JavaScript.
+
+    function fireTrigger(trigger, event) {
+        const id = trigger.getAttribute('data-usephp-on-' + event);
+        const form = id ? document.getElementById(id) : null;
+        if (!form || !form.matches('[data-usephp-form]')) {
+            console.warn('[usePHP] no action form found for', trigger);
+            return;
+        }
+        submitAction(form, { source: trigger, event });
+    }
+
+    // An action dropped by the lock is lost, which is right for a fixed-value
+    // button: the click was a double click. An action that reads its values
+    // when it is sent (useFormAction) is different: dropping it would leave
+    // the server without what the user typed last. It is sent once more when
+    // the lock is released, reading the values at that point. Only the latest
+    // request per control is kept, and they go out one at a time.
+    const WITH_VALUE = 'data-usephp-with-value';
+    const queuedResends = new WeakMap();
+    const sentSubmissions = new WeakMap();
+    let composingElement = null;
+
+    function hasResends(component) {
+        const queue = queuedResends.get(component);
+        return Boolean(queue && queue.size > 0);
+    }
+
+    function resendQueue(component) {
+        if (!queuedResends.has(component)) queuedResends.set(component, new Map());
+        return queuedResends.get(component);
+    }
+
+    // A second submit of the form being sent, with the same values, is a
+    // double click. Sending it again could even overwrite the state with the
+    // empty fields the first response leaves behind.
+    function isSameDelivery(submission, form) {
+        return submission && submission.form === form && [...form.elements].every(
+            (el) => !submission.sent.has(el) || submission.sent.get(el) === fieldValue(el),
+        );
+    }
+
+    function queueResendIfBusy(component, form, { source, submitter, event }) {
+        if (!busyComponents.has(component)) return;
+        if (form.hasAttribute(WITH_VALUE)) {
+            if (!isSameDelivery(sentSubmissions.get(component), form)) {
+                resendQueue(component).set(form, { form, submitter });
+            }
+        } else if (source && event && source.hasAttribute(WITH_VALUE)) {
+            resendQueue(component).set(event + ':' + controlSelector(source), { trigger: source, event });
+        }
+    }
+
+    function controlSelector(el) {
+        if (el.id) return '[id="' + CSS.escape(el.id) + '"]';
+        const selector = el.tagName.toLowerCase() + '[name="' + CSS.escape(el.name) + '"]';
+        return el.type === 'radio' || el.type === 'checkbox'
+            ? selector + '[value="' + CSS.escape(el.value) + '"]'
+            : selector;
+    }
+
+    // A morph can replace a control (its name or type changed, or the markup
+    // around it did). What the user typed exists only on the old element, so
+    // carry it over to the element now standing in for it.
+    function liveTrigger(trigger, event, root) {
+        if (trigger.isConnected) return trigger;
+        const scope = root && root.isConnected ? root : document;
+        const current = scope.querySelector(controlSelector(trigger) + '[data-usephp-on-' + event + ']');
+        if (current) setFieldValue(current, fieldValue(trigger));
+        return current;
+    }
+
+    function flushResends(component) {
+        const queue = queuedResends.get(component);
+        if (!queue) return;
+        for (const [key, entry] of queue) {
+            queue.delete(key);
+            if (entry.form) {
+                const { id } = entry.form;
+                const form = entry.form.isConnected ? entry.form : (id && document.getElementById(id));
+                if (form) {
+                    const submitter = entry.submitter && entry.submitter.form === form ? entry.submitter : null;
+                    submitAction(form, { source: submitter, submitter });
+                }
+            } else {
+                const trigger = liveTrigger(entry.trigger, entry.event, component);
+                // compositionend schedules the final value anyway.
+                if (trigger && trigger !== composingElement) fireTrigger(trigger, entry.event);
+            }
+            if (busyComponents.has(component)) return;
+        }
+    }
+
+    // A click on something interactive inside a trigger (a link or checkbox
+    // in a clickable row) belongs to that control, not to the row.
+    const INTERACTIVE = 'a[href],button,input,select,textarea,label';
+
+    document.addEventListener('click', function(e) {
+        const start = e.target instanceof Element
+            ? e.target
+            : (e.target && e.target.parentElement) || null;
+        if (!start) return;
+        const trigger = start.closest('[data-usephp-on-click]');
+        if (!trigger) return;
+        const interactive = start.closest(INTERACTIVE);
+        if (interactive && interactive !== trigger && trigger.contains(interactive)) return;
+        if (trigger.matches('a[href]')) {
+            // Let "open in new tab" and friends keep working.
+            if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+            e.preventDefault();
+        }
+        fireTrigger(trigger, 'click');
+    });
+
+    document.addEventListener('change', function(e) {
+        const trigger = e.target instanceof Element
+            ? e.target.closest('[data-usephp-on-change]')
+            : null;
+        if (trigger) fireTrigger(trigger, 'change');
+    });
+
+    // `input` fires per keystroke, so it waits for a pause in typing. Each
+    // element has its own timer.
+    const INPUT_DEBOUNCE_MS = 300;
+    const pendingInputs = new Map();
+
+    function scheduleInput(trigger) {
+        clearTimeout(pendingInputs.get(trigger));
+        const root = trigger.closest('[data-usephp]');
+        pendingInputs.set(trigger, setTimeout(function() {
+            pendingInputs.delete(trigger);
+            const current = trigger.hasAttribute(WITH_VALUE)
+                ? liveTrigger(trigger, 'input', root)
+                : (trigger.isConnected ? trigger : null);
+            if (current) fireTrigger(current, 'input');
+        }, INPUT_DEBOUNCE_MS));
+    }
+
+    document.addEventListener('input', function(e) {
+        if (e.isComposing || !(e.target instanceof Element)) return;
+        const trigger = e.target.closest('[data-usephp-on-input]');
+        if (trigger) scheduleInput(trigger);
+    });
+
+    // While an IME is composing, the text isn't final and replacing the
+    // element would abort the composition.
+    document.addEventListener('compositionstart', function(e) {
+        if (!(e.target instanceof Element)) return;
+        composingElement = e.target;
+        const trigger = e.target.closest('[data-usephp-on-input]');
+        if (trigger && pendingInputs.has(trigger)) {
+            clearTimeout(pendingInputs.get(trigger));
+            pendingInputs.delete(trigger);
+        }
+    });
+
+    document.addEventListener('compositionend', function(e) {
+        composingElement = null;
+        if (!(e.target instanceof Element)) return;
+        const trigger = e.target.closest('[data-usephp-on-input]');
+        if (trigger) scheduleInput(trigger);
     });
 
     // =====================================================================
@@ -1242,7 +1452,8 @@
         formData.set('_usephp_snapshot', saved);
         // The session-bound CSRF token (when a session is active) is embedded
         // in every usephp form; borrow it from one of ours.
-        const csrf = component.querySelector('input[name="_usephp_csrf"]');
+        const csrf = component.querySelector('input[name="_usephp_csrf"]')
+            || document.querySelector('form[data-usephp-form] input[name="_usephp_csrf"]');
         if (csrf) formData.set('_usephp_csrf', csrf.value);
 
         busyComponents.add(component);

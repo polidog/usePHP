@@ -39,6 +39,65 @@ function useState(mixed $initial): array
 
 
 /**
+ * Build an action that copies submitted form fields into useState hooks.
+ *
+ *   [$title, $setTitle] = useState('');
+ *   H::form(
+ *       onSubmit: useFormAction(['title' => $setTitle]),
+ *       children: [H::input(name: 'title', value: $title), H::button(children: 'Save')],
+ *   );
+ *
+ * Works on a form's onSubmit, and on onChange/onInput of a named control for
+ * its own field. The value set is what the client sent: a string of at most
+ * {@see \Polidog\UsePhp\UsePHP::MAX_FORM_FIELD_BYTES} bytes, empty when the
+ * field was not sent (an unchecked checkbox). Treat it as untrusted. Which
+ * field goes to which hook is signed and can't be changed by the client.
+ *
+ * @param array<mixed> $fields Field name => setter from useState()
+ * @throws \InvalidArgumentException If a name can't be a form field or a value isn't a setter.
+ */
+function useFormAction(array $fields): Action
+{
+    if ($fields === []) {
+        throw new \InvalidArgumentException('useFormAction() needs at least one field.');
+    }
+
+    $map = [];
+    $target = null;
+
+    foreach ($fields as $name => $setter) {
+        // Other names can't be read back from $_POST: PHP turns `tags[]` into
+        // an array and renames `a.b`, and `_usephp_*` belongs to the framework.
+        if (!is_string($name) || preg_match('/^[A-Za-z_][A-Za-z0-9_\-]*$/', $name) !== 1
+            || str_starts_with($name, '_usephp_')
+        ) {
+            throw new \InvalidArgumentException(sprintf(
+                'useFormAction(): %s is not a usable form field name.',
+                json_encode($name, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            ));
+        }
+
+        $action = $setter instanceof \Closure ? $setter(null) : null;
+        $index = $action instanceof Action && $action->type === 'setState' ? ($action->payload['index'] ?? null) : null;
+        if (!$action instanceof Action || !is_int($index)) {
+            throw new \InvalidArgumentException(sprintf(
+                'useFormAction(): the value for field "%s" must be a setter returned by useState().',
+                $name,
+            ));
+        }
+
+        if ($target !== null && $target->componentId !== $action->componentId) {
+            throw new \InvalidArgumentException('useFormAction(): all setters must belong to the same component.');
+        }
+
+        $map[$name] = $index;
+        $target = $action;
+    }
+
+    return Action::setFields($map, $target->componentId, $target->storageType);
+}
+
+/**
  * React-like useEffect hook that runs side effects.
  *
  * The effect callback is executed when:

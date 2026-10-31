@@ -787,6 +787,11 @@ final class UsePHP
     private const MAX_HOOK_INDEX = 255;
 
     /**
+     * Largest value useFormAction() accepts for one field, in bytes.
+     */
+    public const MAX_FORM_FIELD_BYTES = 65535;
+
+    /**
      * Sign an action for the given component instance.
      *
      * Actions are rendered by the server and replayed by the browser, so the
@@ -1834,6 +1839,9 @@ final class UsePHP
             }
             $state->setState($index, $value);
         }
+        if ($action->type === Action::SET_FIELDS && !$this->applyFormFields($action, $state)) {
+            return $this->respondBadRequest('Invalid form data');
+        }
 
         // Partial update (AJAX) - return only component HTML
         if ($isPartial) {
@@ -1921,6 +1929,43 @@ final class UsePHP
         $this->terminate();
 
         return '';
+    }
+
+    /**
+     * Copy the POST fields named by a signed {@see Action::setFields()} action
+     * into their hooks. The caller has verified the signature, so the names
+     * and indexes are the server's; the values are client input, and all of
+     * them are checked before any is written. Returns false to reject.
+     */
+    private function applyFormFields(Action $action, ComponentState $state): bool
+    {
+        $fields = $action->payload['fields'] ?? null;
+        if (!is_array($fields) || $fields === []) {
+            return false;
+        }
+
+        $values = [];
+        foreach ($fields as $name => $index) {
+            if (!is_int($index) || $index < 0 || $index > self::MAX_HOOK_INDEX) {
+                return false;
+            }
+            // A field that wasn't sent is an unchecked checkbox, which has to
+            // be able to clear its hook.
+            $value = $_POST[$name] ?? '';
+            // Invalid UTF-8 would make the snapshot's JSON encoding throw.
+            if (!is_string($value) || strlen($value) > self::MAX_FORM_FIELD_BYTES
+                || preg_match('//u', $value) !== 1
+            ) {
+                return false;
+            }
+            $values[$index] = $value;
+        }
+
+        foreach ($values as $index => $value) {
+            $state->setState($index, $value);
+        }
+
+        return true;
     }
 
     /**

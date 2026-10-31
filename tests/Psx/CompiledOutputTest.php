@@ -10,9 +10,14 @@ use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Psx\CompileCommand;
 use Polidog\UsePhp\Psx\Compiler;
 use Polidog\UsePhp\Runtime\Action;
+use Polidog\UsePhp\Runtime\ComponentState;
 use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\Renderable;
 use Polidog\UsePhp\Runtime\Renderer;
+
+use function Polidog\UsePhp\Runtime\useState;
+
+use Polidog\UsePhp\Storage\StorageType;
 
 /**
  * Compiles PSX, loads the output under declare(strict_types=1) (as the examples
@@ -244,10 +249,88 @@ class CompiledOutputTest extends TestCase
         yield 'onChange' => ['onChange', 'wire:change'];
         yield 'onInput' => ['onInput', 'wire:input'];
         yield 'onSubmit' => ['onSubmit', 'wire:submit'];
-        yield 'onFocus' => ['onFocus', 'wire:focus'];
-        yield 'onBlur' => ['onBlur', 'wire:blur'];
-        yield 'onLoad' => ['onLoad', 'wire:load'];
-        yield 'onError' => ['onError', 'wire:error'];
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function unsupportedEventProps(): iterable
+    {
+        yield ['onFocus'];
+        yield ['onBlur'];
+        yield ['onLoad'];
+        yield ['onError'];
+    }
+
+    #[DataProvider('unsupportedEventProps')]
+    public function testUnsupportedEventPropsAreRefused(string $prop): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage($prop . ' is not supported');
+        $this->element("<div $prop={fn() => \$p['action']}></div>", ['action' => new Action('setState')]);
+    }
+
+    public function testFormOnSubmitWithUseFormAction(): void
+    {
+        if (\session_status() === \PHP_SESSION_NONE) {
+            \session_start();
+        }
+        ComponentState::getInstance('psx#0', StorageType::Session);
+        ComponentState::reset();
+        [, $setTitle] = useState('');
+
+        $html = $this->renderHtml(
+            '<form id="f" onSubmit={\Polidog\UsePhp\Runtime\useFormAction([\'title\' => $p[\'set\']])}>'
+            . '<input name="title" value="x" /><button>go</button></form>',
+            ['set' => $setTitle],
+        );
+
+        self::assertStringStartsWith('<form method="post" data-usephp-form id="f" data-usephp-with-value>', $html);
+        self::assertStringContainsString('name="_usephp_action"', $html);
+        self::assertStringContainsString('setFields', $html);
+        self::assertStringContainsString('&quot;title&quot;:0', $html);
+        self::assertStringContainsString('<input name="title" value="x" />', $html);
+    }
+
+    public function testControlOnInputWithUseFormAction(): void
+    {
+        if (\session_status() === \PHP_SESSION_NONE) {
+            \session_start();
+        }
+        ComponentState::getInstance('psx#0', StorageType::Session);
+        ComponentState::reset();
+        [, $setQ] = useState('');
+
+        $html = $this->renderHtml(
+            '<input name="q" onInput={\Polidog\UsePhp\Runtime\useFormAction([\'q\' => $p[\'set\']])} />',
+            ['set' => $setQ],
+        );
+
+        self::assertMatchesRegularExpression('/^<input name="q" data-usephp-with-value data-usephp-on-input="usephp-f-[0-9a-f]+" \/>/', $html);
+    }
+
+    public function testArbitraryAttributesPassThrough(): void
+    {
+        self::assertSame(
+            '<div title="x" role="alert" aria-label="y" data-id="1"></div>',
+            $this->renderHtml('<div title="x" role="alert" aria-label="y" data-id="1"></div>'),
+        );
+        self::assertSame('<a href="/x" download></a>', $this->renderHtml('<a href="/x" download></a>'));
+    }
+
+    public function testTextareaValueBecomesItsContent(): void
+    {
+        self::assertSame('<textarea>x</textarea>', $this->renderHtml('<textarea value="x" />'));
+    }
+
+    public function testTableRowOnClickKeepsTheRowUnderItsParent(): void
+    {
+        $html = $this->renderHtml(
+            '<table><tbody><tr onClick={fn() => $p[\'action\']}><td>x</td></tr></tbody></table>',
+            ['action' => Action::setState(0, 1, 'psx#0')],
+        );
+
+        self::assertMatchesRegularExpression('/^<table><tbody><tr data-usephp-on-click="usephp-f-[0-9a-f]+"><td>x<\/td><\/tr><\/tbody><\/table><form /', $html);
     }
 
     #[DataProvider('eventProps')]
