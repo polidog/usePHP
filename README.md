@@ -1428,6 +1428,19 @@ Without a snapshot secret, a page with an action form creates a session and a co
 php -S localhost:8000 examples/index.php
 ```
 
+`public/usephp.js` has browser tests in `tests/browser/`, which need Node.js and Chromium as well as PHP. They start `php -S` themselves on a free port. These tools are for development only and are not part of the Composer package.
+
+```bash
+npm ci
+npx playwright install chromium
+
+# Run browser tests
+npx playwright test
+
+# Use a Chromium you already have
+USEPHP_CHROMIUM_PATH=/usr/bin/chromium npx playwright test
+```
+
 ## License
 
 MIT
