@@ -266,12 +266,12 @@ final class TaskDetail extends BaseComponent
 $app->register(TaskDetail::class);
 
 $router->get('/tasks/{id:\d+}', fn(array $params): Element => $app->createElement(
-    TaskDetail::getComponentName(),
+    TaskDetail::class,
     'task-' . $params['id'],
 ));
 ```
 
-`createElement()` and `render()` take the name the component is registered under. It differs from the class name under `#[Component(name: ...)]`, and a name that isn't registered renders an empty result without an error, so `getComponentName()` is the safe way to spell it.
+`createElement()` and `render()` take the class or the name given in `#[Component(name: ...)]`, and both give the same instance ID and state. Anything that doesn't resolve to a registered component throws a `LogicException`.
 
 `H::component($fn, ['key' => ..., ...])` inside a `children` array also keys the state, but it renders no wrapper element, so its actions reload the page instead of updating in place.
 

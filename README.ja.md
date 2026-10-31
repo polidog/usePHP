@@ -267,12 +267,12 @@ final class TaskDetail extends BaseComponent
 $app->register(TaskDetail::class);
 
 $router->get('/tasks/{id:\d+}', fn(array $params): Element => $app->createElement(
-    TaskDetail::getComponentName(),
+    TaskDetail::class,
     'task-' . $params['id'],
 ));
 ```
 
-`createElement()` と `render()` が受け取るのは、コンポーネントの登録名です。`#[Component(name: ...)]` を使うとクラス名とは異なり、登録されていない名前はエラーにならず空の結果を描画するので、`getComponentName()` で指定するのが安全です。
+`createElement()` と `render()` には、クラス名と `#[Component(name: ...)]` の名前のどちらでも渡せます。どちらでもインスタンス ID と state は同じです。登録されたコンポーネントに解決できないものを渡すと `LogicException` になります。
 
 `children` 配列の中の `H::component($fn, ['key' => ..., ...])` でも state をキーで分けられますが、ラッパー要素を描画しないので、アクションはその場の更新ではなくページの再読み込みになります。
 
