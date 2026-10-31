@@ -68,6 +68,37 @@ final class RenderContext
     }
 
     /**
+     * The render pass in progress, for {@see resumePass()} to take back after
+     * a nested {@see beginRender()}.
+     *
+     * @return array{instanceCounts: array<string, int>, componentStack: list<ComponentId>}
+     */
+    public static function currentPass(): array
+    {
+        $context = self::getInstance();
+
+        return ['instanceCounts' => $context->instanceCounts, 'componentStack' => $context->componentStack];
+    }
+
+    /**
+     * Go back to a pass saved by {@see currentPass()}.
+     *
+     * Each counter keeps the higher of the two values. Numbers the nested pass
+     * handed out stay taken, so the outer pass's next instance can't land on
+     * the id, and the state, of an instance the nested pass rendered.
+     *
+     * @param array{instanceCounts: array<string, int>, componentStack: list<ComponentId>} $pass
+     */
+    public static function resumePass(array $pass): void
+    {
+        $context = self::getInstance();
+        foreach ($pass['instanceCounts'] as $componentName => $count) {
+            $context->instanceCounts[$componentName] = max($count, $context->instanceCounts[$componentName] ?? 0);
+        }
+        $context->componentStack = $pass['componentStack'];
+    }
+
+    /**
      * Begin rendering a component. Pushes it onto the stack.
      *
      * @param string $componentName The component class/name
