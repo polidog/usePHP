@@ -7,6 +7,7 @@ namespace Polidog\UsePhp\Tests\Psx;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Psx\CompileCommand;
 use Polidog\UsePhp\Psx\Compiler;
 use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\Element;
@@ -275,6 +276,186 @@ class CompiledOutputTest extends TestCase
         };
 
         self::assertSame('<p><b>r</b></p>', $this->renderHtml("<p>{\$p['c']}</p>", ['c' => $child]));
+    }
+
+    /**
+     * @return iterable<string, array{string, array<string, mixed>, string}>
+     */
+    public static function operatorsBeforeTags(): iterable
+    {
+        yield '&& true' => ['<p>{$p[\'a\'] && <b>x</b>}</p>', ['a' => true], '<p><b>x</b></p>'];
+        yield '&& false' => ['<p>{$p[\'a\'] && <b>x</b>}</p>', ['a' => false], '<p></p>'];
+        yield '&& zero renders nothing' => ['<p>{$p[\'a\'] && <b>x</b>}</p>', ['a' => 0], '<p></p>'];
+        yield 'literal true' => ['<p>{true && <b>x</b>}</p>', [], '<p><b>x</b></p>'];
+        yield '|| keeps a truthy left side' => ['<p>{$p[\'a\'] || <b>x</b>}</p>', ['a' => 'v'], '<p>v</p>'];
+        yield '|| falls through to the tag' => ['<p>{$p[\'a\'] || <b>x</b>}</p>', ['a' => ''], '<p><b>x</b></p>'];
+        yield '?? with a value' => ['<p>{$p[\'x\'] ?? <b>d</b>}</p>', ['x' => 'v'], '<p>v</p>'];
+        yield '?? without a value' => ['<p>{$p[\'x\'] ?? <b>d</b>}</p>', [], '<p><b>d</b></p>'];
+        yield '?:' => ['<p>{$p[\'x\'] ?: <b>d</b>}</p>', ['x' => ''], '<p><b>d</b></p>'];
+        yield 'ternary' => ['<p>{$p[\'x\'] ? <b>y</b> : <i>n</i>}</p>', ['x' => false], '<p><i>n</i></p>'];
+        yield 'and' => ['<p>{$p[\'a\'] and <b>x</b>}</p>', ['a' => true], '<p><b>x</b></p>'];
+        yield 'or' => ['<p>{$p[\'a\'] or <b>x</b>}</p>', ['a' => false], '<p><b>x</b></p>'];
+        yield 'chained &&' => ['<p>{$p[\'a\'] && $p[\'b\'] && <b>x</b>}</p>', ['a' => 1, 'b' => 1], '<p><b>x</b></p>'];
+        yield '&& then ||' => ['<p>{$p[\'a\'] && <b>x</b> || <i>y</i>}</p>', ['a' => false], '<p><i>y</i></p>'];
+        yield '|| then &&' => ['<p>{$p[\'a\'] || $p[\'b\'] && <b>x</b>}</p>', ['a' => 0, 'b' => 1], '<p><b>x</b></p>'];
+        yield 'parenthesized operands' => ['<p>{($p[\'a\']) && (<b>x</b>)}</p>', ['a' => 1], '<p><b>x</b></p>'];
+        yield 'ternary on the right' => ['<p>{$p[\'a\'] && ($p[\'b\'] ? <b>x</b> : null)}</p>', ['a' => 1, 'b' => 1], '<p><b>x</b></p>'];
+        yield 'ternary on the left of and' => ['<p>{$p[\'a\'] ? 1 : 0 and <b>x</b>}</p>', ['a' => 1], '<p><b>x</b></p>'];
+        yield 'ternary on the right of or' => ['<p>{$p[\'a\'] or $p[\'b\'] ? <b>x</b> : <i>y</i>}</p>', ['a' => 0, 'b' => 0], '<p><i>y</i></p>'];
+        yield 'nested' => ['<p>{$p[\'a\'] && <b>{$p[\'a\'] && <i>y</i>}</b>}</p>', ['a' => 1], '<p><b><i>y</i></b></p>'];
+        yield 'tag inside a call' => ['<ul>{$p[\'a\'] && array_map(fn($x) => <li>{$x}</li>, [\'k\'])}</ul>', ['a' => 1], '<ul><li>k</li></ul>'];
+        yield 'comment before the operator' => ["<p>{\$p['a'] // c\n && <b>x</b>}</p>", ['a' => 1], '<p><b>x</b></p>'];
+        yield 'as the returned value' => ['$p[\'a\'] && <b>x</b>', ['a' => 1], '<b>x</b>'];
+        yield 'tag whose name is a PHP keyword' => ['<var>x</var>', [], '<var>x</var>'];
+        yield 'svg use' => ['<svg><use href="#a" /></svg>', [], '<svg><use href="#a"></use></svg>'];
+    }
+
+    /**
+     * @param array<string, mixed> $props
+     */
+    #[DataProvider('operatorsBeforeTags')]
+    public function testTagsAreRecognizedAfterOperators(string $psx, array $props, string $expected): void
+    {
+        self::assertSame($expected, $this->renderHtml($psx, $props));
+    }
+
+    public function testLogicalOperatorLoweringPreservesLineNumbers(): void
+    {
+        $source = "<?php\nreturn fn(\$p) => <div>\n  {\$p['a']\n    && <b>\n      x\n    </b>}\n</div>;\nthrow new \\Exception('line 8');\n";
+        $compiled = new Compiler()->compile($source);
+
+        self::assertSame(\substr_count($source, "\n"), \substr_count($compiled, "\n"));
+        self::assertStringContainsString('line 8', \explode("\n", $compiled)[7] ?? '');
+    }
+
+    public function testOperatorWithoutATagKeepsPhpSemantics(): void
+    {
+        $compiled = new Compiler()->compile('<?php return <p id={$a && $b}>{$a || $b}</p>;');
+
+        self::assertStringContainsString('$a && $b', $compiled);
+        self::assertStringContainsString('$a || $b', $compiled);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function invalidOutput(): iterable
+    {
+        yield 'broken child expression' => ['<?php return <p>{1 +}</p>;'];
+        yield 'broken attribute expression' => ['<?php return <p id={1 +}></p>;'];
+        yield 'tag in a position that is not recognized' => ['<?php return <p>{$x == <b>y</b>}</p>;'];
+        yield 'plain PHP outside of any tag' => ['<?php return 1 +;'];
+        yield 'statement in a child' => ['<?php return <p>{if ($x) { 1; }}</p>;'];
+    }
+
+    #[DataProvider('invalidOutput')]
+    public function testInvalidGeneratedPhpIsACompileError(string $source): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches('/PSX compile error at line 1: /');
+        new Compiler()->compile($source);
+    }
+
+    public function testCompileErrorNamesTheSourceLine(): void
+    {
+        try {
+            new Compiler()->compile("<?php\n\nreturn <p>\n  {1 +}\n</p>;\n");
+            self::fail('Expected RuntimeException');
+        } catch (\RuntimeException $e) {
+            self::assertStringContainsString('line 4', $e->getMessage());
+            self::assertStringContainsString('{1 +}', $e->getMessage());
+        }
+    }
+
+    public function testCompileCommandReportsInvalidGeneratedPhp(): void
+    {
+        $dir = \sys_get_temp_dir() . '/psx-invalid-' . \uniqid();
+        \mkdir($dir);
+        \file_put_contents($dir . '/Bad.psx', '<?php return <p>{1 +}</p>;');
+        try {
+            \ob_start();
+            $exitCode = new CompileCommand()->run([$dir, '--check', '--cache=' . $dir . '/cache'], $dir);
+            $output = (string) \ob_get_clean();
+
+            self::assertSame(1, $exitCode);
+            self::assertStringContainsString('Bad.psx', $output);
+            self::assertStringContainsString('PSX compile error', $output);
+        } finally {
+            @\unlink($dir . '/Bad.psx');
+            @\rmdir($dir . '/cache');
+            @\rmdir($dir);
+        }
+    }
+
+    /**
+     * @return iterable<string, array{string, string, string}>
+     */
+    public static function rawTextElements(): iterable
+    {
+        yield 'css braces' => ['style', 'a > b { color: red; }', 'a > b { color: red; }'];
+        yield 'js comparison and block' => ['script', 'if (a < b) { c(); }', 'if (a < b) { c(); }'];
+        yield 'expression syntax is text' => ['style', 'a{b:{$p}}', 'a{b:{$p}}'];
+        yield 'tag syntax is text' => ['script', 'x = "<b>y</b>";', 'x = "<b>y</b>";'];
+        yield 'entities are not decoded' => ['style', 'a::after{content:"&amp;"}', 'a::after{content:"&amp;"}'];
+        yield 'quotes and backslashes' => ['style', "a::after{content:'\\201C'}", "a::after{content:'\\201C'}"];
+        yield 'unbalanced apostrophe' => ['script', "// don't\nx();", "// don't\nx();"];
+        yield 'whitespace is preserved' => ['script', "\n  a();\n\n  b();\n", "\n  a();\n\n  b();\n"];
+        yield 'closing tag of another element' => ['script', '"</style>"', '"</style>"'];
+        yield 'name that only starts like the closing tag' => ['style', '</styles', '</styles'];
+    }
+
+    #[DataProvider('rawTextElements')]
+    public function testStyleAndScriptContentIsPassedAsAString(string $tag, string $content, string $expected): void
+    {
+        $element = $this->element("<$tag>$content</$tag>");
+
+        self::assertSame($tag, $element->type);
+        self::assertSame([$expected], $element->children);
+    }
+
+    public function testEmptyStyleHasNoChildren(): void
+    {
+        self::assertSame([], $this->element('<style></style>')->children);
+    }
+
+    public function testStyleCanBeNestedAndHasDecodedAttributes(): void
+    {
+        $element = $this->element('<div><script src="/a?x=1&amp;y=2">a{b}</script>{1}</div>');
+
+        self::assertInstanceOf(Element::class, $element->children[0]);
+        self::assertSame('/a?x=1&y=2', $element->children[0]->props['src']);
+        self::assertSame(['a{b}'], $element->children[0]->children);
+        self::assertSame(1, $element->children[1]);
+    }
+
+    public function testStyleInsideAnOperatorExpression(): void
+    {
+        $element = $this->element('<div>{$p[\'a\'] && <style>a { b: c }</style>}</div>', ['a' => 1]);
+
+        self::assertInstanceOf(Element::class, $element->children[0]);
+        self::assertSame(['a { b: c }'], $element->children[0]->children);
+    }
+
+    public function testStylePreservesLineNumbers(): void
+    {
+        $source = "<?php\nreturn <style>\n  a { b: c }\n</style>;\nthrow new \\Exception('line 5');\n";
+        $compiled = new Compiler()->compile($source);
+
+        self::assertStringContainsString('line 5', \explode("\n", $compiled)[4] ?? '');
+    }
+
+    public function testUnclosedStyleIsACompileError(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Unclosed <style>');
+        new Compiler()->compile('<?php return <style>a { b: c };');
+    }
+
+    public function testClosingTagInOtherCaseIsACompileError(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Mismatched closing tag');
+        new Compiler()->compile('<?php return <style>a</STYLE>;');
     }
 
     /**

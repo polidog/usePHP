@@ -591,7 +591,14 @@ final class CompileCommand
             }
             $sourceContents[$sourceFile] = $source;
 
-            $ctx = NamespaceContext::fromSource($source);
+            // Parsed with the PSX regions replaced: <script> and <style> content
+            // can leave raw source too broken for even a partial AST.
+            try {
+                $ctx = NamespaceContext::fromSource(new PsxPreProcessor()->process($source)[0]);
+            } catch (\RuntimeException $e) {
+                $this->println("\033[31m$sourceFile: " . $e->getMessage() . "\033[0m");
+                return 1;
+            }
 
             foreach ($ctx->getRuntimeDeclarations() as $rd) {
                 $runtimeDeclarations[$rd] = true;

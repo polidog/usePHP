@@ -274,7 +274,7 @@ class CompilerTest extends TestCase
 
     public function testBraceExpressionIgnoresClosingBraceInDoubleQuotedString(): void
     {
-        $result = $this->compileExpression('<div>{($s = "}"); $s }</div>');
+        $result = $this->compileExpression('<div>{"}" . $s }</div>');
         self::assertStringContainsString("createElement('div',", $result);
         self::assertStringContainsString('"}"', $result);
     }

@@ -584,6 +584,36 @@ class CompileCommandTest extends TestCase
         self::assertStringNotContainsString('.psx.php', $help);
     }
 
+    public function testCompilesFileWithStyleAndScriptThatBreakRawParsing(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/components/Styled.psx',
+            "<?php\nnamespace App;\nreturn fn() => <div><style>a > b { color: red; }</style>"
+            . "<script>if (a < b) { c(\"don't\"); } }</script></div>;\n",
+        );
+
+        \ob_start();
+        $exitCode = new CompileCommand()->run([$this->workDir . '/components', '--cache=' . $this->cacheDir], $this->workDir);
+        $output = (string) \ob_get_clean();
+
+        self::assertSame(0, $exitCode, $output);
+        $manifest = require $this->manifestPath;
+        self::assertArrayHasKey('App\\Styled', $manifest);
+    }
+
+    public function testMismatchedTagIsReportedWithTheFileName(): void
+    {
+        \file_put_contents($this->workDir . '/components/Bad.psx', "<?php\nreturn fn() => <div></span>;\n");
+
+        \ob_start();
+        $exitCode = new CompileCommand()->run([$this->workDir . '/components', '--cache=' . $this->cacheDir], $this->workDir);
+        $output = (string) \ob_get_clean();
+
+        self::assertSame(1, $exitCode);
+        self::assertStringContainsString('Bad.psx', $output);
+        self::assertStringContainsString('Mismatched closing tag', $output);
+    }
+
     private function runCmd(CompileCommand $cmd, array $argv): int
     {
         \ob_start();

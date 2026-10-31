@@ -17,6 +17,12 @@ namespace Polidog\UsePhp\Psx;
  */
 final class PsxParser implements PsxParserInterface
 {
+    /**
+     * Elements whose content HTML parsers treat as text. `{` and `<` are CSS and
+     * JS syntax here, so the content is passed through as a single string.
+     */
+    private const RAW_TEXT_TAGS = ['style', 'script'];
+
     private const CREATE_ELEMENT = '\\Polidog\\UsePhp\\Html\\createElement';
 
     /**
@@ -68,6 +74,16 @@ final class PsxParser implements PsxParserInterface
         }
 
         $this->expect('>');
+
+        if (\in_array($tagName, self::RAW_TEXT_TAGS, true)) {
+            $children = $this->readRawText($tagName);
+            $this->consumeClosingTag($tagName);
+            return [
+                'php' => $this->emitElement($tagName, $attrs, $children, 0, false),
+                'end' => $this->pos,
+            ];
+        }
+
         [$children, $trailingNewlines, $loneExpression] = $this->parseChildren(closingTag: $tagName);
         $this->consumeClosingTag($tagName);
 
@@ -183,6 +199,25 @@ final class PsxParser implements PsxParserInterface
 
         $this->flushTextBuffer($textBuffer, $children);
         return [$children, 0, false];
+    }
+
+    /**
+     * Reads the content of a raw text element verbatim, up to its closing tag.
+     * Whitespace is significant in JS and entities are not decoded, matching how
+     * HTML parsers treat these elements.
+     *
+     * @return list<string> The content as a PHP string literal; empty if none.
+     */
+    private function readRawText(string $tagName): array
+    {
+        $found = \preg_match('~</' . $tagName . '(?=[\s/>])~i', $this->source, $match, \PREG_OFFSET_CAPTURE, $this->pos);
+        if ($found !== 1) {
+            throw $this->error("Unclosed <$tagName>");
+        }
+        $end = $match[0][1];
+        $text = \substr($this->source, $this->pos, $end - $this->pos);
+        $this->pos = $end;
+        return $text === '' ? [] : [$this->phpString($text)];
     }
 
     /**
@@ -599,9 +634,7 @@ final class PsxParser implements PsxParserInterface
     private function compileNestedExpression(string $expr): string
     {
         if ($expr !== '' && \str_contains($expr, '<')) {
-            $wrapped = '<?php ' . $expr;
-            $compiled = new Compiler()->compile($wrapped, $this->namespaceContext);
-            $expr = \substr($compiled, \strlen('<?php '));
+            $expr = new Compiler()->compileExpression($expr, $this->namespaceContext);
         }
         return $this->endsWithLineComment($expr) ? $expr . "\n" : $expr;
     }
