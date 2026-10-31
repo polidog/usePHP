@@ -95,7 +95,7 @@ final class PsxParser implements PsxParserInterface
                 $value = $this->readStringLiteral();
                 $attrs[] = [
                     'name' => $name,
-                    'value' => "'" . \addcslashes($value, "'\\") . "'",
+                    'value' => $this->phpString($this->decodeEntities($value)),
                     'isExpr' => false,
                 ];
             } elseif ($c === '{') {
@@ -190,7 +190,9 @@ final class PsxParser implements PsxParserInterface
         }
         $trimmed = $this->normalizeText($textBuffer);
         if ($trimmed !== '') {
-            $children[] = "'" . \addcslashes($trimmed, "'\\") . "'";
+            // Decoded after normalizing, so `&nbsp;` and `&#32;` keep the
+            // whitespace they asked for.
+            $children[] = $this->phpString($this->decodeEntities($trimmed));
         }
         $textBuffer = '';
     }
@@ -378,6 +380,20 @@ final class PsxParser implements PsxParserInterface
     private function peek(): ?string
     {
         return $this->source[$this->pos] ?? null;
+    }
+
+    /**
+     * JSX-style: entities in PSX source mean the character they name. The
+     * renderer escapes the result, so `&amp;` must not reach it encoded.
+     */
+    private function decodeEntities(string $text): string
+    {
+        return \html_entity_decode($text, \ENT_QUOTES | \ENT_HTML5, 'UTF-8');
+    }
+
+    private function phpString(string $value): string
+    {
+        return "'" . \addcslashes($value, "'\\") . "'";
     }
 
     private function normalizeText(string $text): string

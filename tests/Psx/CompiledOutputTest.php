@@ -77,6 +77,50 @@ class CompiledOutputTest extends TestCase
     }
 
     /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function entities(): iterable
+    {
+        yield 'named entities in text' => [
+            '<p>a &amp; b &lt; c &nbsp; d &copy;</p>',
+            "<p>a &amp; b &lt; c \u{A0} d \u{A9}</p>",
+        ];
+        yield 'quotes in an attribute' => [
+            '<a title="it\'s &quot;q&quot;">a</a>',
+            '<a title="it&#039;s &quot;q&quot;">a</a>',
+        ];
+        yield 'single quote entity next to a backslash' => ['<p>&apos;\\&#39;</p>', '<p>&#039;\\&#039;</p>'];
+        yield 'numeric entities' => ['<p>&#x3042;&#12354;</p>', "<p>\u{3042}\u{3042}</p>"];
+        yield 'decoded only once' => ['<p>&amp;lt;</p>', '<p>&amp;lt;</p>'];
+        yield 'unknown entity stays literal' => ['<p>&nope;</p>', '<p>&amp;nope;</p>'];
+        yield 'bare ampersand stays literal' => ['<p>a & b</p>', '<p>a &amp; b</p>'];
+        yield 'nbsp survives whitespace collapsing' => ['<p>a&nbsp;&nbsp;b</p>', "<p>a\u{A0}\u{A0}b</p>"];
+        yield 'nbsp at the edge of multi-line text' => ["<p>\n  &nbsp;x\n</p>", "<p>\u{A0}x</p>"];
+        yield 'escaped markup stays text' => ['<p>&lt;b&gt;</p>', '<p>&lt;b&gt;</p>'];
+        yield 'PHP strings are not decoded' => ["<p>{'&amp;'}</p>", '<p>&amp;amp;</p>'];
+        yield 'fragment text' => ['<>&copy;</>', "\u{A9}"];
+    }
+
+    #[DataProvider('entities')]
+    public function testHtmlEntitiesAreDecodedAtCompileTime(string $psx, string $expected): void
+    {
+        self::assertSame($expected, $this->renderHtml($psx));
+    }
+
+    public function testEntitiesInComponentPropsAndChildrenAreDecoded(): void
+    {
+        $compiled = new Compiler()->compile('<?php return <Foo title="a &amp; b">&lt;</Foo>;');
+
+        self::assertStringContainsString("'title' => 'a & b'", $compiled);
+        self::assertStringContainsString("'children' => '<'", $compiled);
+    }
+
+    public function testEncodedJavascriptUrlIsStillBlockedAfterDecoding(): void
+    {
+        self::assertSame('<a>x</a>', $this->renderHtml('<a href="javascript&colon;alert(1)">x</a>'));
+    }
+
+    /**
      * @param array<string, mixed> $props
      */
     private function renderHtml(string $psx, array $props = []): string
