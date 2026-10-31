@@ -264,7 +264,10 @@ final class SimpleRouter implements RouterInterface
 
     public function extractSnapshot(RequestContext $request): ?string
     {
-        return $request->getQuery($this->snapshotParam);
+        // `?_snapshot[]=1` arrives as an array; it can't be a snapshot.
+        $snapshot = $request->getQuery($this->snapshotParam);
+
+        return is_string($snapshot) ? $snapshot : null;
     }
 
     /**

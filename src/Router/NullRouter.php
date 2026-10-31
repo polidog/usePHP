@@ -65,10 +65,16 @@ final class NullRouter implements RouterInterface
 
     public function extractSnapshot(RequestContext $request): ?string
     {
-        // Check common parameter names
-        return $request->getQuery('_snapshot')
-            ?? $request->getQuery('snapshot')
-            ?? null;
+        // Check common parameter names. `?_snapshot[]=1` arrives as an array;
+        // it can't be a snapshot.
+        foreach (['_snapshot', 'snapshot'] as $param) {
+            $snapshot = $request->getQuery($param);
+            if (is_string($snapshot)) {
+                return $snapshot;
+            }
+        }
+
+        return null;
     }
 
     /**
