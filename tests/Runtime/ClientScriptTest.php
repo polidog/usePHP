@@ -106,6 +106,47 @@ final class ClientScriptTest extends TestCase
         self::assertStringContainsString('applyPartial(component, await response.text(), submission)', $submit);
     }
 
+    /**
+     * Issue #80: setter values are fixed when the form is rendered, so a
+     * second submit of the same form while the first is in flight only
+     * replays a stale value.
+     */
+    public function testSubmitIsDroppedWhileTheComponentIsBusy(): void
+    {
+        $submit = self::submitHandler();
+
+        $prevented = \strpos($submit, 'e.preventDefault()');
+        $checked = \strpos($submit, 'if (busyComponents.has(component)) return;');
+        $locked = \strpos($submit, 'busyComponents.add(component);');
+        $fetched = \strpos($submit, 'await fetch(');
+
+        self::assertNotFalse($prevented);
+        self::assertNotFalse($checked, 'A busy component must drop the submit.');
+        self::assertNotFalse($locked);
+        self::assertNotFalse($fetched);
+        // Dropping must not fall through to a native full page POST.
+        self::assertLessThan($checked, $prevented);
+        self::assertLessThan($locked, $checked);
+        self::assertLessThan($fetched, $locked);
+    }
+
+    public function testBusyLockIsReleasedOnEveryExit(): void
+    {
+        $finally = self::between(self::submitHandler(), '} finally {', '});');
+
+        self::assertStringContainsString('busyComponents.delete(component);', $finally);
+        self::assertStringContainsString("component.removeAttribute('aria-busy');", $finally);
+    }
+
+    public function testSnapshotRestoreHoldsTheSameLock(): void
+    {
+        $restore = self::between(self::clientScript(), 'async function restoreSnapshot(component)', 'function restoreSnapshots(root)');
+
+        self::assertStringContainsString('if (busyComponents.has(component)) return;', $restore);
+        self::assertStringContainsString('busyComponents.add(component);', $restore);
+        self::assertStringContainsString('busyComponents.delete(component);', self::between($restore, '} finally {', "\n    }"));
+    }
+
     private static function clientScript(): string
     {
         $script = \file_get_contents(__DIR__ . '/../../public/usephp.js');

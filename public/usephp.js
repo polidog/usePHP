@@ -562,6 +562,21 @@
     // Partial form submission
     // =====================================================================
 
+    // One request per component at a time. Setter values are fixed into the
+    // form when it is rendered, so a second submit during the first would
+    // replay the same stale value and its stale snapshot would overwrite the
+    // first response.
+    //
+    // A submit that arrives while busy is dropped, not queued for the form
+    // the response renders: `onClick: fn() => $delete($row)` is bound to
+    // whatever the server rendered there, so replaying a double click after
+    // the morph could delete the next row. A lost click shows on screen and
+    // can be repeated; a replay on the wrong target cannot be undone.
+    //
+    // The lock is not the `disabled` attribute, which would take focus off
+    // the button, nor aria-busy, which a parent's morph can remove.
+    const busyComponents = new WeakSet();
+
     // A partial submit that came back non-OK (or threw) must NOT be
     // replayed as a full-page `form.submit()`: the request may already
     // have been processed server-side (render failed after the state
@@ -603,6 +618,9 @@
             form.submit();
             return;
         }
+
+        if (busyComponents.has(component)) return;
+        busyComponents.add(component);
 
         component.setAttribute('aria-busy', 'true');
         component.removeAttribute('data-usephp-error');
@@ -674,6 +692,7 @@
         } catch (error) {
             reportSubmitFailure(form, component, { error });
         } finally {
+            busyComponents.delete(component);
             component.removeAttribute('aria-busy');
         }
     });
@@ -1209,6 +1228,7 @@
             return;
         }
         if (!saved || saved === component.dataset.usephpSnapshot) return;
+        if (busyComponents.has(component)) return;
 
         const instanceId = component.dataset.usephp;
         const formData = new FormData();
@@ -1225,6 +1245,7 @@
         const csrf = component.querySelector('input[name="_usephp_csrf"]');
         if (csrf) formData.set('_usephp_csrf', csrf.value);
 
+        busyComponents.add(component);
         component.setAttribute('aria-busy', 'true');
         try {
             const response = await fetch(location.href, {
@@ -1241,6 +1262,7 @@
         } catch {
             // Network failure: keep the saved snapshot for the next load.
         } finally {
+            busyComponents.delete(component);
             component.removeAttribute('aria-busy');
         }
     }
