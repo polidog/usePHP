@@ -100,6 +100,9 @@ final class SimpleRouter implements RouterInterface
     /**
      * Add a route that matches multiple HTTP methods.
      *
+     * Settings made on the returned builder (middleware, snapshot behavior)
+     * apply to all of the methods.
+     *
      * @param array<string> $methods
      */
     public function matchMethods(array $methods, string $pattern, callable|string $handler): RouteBuilder
@@ -108,10 +111,21 @@ final class SimpleRouter implements RouterInterface
             throw new \InvalidArgumentException('At least one HTTP method is required');
         }
 
-        $builder = $this->addRoute(strtoupper($methods[0]), $pattern, $handler);
-        for ($i = 1; $i < count($methods); $i++) {
-            $this->addRoute(strtoupper($methods[$i]), $pattern, $handler);
-        }
+        $methods = array_map(strtoupper(...), array_values($methods));
+
+        $register = function (Route $route) use ($methods, $pattern): void {
+            foreach ($methods as $method) {
+                $this->routes[$method . ':' . $pattern] = $route->withMethod($method);
+            }
+        };
+
+        $builder = new RouteBuilder(
+            method: $methods[0],
+            pattern: $pattern,
+            handler: $handler,
+            registerCallback: $register,
+        );
+        $register($builder->build());
 
         return $builder;
     }

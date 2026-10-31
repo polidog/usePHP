@@ -127,6 +127,22 @@ final readonly class Route
             params: $params,
             snapshotBehavior: $this->snapshotBehavior,
             sharedGroup: $this->sharedGroup,
+            middleware: $this->middleware,
+        );
+    }
+
+    /**
+     * Create a copy of this route for another HTTP method.
+     */
+    public function withMethod(string $method): self
+    {
+        return new self(
+            method: $method,
+            pattern: $this->pattern,
+            handler: $this->handler,
+            snapshotBehavior: $this->snapshotBehavior,
+            sharedGroup: $this->sharedGroup,
+            middleware: $this->middleware,
         );
     }
 }
