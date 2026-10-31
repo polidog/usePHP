@@ -447,6 +447,18 @@ final class Renderer
             return "<{$tag}{$attributes} />";
         }
 
+        // A component wrapper is the natural home for its action forms: a
+        // partial update replaces them along with the elements using them.
+        // That goes only for the wrapper's own. An enclosing component's forms
+        // still waiting would move in with it, and the first partial update of
+        // this component would take them away from the buttons they serve.
+        $ownsActionForms = isset($props['data-usephp']) && $this->openFormDepth === 0;
+        $outerActionForms = [];
+        if ($ownsActionForms) {
+            $outerActionForms = $this->pendingActionForms;
+            $this->pendingActionForms = [];
+        }
+
         $isForm = strtolower($tag) === 'form';
         if ($isForm) {
             $this->openFormDepth++;
@@ -459,10 +471,9 @@ final class Renderer
             }
         }
 
-        // A component wrapper is the natural home for its action forms: a
-        // partial update replaces them along with the elements using them.
-        if (isset($props['data-usephp']) && $this->openFormDepth === 0) {
+        if ($ownsActionForms) {
             $children .= $this->flushActionForms();
+            $this->pendingActionForms = $outerActionForms;
         }
 
         $html = "<{$tag}{$attributes}>{$submitFields}{$children}</{$tag}>";

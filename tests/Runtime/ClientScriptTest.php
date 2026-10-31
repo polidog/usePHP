@@ -116,7 +116,7 @@ final class ClientScriptTest extends TestCase
         $submit = self::submitHandler();
 
         $prevented = \strpos($submit, 'e.preventDefault()');
-        $checked = \strpos($submit, 'if (busyComponents.has(component)) return;');
+        $checked = \strpos($submit, 'if (holder) {');
         $locked = \strpos($submit, 'busyComponents.add(component);');
         $fetched = \strpos($submit, 'await fetch(');
 
@@ -128,6 +128,7 @@ final class ClientScriptTest extends TestCase
         self::assertLessThan($checked, $prevented);
         self::assertLessThan($locked, $checked);
         self::assertLessThan($fetched, $locked);
+        self::assertStringContainsString('const holder = busyRelative(component);', $submit);
     }
 
     public function testBusyLockIsReleasedOnEveryExit(): void

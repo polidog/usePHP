@@ -12,15 +12,21 @@ declare(strict_types=1);
  *  - USEPHP_TEST_SECRET: snapshot secret (unset = no secret)
  *  - USEPHP_TEST_SESSION_START: the app calls session_start() itself
  *  - USEPHP_TEST_EARLY_OUTPUT: the app writes output before usePHP runs
+ *  - USEPHP_TEST_ERROR_LOG: file that receives what usePHP logs
  */
 
 use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\Component;
 use Polidog\UsePhp\Component\Defer;
 use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\ComponentId;
 use Polidog\UsePhp\Runtime\Element;
 
 use function Polidog\UsePhp\Runtime\fc;
+
+use Polidog\UsePhp\Runtime\Snapshot;
+
+use function Polidog\UsePhp\Runtime\useFormAction;
 use function Polidog\UsePhp\Runtime\useRouter;
 use function Polidog\UsePhp\Runtime\useState;
 
@@ -47,6 +53,9 @@ final class MemoryClassCounter extends FixtureCounter {}
 
 #[Component(storage: 'snapshot')]
 final class SnapshotClassCounter extends FixtureCounter {}
+
+#[Component(name: 'renamed-snapshot', storage: 'snapshot')]
+final class RenamedSnapshotCounter extends FixtureCounter {}
 
 #[Component]
 final class TaskDetail extends BaseComponent
@@ -95,6 +104,12 @@ if (getenv('USEPHP_TEST_EARLY_OUTPUT') !== false) {
     echo ' ';
 }
 
+$errorLog = getenv('USEPHP_TEST_ERROR_LOG');
+if ($errorLog !== false) {
+    ini_set('log_errors', '1');
+    ini_set('error_log', $errorLog);
+}
+
 $app = new UsePHP();
 $secret = getenv('USEPHP_TEST_SECRET');
 if ($secret !== false) {
@@ -103,6 +118,7 @@ if ($secret !== false) {
 $app->register(SessionClassCounter::class);
 $app->register(MemoryClassCounter::class);
 $app->register(SnapshotClassCounter::class);
+$app->register(RenamedSnapshotCounter::class);
 $app->register(TaskDetail::class);
 $app->register(MemoryTwoStates::class);
 $app->register(PostLikes::class);
@@ -163,5 +179,224 @@ $router->get('/memory-two-states-fc', static fn(): Element => fc(static function
         H::button(onClick: fn() => $setB($b + 1), children: "b={$b}"),
     ]);
 }, 'memory-two-states', StorageType::Memory)([]));
+
+// Several snapshot instances of one component on a page, told apart by label.
+$labeled = static fn(string $label, ?string $key = null): Element => fc(static function (array $props): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::button(onClick: fn() => $setCount($count + 1), children: "{$props['label']}={$count}");
+}, $key, StorageType::Snapshot)(['label' => $label]);
+$pair = static fn(): Element => H::div(children: [$labeled('a'), $labeled('b')]);
+
+$router->get('/pair-session', $pair)->sessionSnapshot();
+$router->get('/pair-persistent', $pair)->persistentSnapshot();
+$router->get('/pair-shared-1', $pair)->sharedSnapshot('pair');
+$router->get('/pair-shared-2', $pair)->sharedSnapshot('pair');
+$router->get('/pair-other-group', $pair)->sharedSnapshot('other');
+$router->get('/keyed-session', static fn(): Element => $labeled('keyed', (string) ($_GET['k'] ?? '0')))->sessionSnapshot();
+
+// Writes a value into a session slot directly, standing in for what an older
+// release (or a foreign session) left behind. Test fixture only.
+$router->get('/plant', static function () use ($app): string {
+    session_status() === PHP_SESSION_ACTIVE || session_start();
+    $id = ComponentId::fromLegacy((string) ($_GET['id'] ?? ''));
+    $snapshot = Snapshot::fromComponentId($id, [(int) ($_GET['value'] ?? 0)]);
+    $serializer = $app->getSnapshotSerializer();
+    $slot = (string) ($_GET['slot'] ?? '_usephp_snapshot');
+    $bound = $serializer->withContext(session_id() ?: '')->serialize($snapshot);
+
+    $_SESSION[$slot] = match ((string) ($_GET['mode'] ?? 'legacy')) {
+        'legacy' => $bound,
+        'legacy-foreign' => $serializer->withContext('another-session')->serialize($snapshot),
+        'legacy-garbage' => 'not a snapshot',
+        'not-a-map' => 42,
+        'map-foreign' => [$id->toLegacyString() => $serializer->withContext('another-session')->serialize($snapshot)],
+        'map-unbound' => [$id->toLegacyString() => $serializer->serialize($snapshot)],
+        'map-wrong-key' => [$id->componentName . '#other' => $bound],
+        'map-non-string' => [$id->toLegacyString() => ['state' => [99]]],
+    };
+
+    return 'planted';
+});
+
+// A snapshot parent that re-renders its snapshot descendants.
+$grandchild = fc(static function (array $props): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::button(onClick: fn() => $setCount($count + 1), children: "grandchild={$count}");
+}, 'grandchild', StorageType::Snapshot);
+$child = fc(static function (array $props) use ($grandchild): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::div(children: [
+        H::button(onClick: fn() => $setCount($count + 1), children: "child={$count}"),
+        $grandchild([]),
+    ]);
+}, 'child', StorageType::Snapshot);
+$parent = fc(static function (array $props) use ($child): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::div(children: [
+        H::button(onClick: fn() => $setCount($count + 1), children: "parent={$count}"),
+        // Odd counts of a hideable parent leave the child out.
+        ($props['hideable'] ?? false) && $count % 2 === 1 ? H::p(children: 'no child') : $child([]),
+    ]);
+}, 'parent', StorageType::Snapshot);
+$sessionParent = fc(static function (array $props) use ($child): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::div(children: [
+        H::button(onClick: fn() => $setCount($count + 1), children: "session-parent={$count}"),
+        $child([]),
+    ]);
+}, 'session-parent', StorageType::Session);
+
+$router->get('/nested', static fn(): Element => $parent([]));
+$router->get('/nested-hideable', static fn(): Element => $parent(['hideable' => true]));
+$router->get('/nested-session-parent', static fn(): Element => $sessionParent([]));
+$router->get('/nested-with-sibling', static fn(): Element => H::div(children: [
+    $parent([]),
+    $labeled('sibling', 'sibling'),
+]));
+$router->get('/nested-on-session-route', static fn(): Element => $parent([]))->sessionSnapshot();
+
+// Isolated routes: state has nowhere to live but the response.
+$router->get('/pair-isolated', $pair);
+$router->get('/mixed-isolated', static fn(): Element => H::div(children: [
+    $labeled('snap', 'snap'),
+    fc(static function (array $props): Element {
+        [$count, $setCount] = useState(0);
+
+        return H::button(onClick: fn() => $setCount($count + 1), children: "sess={$count}");
+    }, 'sess', StorageType::Session)([]),
+]));
+$router->get('/string-handler', static fn(): string => '<main>' . $app->renderElement($labeled('str', 'str')) . '</main>');
+$router->get('/string-handler-pair', static fn(): string => '<main>' . $app->renderElement($pair()) . '</main>');
+$router->get('/printing-handler', static function () use ($app, $labeled): string {
+    echo '<main>' . $app->renderElement($labeled('printed', 'printed')) . '</main>';
+
+    return '';
+});
+$router->get('/hideable', static fn(): string => isset($_GET['hide'])
+    ? '<p>hidden</p>'
+    : $app->renderElement($labeled('hideable', 'hideable')));
+
+$deferredCounter = static fn(string $name): \Polidog\UsePhp\Runtime\FunctionComponent => fc(static function (array $props) use ($name): Element {
+    [$count, $setCount] = useState(0);
+    $tag = (string) ($props['tag'] ?? 'none');
+
+    return H::button(onClick: fn() => $setCount($count + 1), children: "{$name}={$count} tag={$tag}");
+}, $name, StorageType::Snapshot, defer: new Defer($name));
+$deferred = $deferredCounter('ds');
+$decoy = $deferredCounter('decoy');
+$broken = fc(static function (array $props): Element {
+    throw new RuntimeException('broken deferred target');
+}, 'broken', StorageType::Snapshot, defer: new Defer('broken'));
+foreach (['ds' => $deferred, 'decoy' => $decoy, 'broken' => $broken] as $name => $component) {
+    $app->registerComponent('Deferred\\' . $name, $component);
+    $app->registerDeferred($name, 'Deferred\\' . $name);
+}
+$router->get('/defer-page', static fn(): Element => H::div(children: [
+    H::p(children: 'page-chrome'),
+    $decoy([]),
+    $broken([]),
+    $deferred(['tag' => 7]),
+]));
+
+// A handler that names a component whose registered name is not its class.
+$router->get('/renamed-class', RenamedSnapshotCounter::class);
+
+// A deferred component inside a publicly cacheable deferred component.
+$innerDefer = fc(static function (array $props): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::button(onClick: fn() => $setCount($count + 1), children: "inner-secret={$count}");
+}, 'inner-defer', StorageType::Snapshot, defer: new Defer('inner-defer', cacheControl: 'private, no-store'));
+$outerDefer = fc(static function (array $props) use ($innerDefer): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::div(children: [
+        H::button(onClick: fn() => $setCount($count + 1), children: "outer={$count}"),
+        $innerDefer([]),
+    ]);
+}, 'outer-defer', StorageType::Snapshot, defer: new Defer('outer-defer', cacheControl: 'public, s-maxage=60'));
+$app->registerComponent('Deferred\\inner', $innerDefer);
+$app->registerDeferred('inner-defer', 'Deferred\\inner', 'private, no-store');
+$app->registerComponent('Deferred\\outer', $outerDefer);
+$app->registerDeferred('outer-defer', 'Deferred\\outer', 'public, s-maxage=60');
+$router->get('/defer-nested', static fn(): Element => H::div(children: [$outerDefer([])]));
+
+// Pages behind a guard. The handlers leave a mark when they run.
+$guard = static fn(): ?bool => ($_COOKIE['auth'] ?? '') === 'yes' ? null : false;
+$router->get('/guarded', static function () use ($labeled): Element {
+    error_log('GUARDED-HANDLER-RAN');
+
+    return $labeled('guarded', 'guarded');
+})->middleware($guard);
+$router->get('/guarded-string', static function () use ($app, $labeled): string {
+    error_log('GUARDED-HANDLER-RAN');
+
+    return $app->renderElement($labeled('guarded', 'guarded'));
+})->middleware($guard);
+$router->get('/guarded-defer', static function () use ($deferred): Element {
+    error_log('GUARDED-HANDLER-RAN');
+
+    return H::div(children: [$deferred(['tag' => 7])]);
+})->middleware($guard);
+
+// A session that only starts once a plain POST renders a session component.
+$sessionChild = fc(static function (array $props): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::button(onClick: fn() => $setCount($count + 1), children: "late-sess={$count}");
+}, 'late-sess', StorageType::Session);
+$router->get('/late-session', static fn(): Element => fc(static function (array $props) use ($sessionChild): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::div(children: [
+        H::button(onClick: fn() => $setCount($count + 1), children: "late={$count}"),
+        $count > 0 ? $sessionChild([]) : H::span(children: 'no session yet'),
+    ]);
+}, 'late', StorageType::Snapshot)([]));
+
+// Reads the query a class component in a deferred fragment would read.
+$router->get('/query-page', static fn(): Element => H::div(children: [
+    H::p(children: 'query=' . (string) ($_GET['x'] ?? 'none')),
+    $labeled('q', 'q'),
+]));
+
+// A field whose value decides whether the snapshot child is rendered.
+$router->get('/resend', static fn(): Element => fc(static function (array $props) use ($child): Element {
+    [$value, $setValue] = useState('');
+
+    return H::div(children: [
+        H::input(id: 'field', name: 'v', value: $value, onInput: useFormAction(['v' => $setValue])),
+        H::span(id: 'val', children: "val={$value}"),
+        $value === 'hide' ? H::p(children: 'no child') : $child([]),
+    ]);
+}, 'resend', StorageType::Snapshot)([]));
+
+// The field is in the child, the fixed-value button in the parent.
+$fieldChild = fc(static function (array $props): Element {
+    [$value, $setValue] = useState('');
+
+    return H::div(children: [
+        H::input(id: 'field', name: 'v', value: $value, onInput: useFormAction(['v' => $setValue])),
+        H::span(id: 'val', children: "val={$value}"),
+    ]);
+}, 'field-child', StorageType::Snapshot);
+$router->get('/resend-child', static fn(): Element => fc(static function (array $props) use ($fieldChild): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::div(children: [
+        H::button(onClick: fn() => $setCount($count + 1), children: "parent={$count}"),
+        $fieldChild([]),
+    ]);
+}, 'field-parent', StorageType::Snapshot)([]));
+
+// Text that looks like the renderer's own output.
+$router->get('/lookalike-page', static fn(): string => '<script>var a = \' data-usephp-snapshot="forged" <form data-usephp-form>\';</script>'
+    . '<div data-usephp-snapshot="also forged"></div>'
+    . $app->renderElement($pair()));
 
 $app->run();

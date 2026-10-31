@@ -128,6 +128,14 @@ final class UsePHP
     private ?string $deferredEndpointName = null;
 
     /**
+     * What the handler passed to {@see renderElement()} during a replay, for a
+     * handler that answers with a string. Null outside of a replay.
+     *
+     * @var list<Element>|null
+     */
+    private ?array $replayedElements = null;
+
+    /**
      * Whether the built-in CSRF check runs in {@see doHandleAction()}.
      *
      * Defaults to true so a usePHP-only deployment (without an upstream
@@ -787,6 +795,22 @@ final class UsePHP
     private const MAX_HOOK_INDEX = 255;
 
     /**
+     * Upper bound for the snapshots one session slot keeps (the Session slot,
+     * or one Shared group). Instance ids can come from app data
+     * (`fc(key: $row->id)`), so a long-lived session would otherwise grow with
+     * every instance it ever touched. Past the bound the instance written
+     * longest ago goes back to its initial state.
+     */
+    private const MAX_SESSION_SNAPSHOTS = 64;
+
+    /**
+     * Upper bound for the `_usephp_snapshots[]` one action request is read
+     * for. A page past it loses the state of the instances left out, not the
+     * action.
+     */
+    private const MAX_CARRIED_SNAPSHOTS = 256;
+
+    /**
      * Largest value useFormAction() accepts for one field, in bytes.
      */
     public const MAX_FORM_FIELD_BYTES = 65535;
@@ -1140,32 +1164,39 @@ final class UsePHP
             // Handle snapshot restoration for persistent/session behaviors
             $this->handleSnapshotRestoration($request, $match);
 
-            // Render the component
-            $handler = $match->handler;
-            $componentName = is_string($handler) ? $this->resolveComponentName($handler) : null;
-
-            if ($componentName !== null) {
-                // Component class
-                $html = $this->render($componentName);
-            } elseif (is_callable($handler)) {
-                // Callable handler
-                $result = $handler($match->params, $request);
-                if ($result instanceof Element) {
-                    $html = $this->renderElement($result);
-                } else {
-                    $html = (string) $result;
-                }
-            } else {
-                throw new \LogicException(sprintf(
-                    'Route handler %s is neither a registered component nor a callable.',
-                    $handler,
-                ));
-            }
-
-            echo $html;
+            echo $this->renderRouteHandler($match, $request);
         } finally {
             RenderContext::clearApp();
         }
+    }
+
+    /**
+     * Run a matched route's handler and render what it gives back.
+     *
+     * @throws \LogicException If the handler is neither a registered component
+     *         nor a callable (see resolveComponentName()).
+     */
+    private function renderRouteHandler(RouteMatch $match, RequestContext $request): string
+    {
+        $handler = $match->handler;
+        $componentName = is_string($handler) ? $this->resolveComponentName($handler) : null;
+
+        if ($componentName !== null) {
+            // Component class
+            return $this->render($componentName);
+        }
+
+        if (is_callable($handler)) {
+            // Callable handler
+            $result = $handler($match->params, $request);
+
+            return $result instanceof Element ? $this->renderElement($result) : (string) $result;
+        }
+
+        throw new \LogicException(sprintf(
+            'Route handler %s is neither a registered component nor a callable.',
+            $handler,
+        ));
     }
 
     /**
@@ -1322,8 +1353,8 @@ final class UsePHP
 
             case SnapshotBehavior::Session:
                 // Session state lives server-side only: the single writer of
-                // $_SESSION['_usephp_snapshot'] is doHandleAction() on the
-                // PRG path, and nothing in the framework ever puts a
+                // $_SESSION['_usephp_snapshot'] is storeSessionSnapshot() on
+                // the PRG path, and nothing in the framework ever puts a
                 // Session snapshot into a URL. A `?_snapshot=` on a Session
                 // route is therefore never legitimate — earlier versions
                 // verified it against the app-wide secret and copied it
@@ -1355,12 +1386,9 @@ final class UsePHP
     }
 
     /**
-     * Restore component state from a snapshot that doHandleAction() stored
-     * in `$_SESSION` on the PRG path (Session and Shared behaviors).
-     *
-     * The stored bytes are verified with the session-bound serializer, so a
-     * snapshot signed for another session id (or by the unbound serializer)
-     * is rejected and logged rather than restored.
+     * Restore component state from the snapshots doHandleAction() stored in
+     * `$_SESSION` on the PRG path (Session and Shared behaviors), one per
+     * instance on the page.
      */
     private function restoreSnapshotFromSession(string $sessionKey, string $behavior): void
     {
@@ -1369,15 +1397,112 @@ final class UsePHP
         if (!$this->startSessionIfPossible()) {
             return;
         }
+        foreach ($this->loadSessionSnapshots($sessionKey, $behavior) as $snapshot) {
+            ComponentState::fromSnapshot($snapshot);
+        }
+    }
+
+    /**
+     * Read a session slot: a map of instance id => snapshot, oldest write
+     * first.
+     *
+     * Every entry is verified with the session-bound serializer, so a snapshot
+     * signed for another session id (or by the unbound serializer) is rejected
+     * and logged rather than returned. So is one filed under an id other than
+     * the one its signed memo names. Earlier releases kept a single snapshot
+     * string in the slot; a session that still holds one reads as a map of one.
+     *
+     * @return array<string, Snapshot>
+     */
+    private function loadSessionSnapshots(string $sessionKey, string $behavior): array
+    {
         $stored = $_SESSION[$sessionKey] ?? null;
-        if (!is_string($stored) || $stored === '') {
+        if (is_string($stored)) {
+            $stored = $stored === '' ? [] : [$stored];
+        }
+        if (!is_array($stored)) {
+            return [];
+        }
+
+        $snapshots = [];
+        foreach ($stored as $storedId => $serialized) {
+            try {
+                if (!is_string($serialized)) {
+                    throw new SnapshotVerificationException('Stored snapshot is not a string');
+                }
+                $snapshot = $this->sessionBoundSerializer()->deserialize($serialized);
+                if (is_string($storedId) && $storedId !== $snapshot->getInstanceId()) {
+                    throw new SnapshotVerificationException('Stored snapshot names another instance');
+                }
+            } catch (SnapshotVerificationException $e) {
+                $this->logSnapshotRejection($behavior, $e);
+                continue;
+            } catch (\JsonException|\InvalidArgumentException|\TypeError) {
+                $this->logSnapshotRejection($behavior, new SnapshotVerificationException('Stored snapshot is malformed'));
+                continue;
+            }
+            $snapshots[$snapshot->getInstanceId()] = $snapshot;
+        }
+
+        return $snapshots;
+    }
+
+    /**
+     * Write one instance's snapshot into a session slot, signed for this
+     * session id only (see sessionBoundSerializer()). The other instances in
+     * the slot stay, and the one written longest ago is dropped past
+     * {@see self::MAX_SESSION_SNAPSHOTS}.
+     */
+    private function storeSessionSnapshot(string $sessionKey, string $behavior, Snapshot $snapshot): void
+    {
+        $snapshots = $this->loadSessionSnapshots($sessionKey, $behavior);
+
+        // Re-inserting moves the instance to the newest end of the map.
+        unset($snapshots[$snapshot->getInstanceId()]);
+        $snapshots[$snapshot->getInstanceId()] = $snapshot;
+
+        while (count($snapshots) > self::MAX_SESSION_SNAPSHOTS) {
+            \error_log(sprintf(
+                '[usePHP] Snapshot evicted (behavior=%s): a session slot keeps %d instances, %s goes back to its initial state',
+                $behavior,
+                self::MAX_SESSION_SNAPSHOTS,
+                (string) array_key_first($snapshots),
+            ));
+            array_shift($snapshots);
+        }
+
+        $serializer = $this->sessionBoundSerializer();
+        $_SESSION[$sessionKey] = array_map($serializer->serialize(...), $snapshots);
+    }
+
+    /**
+     * The `?_snapshot=` of a Persistent route holds one instance so the URL
+     * does not grow with the page. An action on a second instance replaces it,
+     * and the first goes back to its initial state; say so instead of losing it
+     * silently. The value is only compared here, never used, so it is not
+     * verified.
+     */
+    private function warnWhenPersistentSnapshotIsReplaced(string $instanceId): void
+    {
+        $router = $this->router ?? new NullRouter();
+        $carried = $router->extractSnapshot(RequestContext::fromGlobals());
+        if ($carried === null) {
             return;
         }
+
         try {
-            $snapshot = $this->sessionBoundSerializer()->deserialize($stored);
-            ComponentState::fromSnapshot($snapshot);
-        } catch (SnapshotVerificationException $e) {
-            $this->logSnapshotRejection($behavior, $e);
+            $carriedId = Snapshot::fromJson($carried)->getInstanceId();
+        } catch (\JsonException|\InvalidArgumentException|\TypeError) {
+            return;
+        }
+
+        if ($carriedId !== $instanceId) {
+            \error_log(sprintf(
+                '[usePHP] Snapshot replaced (behavior=Persistent): the URL carries only one instance, '
+                . 'so the action on %s drops the state of the other one. '
+                . 'Use sessionSnapshot() for a page with several snapshot instances.',
+                $instanceId,
+            ));
         }
     }
 
@@ -1750,12 +1875,14 @@ final class UsePHP
         $actionJson = $_POST['_usephp_action'] ?? null;
         $actionSignature = $_POST['_usephp_action_sig'] ?? null;
         $snapshotJson = $_POST['_usephp_snapshot'] ?? null;
+        $carriedSnapshots = $_POST['_usephp_snapshots'] ?? [];
         $isPartial = isset($_SERVER['HTTP_X_USEPHP_PARTIAL']);
 
         if (!is_string($instanceId) || !is_string($actionJson)
             || !self::isValidInstanceId($instanceId)
             || ($actionSignature !== null && !is_string($actionSignature))
             || ($snapshotJson !== null && !is_string($snapshotJson))
+            || !is_array($carriedSnapshots)
         ) {
             return $this->respondBadRequest('Invalid action request');
         }
@@ -1829,6 +1956,11 @@ final class UsePHP
             return $this->respondBadRequest('Invalid snapshot');
         }
 
+        $carriedIds = $this->restoreCarriedSnapshots($carriedSnapshots, $instanceId);
+        if ($carriedIds === null) {
+            return $this->respondBadRequest('Invalid snapshot');
+        }
+
         // Execute the action. 'restore' carries no mutation and only needs
         // the re-render below.
         if ($action->type === 'setState') {
@@ -1860,11 +1992,27 @@ final class UsePHP
             // fc() components are not in the registry, so re-render them by
             // replaying the page route.
             if (!$isRegisteredComponent) {
-                $partial = $this->renderFunctionComponentPartial($instanceId, $storageType);
+                $partial = $this->renderFunctionComponentPartial($instanceId, $storageType, $carriedIds);
                 if ($partial !== null) {
                     return $partial;
                 }
             }
+        } elseif ($storageType === StorageType::Snapshot || $carriedIds !== []) {
+            // A plain form POST, so JavaScript is off (or not loaded yet).
+            $page = $this->renderPageForPlainAction();
+            if ($page !== null) {
+                return $page;
+            }
+        }
+
+        if ($storageType === StorageType::Snapshot && !$this->snapshotRouteRequiresRedirect($storageType)) {
+            // Nothing the redirect leads to can read this state.
+            \error_log(sprintf(
+                '[usePHP] Snapshot state lost: %s could not be re-rendered in place, so this action falls back to a '
+                . 'redirect that starts from its initial state. The route handler must render the component through '
+                . 'an Element or UsePHP::renderElement(), or the route must declare sessionSnapshot().',
+                $instanceId,
+            ));
         }
 
         // Full page - PRG pattern with snapshot behavior handling.
@@ -1894,26 +2042,20 @@ final class UsePHP
             switch ($this->currentMatch->snapshotBehavior) {
                 case SnapshotBehavior::Persistent:
                     // Pass snapshot in URL
+                    $this->warnWhenPersistentSnapshotIsReplaced($instanceId);
                     $router = $this->router ?? new NullRouter();
                     $redirectUrl = $router->createRedirectUrl((string) $redirectUrl, $snapshot);
                     break;
 
                 case SnapshotBehavior::Session:
-                    // Store snapshot in session, signed for this session id
-                    // only (see sessionBoundSerializer()).
                     if (session_status() === PHP_SESSION_ACTIVE) {
-                        $serialized = $this->sessionBoundSerializer()->serialize($snapshot);
-                        $_SESSION['_usephp_snapshot'] = $serialized;
+                        $this->storeSessionSnapshot('_usephp_snapshot', 'Session', $snapshot);
                     }
                     break;
 
                 case SnapshotBehavior::Shared:
-                    // Store in shared group session, signed for this session
-                    // id only (see sessionBoundSerializer()).
                     if ($this->currentMatch->sharedGroup !== null && session_status() === PHP_SESSION_ACTIVE) {
-                        $sessionKey = '_usephp_shared_' . $this->currentMatch->sharedGroup;
-                        $serialized = $this->sessionBoundSerializer()->serialize($snapshot);
-                        $_SESSION[$sessionKey] = $serialized;
+                        $this->storeSessionSnapshot('_usephp_shared_' . $this->currentMatch->sharedGroup, 'Shared', $snapshot);
                     }
                     break;
 
@@ -1929,6 +2071,169 @@ final class UsePHP
         $this->terminate();
 
         return '';
+    }
+
+    /**
+     * Answer a plain form POST on an Isolated route with the page itself.
+     *
+     * An Isolated route keeps no state of its own, so a redirect would come
+     * back with the initial state. Replaying the route with the instance's state
+     * already primed gets the page the same way a GET would, whatever the
+     * handler returns. Returns null on the routes that do have a redirect to
+     * write to, and when there is no route to replay.
+     */
+    private function renderPageForPlainAction(): ?string
+    {
+        [$match, $pageRequest] = $this->resolveActionPageMatch();
+        if ($match === null || $match->snapshotBehavior !== SnapshotBehavior::Isolated) {
+            return null;
+        }
+
+        RenderContext::beginRender();
+        ob_start();
+        try {
+            $html = $this->renderRouteHandler($match, $pageRequest);
+            $printed = (string) ob_get_contents();
+        } finally {
+            ob_end_clean();
+        }
+
+        // The answer to a POST is not a page to keep.
+        $this->emitHeader('Cache-Control: no-store');
+
+        return $this->carrySnapshotsInForms($printed . $html);
+    }
+
+    /**
+     * Put the page's snapshots into its action forms.
+     *
+     * Without JavaScript the next action is a plain POST of one form, and an
+     * Isolated page keeps state nowhere else, so each form has to bring along
+     * the other instances' current snapshots or the next answer would reset
+     * them. This works on the finished HTML because a handler can answer with
+     * a string, which leaves no tree to walk.
+     *
+     * The HTML can hold more than the renderer's own output: raw text elements
+     * are skipped, and a value that does not verify stays behind, since it
+     * would make the server reject the next action.
+     */
+    private function carrySnapshotsInForms(string $html): string
+    {
+        $outsideRawText = '<(script|style)\b.*?</\1\s*>(*SKIP)(*FAIL)|';
+
+        preg_match_all(
+            '~' . $outsideRawText . '\sdata-usephp-snapshot=(?:"([^"]*+)"|\'([^\']*+)\')~is',
+            $html,
+            $matches,
+            PREG_SET_ORDER,
+        );
+
+        $fields = '';
+        $count = 0;
+        $seen = [];
+        foreach ($matches as $match) {
+            $value = ($match[3] ?? '') !== '' ? $match[3] : ($match[2] ?? '');
+            if (isset($seen[$value]) || $count === self::MAX_CARRIED_SNAPSHOTS) {
+                continue;
+            }
+            $seen[$value] = true;
+            if (!$this->verifiesAsSnapshot(html_entity_decode($value, ENT_QUOTES, 'UTF-8'))) {
+                continue;
+            }
+            $count++;
+            // Still escaped the way it was in the attribute.
+            $fields .= '<input type="hidden" name="_usephp_snapshots[]" value="' . str_replace("'", '&#039;', $value) . '" />';
+        }
+
+        // A form's own snapshot is ignored on the way back, so a page with a
+        // single instance has nothing to carry.
+        if ($count === 0 || preg_match_all('/\sdata-usephp=/', $html) < 2) {
+            return $html;
+        }
+
+        return preg_replace_callback(
+            '~' . $outsideRawText . '<form\b[^>]*?\bdata-usephp-form\b[^>]*>~is',
+            static fn(array $form): string => $form[0] . $fields,
+            $html,
+        ) ?? $html;
+    }
+
+    private function verifiesAsSnapshot(string $json): bool
+    {
+        try {
+            $this->getSnapshotSerializer()->deserialize($json);
+
+            return true;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * Restore the snapshots of the other instances an action request carries.
+     *
+     * A re-render runs the handler again, and an instance's state lives in its
+     * own snapshot, so the instances the re-render reaches need theirs back.
+     * The page is the only place that has their current state: usephp.js sends
+     * what the descendants of the acting component hold, and without JavaScript
+     * the forms carry the whole page's (see carrySnapshotsInForms()).
+     *
+     * Only signed bytes come in, with no id next to them, so each snapshot can
+     * only ever land on the instance its signed memo names. Anything that does
+     * not verify rejects the whole request, like a bad `_usephp_snapshot` does.
+     * One naming the acting instance is skipped: its state comes from
+     * `_usephp_snapshot` and the action.
+     *
+     * @param array<mixed> $serialized
+     * @return list<string>|null The instance ids restored, or null to reject
+     */
+    private function restoreCarriedSnapshots(array $serialized, string $actingInstanceId): ?array
+    {
+        if ($serialized === []) {
+            return [];
+        }
+
+        $serializer = $this->tryGetSnapshotSerializer();
+        if ($serializer === null) {
+            return null;
+        }
+
+        if (count($serialized) > self::MAX_CARRIED_SNAPSHOTS) {
+            \error_log(sprintf(
+                '[usePHP] An action carried %d snapshots; only the first %d are read',
+                count($serialized),
+                self::MAX_CARRIED_SNAPSHOTS,
+            ));
+            $serialized = array_slice($serialized, 0, self::MAX_CARRIED_SNAPSHOTS);
+        }
+
+        // All of them verify before any is restored.
+        $snapshots = [];
+        foreach ($serialized as $json) {
+            if (!is_string($json)) {
+                return null;
+            }
+            try {
+                $snapshot = $serializer->deserialize($json);
+            } catch (SnapshotVerificationException $e) {
+                $this->logSnapshotRejection('Carried', $e);
+
+                return null;
+            } catch (\Throwable) {
+                // Bytes that are not a snapshot at all fail further down, with
+                // whatever the JSON turned out to be.
+                return null;
+            }
+            if ($snapshot->getInstanceId() !== $actingInstanceId) {
+                $snapshots[$snapshot->getInstanceId()] = $snapshot;
+            }
+        }
+
+        foreach ($snapshots as $snapshot) {
+            ComponentState::fromSnapshot($snapshot);
+        }
+
+        return array_keys($snapshots);
     }
 
     /**
@@ -2031,11 +2336,27 @@ final class UsePHP
      * answering with a partial would leave those stale (see
      * snapshotRouteRequiresRedirect()).
      *
+     * A carried snapshot is signed, but a partial only has a use for the
+     * descendants of the acting instance. One for an instance rendered anywhere
+     * else on the page would feed the replay state the client picked, and could
+     * reach the output through the props an ancestor passes down, so it rejects
+     * the request. An id the tree does not have at all is fine: nothing reads
+     * it, and it is what a descendant the action just hid looks like.
+     *
+     * A handler may answer with a string, having rendered through
+     * {@see renderElement()}: the Elements it passed there are searched as well.
+     * Session state skips that, since it survives the fallback redirect anyway.
+     * An instance that came from a defer endpoint is not in the page's tree at
+     * all, only its placeholder is, so placeholders lead to their targets (see
+     * findWrapperInReplay()).
+     *
      * Returns null when the page cannot be replayed (no router match, a
-     * class-component handler, a non-Element result, or the instance is
-     * missing from the tree); the caller then falls back to the PRG redirect.
+     * class-component handler, or the instance is nowhere to be found); the
+     * caller then falls back to the PRG redirect.
+     *
+     * @param list<string> $carriedIds Instances restored by restoreCarriedSnapshots()
      */
-    private function renderFunctionComponentPartial(string $instanceId, StorageType $storageType): ?string
+    private function renderFunctionComponentPartial(string $instanceId, StorageType $storageType, array $carriedIds = []): ?string
     {
         if ($this->snapshotRouteRequiresRedirect($storageType)) {
             return null;
@@ -2056,20 +2377,36 @@ final class UsePHP
         RenderContext::beginRender();
         // The handler runs for its Element tree only. Anything it prints would
         // corrupt the partial, or block the fallback redirect's headers.
+        $this->replayedElements = $storageType === StorageType::Session ? null : [];
         ob_start();
         try {
             $result = $handler($match->params, $pageRequest);
+            $roots = $result instanceof Element ? [$result] : ($this->replayedElements ?? []);
         } finally {
             ob_end_clean();
-        }
-        if (!$result instanceof Element) {
-            return null;
+            $this->replayedElements = null;
         }
 
-        $wrapper = self::findComponentElement($result, $instanceId);
-        if ($wrapper === null) {
+        $found = $this->findWrapperInReplay($roots, $instanceId);
+        if ($found === null) {
             return null;
         }
+        [$wrapper, $searched] = $found;
+
+        $outside = [];
+        foreach ($searched as $root) {
+            $outside = [...$outside, ...self::instanceIdsOutside($root, $instanceId)];
+        }
+        if (array_intersect($carriedIds, $outside) !== []) {
+            \error_log('[usePHP] An action on ' . $instanceId . ' carried a snapshot of an instance that is not its descendant');
+
+            return $this->respondBadRequest('Invalid snapshot');
+        }
+
+        // A form from a defer endpoint brings the endpoint's query with it (see
+        // doRenderComponentPartialWithInstanceId()), and the forms re-rendered
+        // here have to keep it for a class component among them.
+        $deferQuery = $_POST['_usephp_defer_query'] ?? null;
 
         $renderer = new Renderer(
             $instanceId,
@@ -2078,6 +2415,7 @@ final class UsePHP
             $this->deferPrefix,
             $this->getCsrfToken(...),
             actionSigner: $this->actionSigner(),
+            deferQuery: is_string($deferQuery) && $deferQuery !== '' ? $deferQuery : null,
         );
 
         // renderPartial() emits the wrapper's contents. For Snapshot storage it
@@ -2086,6 +2424,118 @@ final class UsePHP
         return $renderer->renderPartial(
             static fn(): Element => new Element('Fragment', [], $wrapper->children)
         );
+    }
+
+    /**
+     * Find an instance's wrapper in what a replay produced, rendering defer
+     * placeholders' targets if it isn't there.
+     *
+     * The form of a deferred component POSTs to the page, whose replay only has
+     * the placeholder. The target gets the props its endpoint would, and each
+     * one only renders when the search reaches it, because deferred content is
+     * often deferred for being slow. One that fails says nothing about the
+     * instance being looked for, so the search goes on. A placeholder inside a
+     * target stays one, as on the endpoint (see isDeferredEndpointTarget()), and
+     * is followed the same way.
+     *
+     * @param list<Element> $roots
+     * @return array{0: Element, 1: list<Element>}|null The wrapper and every tree searched
+     */
+    private function findWrapperInReplay(array $roots, string $instanceId): ?array
+    {
+        $pending = $roots;
+        $searched = [];
+        $visited = [];
+
+        while (($root = array_shift($pending)) !== null) {
+            $searched[] = $root;
+
+            $wrapper = self::findComponentElement($root, $instanceId);
+            if ($wrapper !== null) {
+                return [$wrapper, $searched];
+            }
+
+            foreach (self::findDeferPlaceholders($root) as $placeholder) {
+                $name = (string) ($placeholder->props['__name'] ?? '');
+                $params = self::deferEndpointProps($placeholder);
+                $visit = $name . '?' . http_build_query($params);
+                if (isset($visited[$visit]) || !isset($this->deferredRegistry[$name])) {
+                    continue;
+                }
+                $visited[$visit] = true;
+
+                $target = $this->renderDeferredForReplay($name, $params);
+                if ($target !== null) {
+                    $pending[] = $target;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * What a defer endpoint would receive as props for this placeholder: the
+     * query string {@see Renderer::renderDeferred()} builds, read back.
+     *
+     * @return array<string, string>
+     */
+    private static function deferEndpointProps(Element $placeholder): array
+    {
+        $params = $placeholder->props['__params'] ?? [];
+        $props = [];
+        foreach (is_array($params) ? $params : [] as $key => $value) {
+            if (is_scalar($value)) {
+                $props[(string) $key] = is_bool($value) ? ($value ? '1' : '0') : (string) $value;
+            }
+        }
+
+        return $props;
+    }
+
+    /**
+     * Render a defer target the way its endpoint does: only that target skips
+     * its placeholder, and `$_GET` holds the endpoint's query.
+     *
+     * @param array<string, string> $props
+     */
+    private function renderDeferredForReplay(string $name, array $props): ?Element
+    {
+        RenderContext::beginRender();
+        $this->deferredEndpointName = $name;
+        $outerGet = $_GET;
+        $_GET = $props;
+        ob_start();
+        try {
+            return $this->renderDeferredTarget($this->deferredRegistry[$name]['component'], $props);
+        } catch (\Throwable $e) {
+            \error_log(sprintf("[usePHP] defer render failed for name '%s' during a replay: %s", $name, $e->getMessage()));
+
+            return null;
+        } finally {
+            ob_end_clean();
+            $_GET = $outerGet;
+            $this->deferredEndpointName = null;
+        }
+    }
+
+    /**
+     * @return list<Element>
+     */
+    private static function findDeferPlaceholders(Element $element): array
+    {
+        if ($element->type === '__defer__') {
+            return [$element];
+        }
+
+        $found = [];
+        foreach ($element->children as $child) {
+            if ($child instanceof Element) {
+                $found = [...$found, ...self::findDeferPlaceholders($child)];
+            }
+        }
+
+        return $found;
     }
 
     /**
@@ -2109,6 +2559,29 @@ final class UsePHP
         }
 
         return null;
+    }
+
+    /**
+     * The instance ids in an Element tree, leaving out one instance's wrapper
+     * and everything inside it.
+     *
+     * @return list<string>
+     */
+    private static function instanceIdsOutside(Element $element, string $instanceId): array
+    {
+        $id = $element->props['data-usephp'] ?? null;
+        if ($id === $instanceId) {
+            return [];
+        }
+
+        $ids = is_string($id) ? [$id] : [];
+        foreach ($element->children as $child) {
+            if ($child instanceof Element) {
+                $ids = [...$ids, ...self::instanceIdsOutside($child, $instanceId)];
+            }
+        }
+
+        return $ids;
     }
 
     /**
@@ -2168,6 +2641,10 @@ final class UsePHP
         $outerApp = RenderContext::getApp();
         RenderContext::setApp($this);
         $parentState = ComponentState::current();
+
+        if ($this->replayedElements !== null) {
+            $this->replayedElements[] = $element;
+        }
 
         try {
             $renderer = new Renderer(
