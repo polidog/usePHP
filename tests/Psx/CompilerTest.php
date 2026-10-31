@@ -23,64 +23,65 @@ class CompilerTest extends TestCase
     public function testSimpleHtmlTag(): void
     {
         $result = $this->compileExpression('<div></div>');
-        self::assertStringContainsString('H::div()', $result);
+        self::assertStringContainsString("createElement('div', [])", $result);
     }
 
     public function testTagWithStringAttribute(): void
     {
         $result = $this->compileExpression('<div className="counter"></div>');
-        self::assertStringContainsString("H::div(className: 'counter')", $result);
+        self::assertStringContainsString("createElement('div', ['className' => 'counter'])", $result);
     }
 
     public function testTagWithExpressionAttribute(): void
     {
         $result = $this->compileExpression('<div className={$cls}></div>');
-        self::assertStringContainsString('H::div(className: $cls)', $result);
+        self::assertStringContainsString("createElement('div', ['className' => \$cls])", $result);
     }
 
     public function testTextChild(): void
     {
         $result = $this->compileExpression('<span>Hello</span>');
-        self::assertStringContainsString("H::span(children: 'Hello')", $result);
+        self::assertStringContainsString("createElement('span', ['children' => ['Hello']])", $result);
     }
 
     public function testInterpolatedTextChild(): void
     {
         $result = $this->compileExpression('<span>Count: {$count}</span>');
-        self::assertStringContainsString("H::span(children: ['Count: ', \$count])", $result);
+        self::assertStringContainsString("createElement('span', ['children' => ['Count: ', \$count]])", $result);
     }
 
     public function testSelfClosingTag(): void
     {
         $result = $this->compileExpression('<input type="text" />');
-        self::assertStringContainsString("H::input(type: 'text')", $result);
+        self::assertStringContainsString("createElement('input', ['type' => 'text'])", $result);
     }
 
     public function testEventHandler(): void
     {
         $result = $this->compileExpression('<button onClick={fn() => $inc()}>+</button>');
-        self::assertStringContainsString('H::button(onClick: fn() => $inc(), children: \'+\')', $result);
+        self::assertStringContainsString("createElement('button', ['onClick' => fn() => \$inc(), 'children' => ['+']])", $result);
     }
 
     public function testNestedElements(): void
     {
         $result = $this->compileExpression('<div><span>x</span></div>');
-        self::assertStringContainsString("H::div(children: H::span(children: 'x'))", $result);
+        self::assertSame(
+            "<?php\nreturn \\Polidog\\UsePhp\\Html\\createElement('div', ['children' => [\\Polidog\\UsePhp\\Html\\createElement('span', ['children' => ['x']])]]);\n",
+            $result,
+        );
     }
 
     public function testMultipleChildrenBecomeArray(): void
     {
         $result = $this->compileExpression('<ul><li>1</li><li>2</li></ul>');
-        self::assertStringContainsString("H::ul(children: [H::li(children: '1'), H::li(children: '2')])", $result);
+        self::assertStringContainsString("createElement('li', ['children' => ['1']]), \\Polidog\\UsePhp\\Html\\createElement('li', ['children' => ['2']])]", $result);
     }
 
     public function testFragment(): void
     {
         $result = $this->compileExpression('<><li>One</li><li>Two</li></>');
-        self::assertStringContainsString(
-            "H::Fragment([H::li(children: 'One'), H::li(children: 'Two')])",
-            $result
-        );
+        self::assertStringContainsString("createElement('Fragment', ['children' => [", $result);
+        self::assertStringContainsString("createElement('li', ['children' => ['Two']])", $result);
     }
 
     public function testPrivateHelperViaLocalClosure(): void
@@ -99,11 +100,11 @@ class CompilerTest extends TestCase
         $compiled = $this->compiler->compile($source);
 
         self::assertStringContainsString(
-            "\$row = fn(array \$item) => H::li(className: 'row', children: \$item['text'])",
+            "\$row = fn(array \$item) => \\Polidog\\UsePhp\\Html\\createElement('li', ['className' => 'row', 'children' => \$item['text']])",
             $compiled
         );
         self::assertStringContainsString('array_map($row, $items)', $compiled);
-        self::assertStringContainsString('H::ul(children:', $compiled);
+        self::assertStringContainsString("createElement('ul', ['children' =>", $compiled);
 
         // Helper closure should not be added to the manifest reference list.
         self::assertSame([], $this->compiler->getLastReferences());
@@ -113,13 +114,13 @@ class CompilerTest extends TestCase
     {
         $source = "<?php\nreturn fn(\$items) => <ul>\n  {array_map(fn(\$t) => <li>{\$t}</li>, \$items)}\n</ul>;\n";
         $result = $this->compiler->compile($source);
-        self::assertStringContainsString('array_map(fn($t) => H::li(children: $t), $items)', $result);
+        self::assertStringContainsString("array_map(fn(\$t) => \\Polidog\\UsePhp\\Html\\createElement('li', ['children' => \$t]), \$items)", $result);
     }
 
     public function testBooleanAttribute(): void
     {
         $result = $this->compileExpression('<input disabled />');
-        self::assertStringContainsString('H::input(disabled: true)', $result);
+        self::assertStringContainsString("createElement('input', ['disabled' => true])", $result);
     }
 
     public function testComponentTag(): void
@@ -178,29 +179,29 @@ class CompilerTest extends TestCase
         self::assertTrue(true);
     }
 
-    public function testDataAttributeUsesCallStaticDispatch(): void
+    public function testDataAttributeIsPassedAsAProp(): void
     {
         $result = $this->compileExpression('<div className="x" data-id={$id}>hi</div>');
         self::assertStringContainsString(
-            "H::__callStatic('div', ['className' => 'x', 'data-id' => \$id, 'children' => 'hi'])",
+            "createElement('div', ['className' => 'x', 'data-id' => \$id, 'children' => ['hi']])",
             $result
         );
     }
 
-    public function testAriaAttributeUsesCallStaticDispatch(): void
+    public function testAriaAttributeIsPassedAsAProp(): void
     {
         $result = $this->compileExpression('<button aria-label="close">x</button>');
-        self::assertStringContainsString("H::__callStatic('button',", $result);
+        self::assertStringContainsString("createElement('button',", $result);
         self::assertStringContainsString("'aria-label' => 'close'", $result);
     }
 
-    public function testKnownAttributesUseNamedArgs(): void
+    public function testKnownAttributesArePassedAsProps(): void
     {
         $result = $this->compileExpression('<div className="x" id="y">hi</div>');
-        self::assertStringContainsString("H::div(className: 'x', id: 'y', children: 'hi')", $result);
+        self::assertStringContainsString("createElement('div', ['className' => 'x', 'id' => 'y', 'children' => ['hi']])", $result);
     }
 
-    public function testCallStaticDispatchProducesCorrectElementAtRuntime(): void
+    public function testDataAttributeProducesCorrectElementAtRuntime(): void
     {
         $autoload = \dirname(__DIR__, 2) . '/vendor/autoload.php';
         $compiled = $this->compiler->compile(
@@ -260,21 +261,21 @@ class CompilerTest extends TestCase
     {
         // The `}` inside the // comment must NOT close the brace expression.
         $result = $this->compileExpression("<div>{ /* keep */ \$x // hi }\n}</div>");
-        self::assertStringContainsString('H::div(', $result);
+        self::assertStringContainsString("createElement('div',", $result);
         self::assertStringContainsString('$x', $result);
     }
 
     public function testBraceExpressionIgnoresClosingBraceInBlockComment(): void
     {
         $result = $this->compileExpression('<div>{ /* } closing brace inside comment */ $x }</div>');
-        self::assertStringContainsString('H::div(', $result);
+        self::assertStringContainsString("createElement('div',", $result);
         self::assertStringContainsString('$x', $result);
     }
 
     public function testBraceExpressionIgnoresClosingBraceInDoubleQuotedString(): void
     {
-        $result = $this->compileExpression('<div>{($s = "}"); $s }</div>');
-        self::assertStringContainsString('H::div(', $result);
+        $result = $this->compileExpression('<div>{"}" . $s }</div>');
+        self::assertStringContainsString("createElement('div',", $result);
         self::assertStringContainsString('"}"', $result);
     }
 
@@ -303,7 +304,7 @@ class CompilerTest extends TestCase
         $source = "<?php\nfunction page() {\n    return (<p>it's broken</p>);\n}\n";
         $compiled = $this->compiler->compile($source);
 
-        self::assertStringContainsString("H::p(children: 'it\\'s broken')", $compiled);
+        self::assertStringContainsString("createElement('p', ['children' => ['it\\'s broken']])", $compiled);
         self::assertStringContainsString('}', $compiled, 'Trailing closing brace must not be dropped');
         $this->assertCompiledIsValidPhp($compiled);
     }
@@ -313,7 +314,7 @@ class CompilerTest extends TestCase
         $source = "<?php\nif (true) {\n    \$x = (<p>doesn't matter</p>);\n}\n";
         $compiled = $this->compiler->compile($source);
 
-        self::assertStringContainsString("H::p(children: 'doesn\\'t matter')", $compiled);
+        self::assertStringContainsString("createElement('p', ['children' => ['doesn\\'t matter']])", $compiled);
         $this->assertCompiledIsValidPhp($compiled);
     }
 
@@ -322,7 +323,7 @@ class CompilerTest extends TestCase
         $source = "<?php\nfunction page() {\n    return fn() => fn() => (<section>it's nested</section>);\n}\n";
         $compiled = $this->compiler->compile($source);
 
-        self::assertStringContainsString("H::section(children: 'it\\'s nested')", $compiled);
+        self::assertStringContainsString("createElement('section', ['children' => ['it\\'s nested']])", $compiled);
         $this->assertCompiledIsValidPhp($compiled);
     }
 
@@ -335,8 +336,8 @@ class CompilerTest extends TestCase
             . "}\n";
         $compiled = $this->compiler->compile($source);
 
-        self::assertStringContainsString("H::p(children: 'doesn\\'t')", $compiled);
-        self::assertStringContainsString("H::p(children: 'you\\'re')", $compiled);
+        self::assertStringContainsString("createElement('p', ['children' => ['doesn\\'t']])", $compiled);
+        self::assertStringContainsString("createElement('p', ['children' => ['you\\'re']])", $compiled);
         $this->assertCompiledIsValidPhp($compiled);
     }
 
@@ -349,11 +350,11 @@ class CompilerTest extends TestCase
         }
     }
 
-    public function testCustomElementWithDataAttrUsesCallStaticDispatch(): void
+    public function testCustomElementWithDataAttrUsesCreateElement(): void
     {
         $result = $this->compileExpression('<my-widget data-x="1" />');
-        // Custom HTML element: not in H's named methods, so __callStatic.
-        self::assertStringContainsString("H::__callStatic('my-widget',", $result);
+        // Custom HTML element: same createElement() call as any built-in tag.
+        self::assertStringContainsString("createElement('my-widget',", $result);
         self::assertStringContainsString("'data-x' => '1'", $result);
     }
 
@@ -363,9 +364,9 @@ class CompilerTest extends TestCase
             . '{array_map(fn($g) => array_map(fn($i) => <li>{$i}</li>, $g), $groups)}'
             . "</ul>;\n";
         $result = $this->compiler->compile($source);
-        // The inner H::li(...) call should appear, demonstrating that nested
+        // The inner createElement('li', ...) call should appear, demonstrating that nested
         // brace expressions still see PSX tags compiled.
-        self::assertStringContainsString('H::li(children: $i)', $result);
+        self::assertStringContainsString("createElement('li', ['children' => \$i])", $result);
     }
 
     public function testCompiledHasExpectedStructure(): void
@@ -373,9 +374,9 @@ class CompilerTest extends TestCase
         $sourcePath = \dirname(__DIR__, 2) . '/examples/components/psx/Counter.psx';
         $compiled = $this->compiler->compile(\file_get_contents($sourcePath));
 
-        self::assertStringContainsString("H::div(className: 'counter'", $compiled);
-        self::assertStringContainsString("H::span(children: ['Count: ', \$count])", $compiled);
-        self::assertStringContainsString('onClick: fn() => $setCount($count + 1)', $compiled);
+        self::assertStringContainsString("createElement('div', ['className' => 'counter'", $compiled);
+        self::assertStringContainsString("createElement('span', ['children' => ['Count: ', \$count]])", $compiled);
+        self::assertStringContainsString("'onClick' => fn() => \$setCount(\$count + 1)", $compiled);
         self::assertStringContainsString('StorageType::Snapshot', $compiled);
     }
 

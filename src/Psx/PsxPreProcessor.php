@@ -124,7 +124,10 @@ final class PsxPreProcessor implements PsxPreProcessorInterface
             return false;
         }
         if (\is_array($next)) {
-            return $next[0] === \T_STRING;
+            // Any identifier, including PHP keywords: `var`, `switch` and
+            // `use` are also HTML/SVG tag names. A `<` where an expression is
+            // expected can't be PHP's less-than, so this can't misread code.
+            return \preg_match('/^[A-Za-z_]/', $next[1]) === 1;
         }
         return $next === '/' || $next === '>';
     }
@@ -141,6 +144,15 @@ final class PsxPreProcessor implements PsxPreProcessorInterface
             \T_OPEN_TAG,
             \T_OPEN_TAG_WITH_ECHO,
             \T_FN,
+            \T_BOOLEAN_AND,
+            \T_BOOLEAN_OR,
+            \T_LOGICAL_AND,
+            \T_LOGICAL_OR,
+            \T_LOGICAL_XOR,
+            \T_COALESCE,
+            \T_COALESCE_EQUAL,
+            \T_YIELD,
+            \T_YIELD_FROM,
         ];
 
         if (\in_array($tokenId, $expressionStartingTokens, true)) {

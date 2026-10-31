@@ -6,7 +6,7 @@ namespace Polidog\UsePhp\Psx;
 
 /**
  * Parses one PSX expression from a source string starting at `<` and emits
- * equivalent PHP source code (calls to H::xxx() or renderPsxComponent()).
+ * equivalent PHP source code (calls to createElement() or renderPsxComponent()).
  *
  * The single concrete implementation is {@see PsxParser}. Construction takes
  * the source / start offset / optional NamespaceContext, so this contract only
