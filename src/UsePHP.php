@@ -571,12 +571,13 @@ final class UsePHP
     /**
      * Render a component and return HTML.
      *
-     * @param string $componentName The registered component name
+     * @param string $componentName The component's class or the name it is registered under
      * @param string|null $key Optional explicit key for the component instance
+     * @throws \LogicException If $componentName does not refer to a registered component.
      */
     public function render(string $componentName, ?string $key = null): string
     {
-        return $this->doRenderComponent($componentName, $key);
+        return $this->doRenderComponent($this->requireComponentName($componentName), $key);
     }
 
     /**
@@ -585,12 +586,13 @@ final class UsePHP
      * Use this when you want to compose multiple components using H class,
      * then render the entire tree with renderElement().
      *
-     * @param string $componentName The registered component name
+     * @param string $componentName The component's class or the name it is registered under
      * @param string|null $key Optional explicit key for the component instance
+     * @throws \LogicException If $componentName does not refer to a registered component.
      */
     public function createElement(string $componentName, ?string $key = null): Element
     {
-        return $this->doCreateElement($componentName, $key);
+        return $this->doCreateElement($this->requireComponentName($componentName), $key);
     }
 
     /**
@@ -1382,35 +1384,63 @@ final class UsePHP
     }
 
     /**
-     * Resolve a string route handler to the name it is registered under: the
+     * Resolve a component class or name to the name it is registered under: the
      * registry is keyed by {@see ComponentInterface::getComponentName()}, which
      * `#[Component(name: ...)]` makes different from the class name.
      *
-     * Returns null when the string does not refer to a component at all, so it
-     * can still be tried as a callable.
+     * Only for strings the application chose. This may autoload $component, so
+     * names that come from a request are looked up in the registry directly, as
+     * {@see doHandleAction()} and {@see doHandleDeferred()} do.
      *
-     * @throws \LogicException If $handler is a component class that was not
+     * Returns null when the string does not refer to a component at all, so a
+     * route handler can still be tried as a callable.
+     *
+     * @throws \LogicException If $component is a component class that was not
      *         registered. It isn't registered on the fly: an omitted register()
      *         is a configuration mistake and should not go unnoticed.
      */
-    private function resolveComponentName(string $handler): ?string
+    private function resolveComponentName(string $component): ?string
     {
-        if ($this->registry->has($handler)) {
-            return $handler;
+        if ($this->registry->has($component)) {
+            return $component;
         }
-        if (!is_subclass_of($handler, ComponentInterface::class)) {
+        if (!is_subclass_of($component, ComponentInterface::class)) {
             return null;
         }
 
-        $name = $handler::getComponentName();
-        if ($this->registry->get($name) !== $handler) {
+        $name = $component::getComponentName();
+        if ($this->registry->get($name) !== $component) {
             throw new \LogicException(sprintf(
-                'Route handler %1$s is not registered. Call UsePHP::register(%1$s::class) first.',
-                $handler,
+                'Component %1$s is not registered. Call UsePHP::register(%1$s::class) first.',
+                $component,
             ));
         }
 
         return $name;
+    }
+
+    /**
+     * {@see resolveComponentName()} for callers with nothing to fall back on.
+     *
+     * @throws \LogicException If $component does not refer to a registered component.
+     */
+    private function requireComponentName(string $component): string
+    {
+        return $this->resolveComponentName($component) ?? throw new \LogicException(sprintf(
+            'Component %s is not registered: it is neither a registered name nor a component class.',
+            $component,
+        ));
+    }
+
+    /**
+     * Instantiate a component that is known to be registered.
+     */
+    private function createRegisteredComponent(string $componentName): ComponentInterface
+    {
+        return $this->registry->create($componentName) ?? throw new \LogicException(sprintf(
+            'Component %s is not registered.',
+            $componentName,
+        ));
     }
 
     /**
@@ -2008,17 +2038,13 @@ final class UsePHP
      */
     private function renderDeferredTarget(string $component, array $props): Element
     {
-        if (
-            \class_exists($component)
-            && \is_subclass_of($component, ComponentInterface::class)
-        ) {
-            // Class component path. The registry stores under the component
-            // name (which may be customised via #[Component(name: ...)]),
-            // not the FQCN — go through getComponentName() so a custom name
-            // still resolves. $props are intentionally not threaded through
-            // here: class components don't accept render-time props, they
-            // pick up per-request state through useState/$_SESSION/etc.
-            return $this->doCreateElement($component::getComponentName());
+        // $component comes from registerDeferred() or #[Defer], not the request.
+        $componentName = $this->resolveComponentName($component);
+        if ($componentName !== null) {
+            // Class component path. $props are intentionally not threaded
+            // through here: class components don't accept render-time props,
+            // they pick up per-request state through useState/$_SESSION/etc.
+            return $this->doCreateElement($componentName);
         }
 
         return $this->renderPsxComponent($component, $props);
@@ -2791,11 +2817,7 @@ final class UsePHP
         $parentState = ComponentState::current();
 
         try {
-            $component = $this->registry->create($componentName);
-
-            if ($component === null) {
-                return new Element('div', [], []);
-            }
+            $component = $this->createRegisteredComponent($componentName);
 
             $instanceId = RenderContext::nextInstanceId($componentName, $key);
             $storageType = $this->registry->getStorageType($componentName);
@@ -2873,11 +2895,7 @@ final class UsePHP
         $parentState = ComponentState::current();
 
         try {
-            $component = $this->registry->create($componentName);
-
-            if ($component === null) {
-                return '';
-            }
+            $component = $this->createRegisteredComponent($componentName);
 
             // Start a new render pass
             RenderContext::beginRender();
@@ -2913,11 +2931,7 @@ final class UsePHP
      */
     private function doRenderComponentPartialWithInstanceId(string $instanceId, string $componentName): string
     {
-        $component = $this->registry->create($componentName);
-
-        if ($component === null) {
-            return '';
-        }
+        $component = $this->createRegisteredComponent($componentName);
 
         // A form from the defer endpoint brings the endpoint's query with it.
         // The client already chooses the query string of this POST, so taking
