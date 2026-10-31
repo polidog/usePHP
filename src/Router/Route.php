@@ -82,6 +82,17 @@ final readonly class Route
     /**
      * Try to match this route against a path.
      *
+     * The path is matched as sent (still percent-encoded), so `%2F` never acts
+     * as a segment separator and custom parameter regexes see the raw bytes.
+     * Parameter values are then percent-decoded once. A decoded value can
+     * therefore contain `/` or `..` that the pattern did not see: validate it
+     * before using it as a file path.
+     *
+     * A value that does not decode to usable text (invalid UTF-8 or a NUL
+     * byte) makes the route not match: invalid UTF-8 would render as an empty
+     * string through htmlspecialchars() and throw in json_encode(), and a NUL
+     * byte throws in the filesystem functions.
+     *
      * @return array<string, string>|null Parameters if matched, null otherwise
      */
     public function match(string $path): ?array
@@ -93,7 +104,11 @@ final readonly class Route
         $params = [];
         foreach ($this->paramNames as $name) {
             if (isset($matches[$name]) && $matches[$name] !== '') {
-                $params[$name] = $matches[$name];
+                $value = rawurldecode($matches[$name]);
+                if (preg_match('//u', $value) !== 1 || str_contains($value, "\0")) {
+                    return null;
+                }
+                $params[$name] = $value;
             }
         }
 

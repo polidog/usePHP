@@ -292,6 +292,70 @@ class SimpleRouterTest extends TestCase
         $this->assertSame(['path' => 'a/b/c'], $this->router->match(new RequestContext('GET', '/tree/a/b/c'))?->params);
     }
 
+    // ------------------------------------------------------------------
+    // #91: parameters are percent-decoded after matching, the path is not.
+    // ------------------------------------------------------------------
+
+    public function testParametersArePercentDecoded(): void
+    {
+        $this->router->get('/p/{name}', 'Page');
+
+        $match = $this->router->match(new RequestContext('GET', '/p/%E6%97%A5%E6%9C%AC'));
+
+        $this->assertSame(['name' => '日本'], $match?->params);
+    }
+
+    public function testEncodedSlashDoesNotSplitASegment(): void
+    {
+        $this->router->get('/p/{name}', 'Page');
+
+        $this->assertSame(['name' => 'a/b'], $this->router->match(new RequestContext('GET', '/p/a%2Fb'))?->params);
+        $this->assertNull($this->router->match(new RequestContext('GET', '/p/a/b')));
+    }
+
+    public function testParametersAreDecodedExactlyOnce(): void
+    {
+        $this->router->get('/p/{name}', 'Page');
+
+        $this->assertSame(['name' => 'a%2Fb'], $this->router->match(new RequestContext('GET', '/p/a%252Fb'))?->params);
+    }
+
+    public function testPlusInAParameterStaysAPlus(): void
+    {
+        $this->router->get('/p/{name}', 'Page');
+
+        $this->assertSame(['name' => 'a+b'], $this->router->match(new RequestContext('GET', '/p/a+b'))?->params);
+    }
+
+    public function testCustomRegexIsAppliedBeforeDecoding(): void
+    {
+        $this->router->get('/n/{id:\d+}', 'Number');
+
+        $this->assertNull($this->router->match(new RequestContext('GET', '/n/%31x')));
+        $this->assertNull($this->router->match(new RequestContext('GET', '/n/%31')));
+        $this->assertSame(['id' => '1'], $this->router->match(new RequestContext('GET', '/n/1'))?->params);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function undecodableParameterProvider(): iterable
+    {
+        yield 'lone continuation byte' => ['/p/%80'];
+        yield 'invalid lead byte' => ['/p/%FF'];
+        yield 'truncated sequence' => ['/p/%E6%97'];
+        yield 'overlong encoding of a slash' => ['/p/%C0%AF'];
+        yield 'NUL byte' => ['/p/a%00b'];
+    }
+
+    #[DataProvider('undecodableParameterProvider')]
+    public function testParameterThatDoesNotDecodeToUsableTextIsNotAMatch(string $path): void
+    {
+        $this->router->get('/p/{name}', 'Page');
+
+        $this->assertNull($this->router->match(new RequestContext('GET', $path)));
+    }
+
     public function testCustomRegexEndingInASlashKeepsThatSlash(): void
     {
         $this->router->get('/dir/{name:[a-z]+/}end', 'Slash');
