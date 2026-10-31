@@ -2773,6 +2773,7 @@ final class UsePHP
         $outerApp = RenderContext::getApp();
         RenderContext::setApp($this);
         $parentState = ComponentState::current();
+        $outerPass = RenderContext::currentPass();
 
         try {
             $component = $this->registry->create($componentName);
@@ -2805,6 +2806,7 @@ final class UsePHP
 
             return $renderer->render(fn() => $component->render());
         } finally {
+            RenderContext::resumePass($outerPass);
             ComponentState::setCurrent($parentState);
             RenderContext::setApp($outerApp);
         }

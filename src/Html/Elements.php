@@ -1504,13 +1504,17 @@ function resolveRenderables(array $children): array
             if ($child->getComponentState() === null) {
                 $componentName = $child::getComponentName();
                 $instanceId = RenderContext::beginComponent($componentName);
+                $parentState = ComponentState::current();
                 $state = ComponentState::getInstance($instanceId);
                 $child->setComponentState($state);
                 ComponentState::reset();
 
-                $resolved[] = $child->render();
-
-                RenderContext::endComponent();
+                try {
+                    $resolved[] = $child->render();
+                } finally {
+                    RenderContext::endComponent();
+                    ComponentState::setCurrent($parentState);
+                }
             } else {
                 // Already has state set (e.g., from UsePHP::render())
                 $resolved[] = $child->render();
