@@ -511,6 +511,109 @@ class CompileCommandTest extends TestCase
     /**
      * @param list<string> $argv
      */
+    public function testMissingPathExitsNonZeroAndNamesThePath(): void
+    {
+        $missing = $this->workDir . '/nope';
+
+        foreach ([[$missing], [$missing, '--check']] as $args) {
+            \ob_start();
+            $exitCode = new CompileCommand()->run([...$args, '--cache=' . $this->cacheDir], $this->workDir);
+            $output = (string) \ob_get_clean();
+
+            self::assertSame(1, $exitCode);
+            self::assertStringContainsString($missing, $output);
+        }
+        self::assertDirectoryDoesNotExist($this->cacheDir, 'A mistyped path must not create the cache directory.');
+    }
+
+    public function testMissingPathFailsEvenWhenAnotherPathIsValid(): void
+    {
+        \file_put_contents($this->workDir . '/components/A.psx', "<?php\nreturn fn() => <div>a</div>;\n");
+
+        \ob_start();
+        $exitCode = new CompileCommand()->run(
+            [$this->workDir . '/components', $this->workDir . '/nope', '--cache=' . $this->cacheDir],
+            $this->workDir,
+        );
+        \ob_end_clean();
+
+        self::assertSame(1, $exitCode);
+    }
+
+    public function testMissingDefaultComponentsDirectoryExitsNonZero(): void
+    {
+        \rmdir($this->workDir . '/components');
+
+        \ob_start();
+        $exitCode = new CompileCommand()->run(['--check', '--cache=' . $this->cacheDir], $this->workDir);
+        \ob_end_clean();
+
+        self::assertSame(1, $exitCode);
+    }
+
+    public function testExistingDirectoryWithoutPsxFilesStillExitsZero(): void
+    {
+        \ob_start();
+        $exitCode = new CompileCommand()->run([$this->workDir . '/components', '--cache=' . $this->cacheDir], $this->workDir);
+        $output = (string) \ob_get_clean();
+
+        self::assertSame(0, $exitCode);
+        self::assertStringContainsString('No .psx files found', $output);
+    }
+
+    public function testCleanIgnoresMissingPaths(): void
+    {
+        \ob_start();
+        $exitCode = new CompileCommand()->run([$this->workDir . '/nope', '--clean', '--cache=' . $this->cacheDir], $this->workDir);
+        \ob_end_clean();
+
+        self::assertSame(0, $exitCode);
+    }
+
+    public function testHelpDescribesTheImplementedCompileOptions(): void
+    {
+        $bin = \dirname(__DIR__, 2) . '/bin/usephp';
+        \exec(\escapeshellarg(\PHP_BINARY) . ' ' . \escapeshellarg($bin) . ' help', $lines, $exitCode);
+        $help = \implode("\n", $lines);
+
+        self::assertSame(0, $exitCode);
+        self::assertStringContainsString('--cache=PATH', $help);
+        self::assertStringContainsString(CompileCommand::DEFAULT_CACHE_SUBDIR, $help);
+        self::assertStringContainsString('--watch', $help);
+        self::assertStringNotContainsString('--manifest', $help);
+        self::assertStringNotContainsString('.psx.php', $help);
+    }
+
+    public function testCompilesFileWithStyleAndScriptThatBreakRawParsing(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/components/Styled.psx',
+            "<?php\nnamespace App;\nreturn fn() => <div><style>a > b { color: red; }</style>"
+            . "<script>if (a < b) { c(\"don't\"); } }</script></div>;\n",
+        );
+
+        \ob_start();
+        $exitCode = new CompileCommand()->run([$this->workDir . '/components', '--cache=' . $this->cacheDir], $this->workDir);
+        $output = (string) \ob_get_clean();
+
+        self::assertSame(0, $exitCode, $output);
+        $manifest = require $this->manifestPath;
+        self::assertArrayHasKey('App\\Styled', $manifest);
+    }
+
+    public function testMismatchedTagIsReportedWithTheFileName(): void
+    {
+        \file_put_contents($this->workDir . '/components/Bad.psx', "<?php\nreturn fn() => <div></span>;\n");
+
+        \ob_start();
+        $exitCode = new CompileCommand()->run([$this->workDir . '/components', '--cache=' . $this->cacheDir], $this->workDir);
+        $output = (string) \ob_get_clean();
+
+        self::assertSame(1, $exitCode);
+        self::assertStringContainsString('Bad.psx', $output);
+        self::assertStringContainsString('Mismatched closing tag', $output);
+    }
+
     private function runCmd(CompileCommand $cmd, array $argv): int
     {
         \ob_start();

@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Polidog\UsePhp\Tests\Runtime;
 
 use PHPUnit\Framework\TestCase;
+use Polidog\UsePhp\Component\BaseComponent;
+use Polidog\UsePhp\Component\Component;
 
 use function Polidog\UsePhp\Html\getFunctionComponentName;
 
@@ -21,6 +23,15 @@ use function Polidog\UsePhp\Runtime\useState;
 
 use Polidog\UsePhp\Storage\StorageType;
 use Polidog\UsePhp\UsePHP;
+
+#[Component(name: 'FunctionComponentTestChild')]
+final class FunctionComponentTestChild extends BaseComponent
+{
+    public function render(): Element
+    {
+        return H::span(children: 'class child');
+    }
+}
 
 class FunctionComponentTest extends TestCase
 {
@@ -428,6 +439,225 @@ class FunctionComponentTest extends TestCase
         // The inner element is the first child
         $inner = $element->children[0];
         $this->assertEquals(['Count: 15'], $inner->children);
+    }
+
+    public function testParentHooksAfterChildStayOnParentSession(): void
+    {
+        $Child = fc(function (array $props): Element {
+            [$c] = useState('child-value');
+
+            return H::span(children: $c);
+        }, 'after-child');
+        $setter = null;
+        $Parent = fc(function (array $props) use ($Child, &$setter): Element {
+            [$a] = useState('a');
+            $kid = $Child([]);
+            [$b, $setter] = useState('b');
+
+            return H::div(children: [$a, $b, $kid]);
+        }, 'after-parent');
+
+        $element = $Parent([]);
+        $parentId = $element->props['data-usephp'];
+
+        $this->assertSame('b', $_SESSION["usephp:{$parentId}:state:1"]);
+        $this->assertSame($parentId, $setter(1)->componentId);
+        $this->assertNull(ComponentState::current(), 'nothing is rendering any more');
+    }
+
+    public function testParentSnapshotKeepsItsOwnStateAfterChild(): void
+    {
+        $Child = fc(function (array $props): Element {
+            [$c] = useState('c');
+
+            return H::span(children: "child={$c}");
+        }, 'ls-child', StorageType::Snapshot);
+        $Parent = fc(function (array $props) use ($Child): Element {
+            [$a] = useState(10);
+            $kid = $Child([]);
+            [$b] = useState(20);
+
+            return H::div(children: ["b={$b}", $kid]);
+        }, 'ls-parent', StorageType::Snapshot);
+
+        $element = $Parent([]);
+
+        $parent = json_decode($element->props['data-usephp-snapshot'], true);
+        $this->assertSame([10, 20], $parent['state']);
+
+        $child = json_decode($element->children[0]->children[1]->props['data-usephp-snapshot'], true);
+        $this->assertSame(['c'], $child['state']);
+    }
+
+    public function testParentUseEffectAfterChildUsesParentDeps(): void
+    {
+        $Child = fc(fn(array $props): Element => H::span(), 'effect-child');
+        $Parent = fc(function (array $props) use ($Child): Element {
+            $kid = $Child([]);
+            useEffect(fn() => null, ['dep']);
+
+            return H::div(children: [$kid]);
+        }, 'effect-parent');
+
+        $parentId = $Parent([])->props['data-usephp'];
+
+        $this->assertSame(['dep'], $_SESSION["usephp:{$parentId}:effect_deps:0"]);
+    }
+
+    public function testHComponentRestoresParentState(): void
+    {
+        $Child = fn(array $props): Element => H::span();
+        $Parent = fc(function (array $props) use ($Child): Element {
+            $kid = H::div(children: [H::component($Child)]);
+            [$b] = useState('b');
+
+            return H::div(children: [$b, $kid]);
+        }, 'h-parent');
+
+        $parentId = $Parent([])->props['data-usephp'];
+
+        $this->assertSame('b', $_SESSION["usephp:{$parentId}:state:0"]);
+    }
+
+    public function testThrowingChildRestoresParentStateAndStack(): void
+    {
+        $Child = fc(function (array $props): Element {
+            throw new \RuntimeException('child failed');
+        }, 'throwing-child');
+        $Parent = fc(function (array $props) use ($Child): Element {
+            try {
+                $Child([]);
+            } catch (\RuntimeException) {
+                // A boundary in the parent renders a fallback instead.
+            }
+            [$b] = useState('b');
+
+            return H::div(children: $b);
+        }, 'catching-parent');
+
+        $parentId = $Parent([])->props['data-usephp'];
+
+        $this->assertSame('b', $_SESSION["usephp:{$parentId}:state:0"]);
+        $this->assertSame(0, RenderContext::getStackDepth());
+    }
+
+    public function testAppRenderEntryPointsRestoreParentState(): void
+    {
+        $app = new UsePHP();
+        $app->register(FunctionComponentTestChild::class);
+        $parent = ComponentState::getInstance('parent#0');
+
+        $app->createElement('FunctionComponentTestChild');
+        $this->assertSame($parent, ComponentState::current());
+
+        $app->renderElement(H::button(onClick: fn() => null, children: 'x'));
+        $this->assertSame($parent, ComponentState::current());
+
+        $app->render('FunctionComponentTestChild');
+        $this->assertSame($parent, ComponentState::current());
+    }
+
+    public function testFixedKeyNamespacesPropsKey(): void
+    {
+        $Row = fc(fn(array $props): Element => H::span(children: 'key' . ($props['key'] ?? 'stripped')), 'krow');
+
+        $first = $Row(['key' => 'k1']);
+        $second = $Row(['key' => 'k2']);
+
+        $this->assertStringEndsWith('#krow/k1', $first->props['data-usephp']);
+        $this->assertStringEndsWith('#krow/k2', $second->props['data-usephp']);
+    }
+
+    public function testRowsWithFixedKeyDoNotShareState(): void
+    {
+        $Row = fc(function (array $props): Element {
+            [$q] = useState($props['start']);
+
+            return H::span(children: (string) $q);
+        }, 'krow');
+
+        $first = $Row(['key' => 'k1', 'start' => 1]);
+        $second = $Row(['key' => 'k2', 'start' => 2]);
+
+        $this->assertSame('1', $first->children[0]->children[0]);
+        $this->assertSame('2', $second->children[0]->children[0]);
+    }
+
+    public function testExistingIdsAreUnchanged(): void
+    {
+        $Fixed = fc(fn(array $props): Element => H::span(), 'only-fixed');
+        $this->assertStringEndsWith('#only-fixed', $Fixed([])->props['data-usephp']);
+
+        $Unfixed = fc(fn(array $props): Element => H::span());
+        $this->assertStringEndsWith('#only-prop', $Unfixed(['key' => 'only-prop'])->props['data-usephp']);
+    }
+
+    public function testNamespacedKeySurvivesSnapshotRoundTrip(): void
+    {
+        $Row = fc(function (array $props): Element {
+            [$q] = useState(7);
+
+            return H::span(children: (string) $q);
+        }, 'krow', StorageType::Snapshot);
+
+        $element = $Row(['key' => 'k1']);
+        $instanceId = $element->props['data-usephp'];
+
+        $serializer = RenderContext::getApp()->getSnapshotSerializer();
+        $snapshot = $serializer->deserialize($element->props['data-usephp-snapshot']);
+
+        $this->assertSame('krow/k1', $snapshot->key);
+        $this->assertSame($instanceId, $snapshot->getInstanceId());
+        $this->assertSame([7], ComponentState::fromSnapshot($snapshot)->createSnapshot()->state);
+    }
+
+    public function testIntPropsKeyIsCastToString(): void
+    {
+        $Row = fc(fn(array $props): Element => H::span());
+
+        $this->assertStringEndsWith('#42', $Row(['key' => 42])->props['data-usephp']);
+        $this->assertStringEndsWith('#0', $Row(['key' => 0])->props['data-usephp']);
+    }
+
+    public function testIntPropsKeyUnderFixedKey(): void
+    {
+        $Row = fc(fn(array $props): Element => H::span(), 'krow');
+
+        $this->assertStringEndsWith('#krow/42', $Row(['key' => 42])->props['data-usephp']);
+    }
+
+    public function testIntKeyThroughPsxComponentCall(): void
+    {
+        $app = RenderContext::getApp();
+        $app->registerComponent('Row', fc(fn(array $props): Element => H::span()));
+
+        $element = $app->renderPsxComponent('Row', ['key' => 1]);
+
+        $this->assertStringEndsWith('#1', $element->props['data-usephp']);
+    }
+
+    public function testIntKeyThroughHComponent(): void
+    {
+        $Row = function (array $props): Element {
+            [$q] = useState('value');
+
+            return H::span(children: $q);
+        };
+
+        H::div(children: [H::component($Row, ['key' => 42])]);
+
+        $keys = array_filter(array_keys($_SESSION), static fn(string $key): bool => str_contains($key, '#42:state:0'));
+        $this->assertCount(1, $keys);
+    }
+
+    public function testNonScalarPropsKeyIsRejected(): void
+    {
+        $Row = fc(fn(array $props): Element => H::span(), 'krow');
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('string or int');
+
+        $Row(['key' => ['not', 'a', 'key']]);
     }
 
     public function testFcSnapshotContainsCorrectState(): void

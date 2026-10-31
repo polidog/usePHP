@@ -26,6 +26,7 @@ use function Polidog\UsePhp\Runtime\fc;
 
 use Polidog\UsePhp\Runtime\Snapshot;
 
+use function Polidog\UsePhp\Runtime\useFormAction;
 use function Polidog\UsePhp\Runtime\useRouter;
 use function Polidog\UsePhp\Runtime\useState;
 
@@ -52,6 +53,9 @@ final class MemoryClassCounter extends FixtureCounter {}
 
 #[Component(storage: 'snapshot')]
 final class SnapshotClassCounter extends FixtureCounter {}
+
+#[Component(name: 'renamed-snapshot', storage: 'snapshot')]
+final class RenamedSnapshotCounter extends FixtureCounter {}
 
 #[Component]
 final class TaskDetail extends BaseComponent
@@ -114,6 +118,7 @@ if ($secret !== false) {
 $app->register(SessionClassCounter::class);
 $app->register(MemoryClassCounter::class);
 $app->register(SnapshotClassCounter::class);
+$app->register(RenamedSnapshotCounter::class);
 $app->register(TaskDetail::class);
 $app->register(MemoryTwoStates::class);
 $app->register(PostLikes::class);
@@ -297,5 +302,83 @@ $router->get('/defer-page', static fn(): Element => H::div(children: [
     $broken([]),
     $deferred(['tag' => 7]),
 ]));
+
+// A handler that names a component whose registered name is not its class.
+$router->get('/renamed-class', RenamedSnapshotCounter::class);
+
+// A deferred component inside a publicly cacheable deferred component.
+$innerDefer = fc(static function (array $props): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::button(onClick: fn() => $setCount($count + 1), children: "inner-secret={$count}");
+}, 'inner-defer', StorageType::Snapshot, defer: new Defer('inner-defer', cacheControl: 'private, no-store'));
+$outerDefer = fc(static function (array $props) use ($innerDefer): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::div(children: [
+        H::button(onClick: fn() => $setCount($count + 1), children: "outer={$count}"),
+        $innerDefer([]),
+    ]);
+}, 'outer-defer', StorageType::Snapshot, defer: new Defer('outer-defer', cacheControl: 'public, s-maxage=60'));
+$app->registerComponent('Deferred\\inner', $innerDefer);
+$app->registerDeferred('inner-defer', 'Deferred\\inner', 'private, no-store');
+$app->registerComponent('Deferred\\outer', $outerDefer);
+$app->registerDeferred('outer-defer', 'Deferred\\outer', 'public, s-maxage=60');
+$router->get('/defer-nested', static fn(): Element => H::div(children: [$outerDefer([])]));
+
+// Pages behind a guard. The handlers leave a mark when they run.
+$guard = static fn(): ?bool => ($_COOKIE['auth'] ?? '') === 'yes' ? null : false;
+$router->get('/guarded', static function () use ($labeled): Element {
+    error_log('GUARDED-HANDLER-RAN');
+
+    return $labeled('guarded', 'guarded');
+})->middleware($guard);
+$router->get('/guarded-string', static function () use ($app, $labeled): string {
+    error_log('GUARDED-HANDLER-RAN');
+
+    return $app->renderElement($labeled('guarded', 'guarded'));
+})->middleware($guard);
+$router->get('/guarded-defer', static function () use ($deferred): Element {
+    error_log('GUARDED-HANDLER-RAN');
+
+    return H::div(children: [$deferred(['tag' => 7])]);
+})->middleware($guard);
+
+// A session that only starts once a plain POST renders a session component.
+$sessionChild = fc(static function (array $props): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::button(onClick: fn() => $setCount($count + 1), children: "late-sess={$count}");
+}, 'late-sess', StorageType::Session);
+$router->get('/late-session', static fn(): Element => fc(static function (array $props) use ($sessionChild): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::div(children: [
+        H::button(onClick: fn() => $setCount($count + 1), children: "late={$count}"),
+        $count > 0 ? $sessionChild([]) : H::span(children: 'no session yet'),
+    ]);
+}, 'late', StorageType::Snapshot)([]));
+
+// Reads the query a class component in a deferred fragment would read.
+$router->get('/query-page', static fn(): Element => H::div(children: [
+    H::p(children: 'query=' . (string) ($_GET['x'] ?? 'none')),
+    $labeled('q', 'q'),
+]));
+
+// A field whose value decides whether the snapshot child is rendered.
+$router->get('/resend', static fn(): Element => fc(static function (array $props) use ($child): Element {
+    [$value, $setValue] = useState('');
+
+    return H::div(children: [
+        H::input(id: 'field', name: 'v', value: $value, onInput: useFormAction(['v' => $setValue])),
+        H::span(id: 'val', children: "val={$value}"),
+        $value === 'hide' ? H::p(children: 'no child') : $child([]),
+    ]);
+}, 'resend', StorageType::Snapshot)([]));
+
+// Text that looks like the renderer's own output.
+$router->get('/lookalike-page', static fn(): string => '<script>var a = \' data-usephp-snapshot="forged" <form data-usephp-form>\';</script>'
+    . '<div data-usephp-snapshot="also forged"></div>'
+    . $app->renderElement($pair()));
 
 $app->run();

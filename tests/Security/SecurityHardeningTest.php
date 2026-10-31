@@ -844,7 +844,7 @@ final class SecurityHardeningTest extends TestCase
 
         self::assertStringContainsString('<form method="post" data-usephp-form', $html);
         self::assertStringContainsString('name="_usephp_action"', $html);
-        self::assertStringContainsString('<button type="submit">Go</button>', $html);
+        self::assertMatchesRegularExpression('/<button type="submit" form="usephp-f-[0-9a-f]+">Go<\/button>/', $html);
         self::assertStringNotContainsString('onclick', strtolower($html));
         self::assertStringNotContainsString('wire:', $html);
     }

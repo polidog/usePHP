@@ -67,6 +67,21 @@ final class NestedSnapshotPartialTest extends SnapshotInstancesServerTestCase
         return [$base, str_replace($escapedOld, $escapedNew, $html)];
     }
 
+    public function testEachActionFormLivesInTheComponentItActsOn(): void
+    {
+        $base = $this->startServer(self::SECRET);
+        $html = $this->http($base . '/nested')['body'];
+
+        $document = \Dom\HTMLDocument::createFromString($html, LIBXML_NOERROR);
+        $forms = $document->querySelectorAll('form[data-usephp-form]');
+        self::assertCount(3, $forms);
+        foreach ($forms as $form) {
+            $acting = $form->querySelector('input[name="_usephp_component"]')?->getAttribute('value');
+            // A morph of an inner component would otherwise remove it.
+            self::assertSame($acting, $form->closest('[data-usephp]')?->getAttribute('data-usephp'));
+        }
+    }
+
     public function testPressingTheParentKeepsTheChildsState(): void
     {
         [$base, $html] = $this->pageWithChildPressed();

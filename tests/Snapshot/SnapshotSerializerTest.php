@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Tests\Snapshot;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Runtime\Snapshot;
 use Polidog\UsePhp\Snapshot\SnapshotSerializer;
@@ -15,6 +16,36 @@ class SnapshotSerializerTest extends TestCase
     {
         $this->expectException(\InvalidArgumentException::class);
         new SnapshotSerializer('');
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function malformedSnapshotProvider(): iterable
+    {
+        yield 'not json' => ['garbage'];
+        yield 'empty string' => [''];
+        yield 'empty object' => ['{}'];
+        yield 'empty array' => ['[]'];
+        yield 'json scalar' => ['1'];
+        yield 'json string' => ['"x"'];
+        yield 'json null' => ['null'];
+        yield 'memo is not an object' => ['{"memo":1}'];
+        yield 'memo without key' => ['{"memo":{"name":"a"}}'];
+        yield 'memo name is an array' => ['{"memo":{"name":[],"key":"0"},"checksum":"x"}'];
+        yield 'memo key is an array' => ['{"memo":{"name":"a","key":[]},"checksum":"x"}'];
+        yield 'checksum is not a string' => ['{"memo":{"name":"a","key":"0"},"checksum":1}'];
+        yield 'nesting beyond the decode limit' => [str_repeat('[', 600) . str_repeat(']', 600)];
+        // Decodes to INF, which re-encoding the state for the HMAC then rejects.
+        yield 'number json_encode rejects' => ['{"memo":{"name":"a","key":"0"},"state":[1e999],"checksum":"x"}'];
+    }
+
+    #[DataProvider('malformedSnapshotProvider')]
+    public function testDeserializeTurnsAllMalformedInputIntoAVerificationFailure(string $json): void
+    {
+        $this->expectException(SnapshotVerificationException::class);
+
+        new SnapshotSerializer('my-secret-key')->deserialize($json);
     }
 
     public function testSerializeWithSecretKey(): void

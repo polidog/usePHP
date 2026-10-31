@@ -11,6 +11,11 @@ use Polidog\UsePhp\Storage\StorageType;
  */
 final readonly class Action
 {
+    public const SET_FIELDS = 'setFields';
+
+    /** json_encode() and json_decode() default to this depth. */
+    private const MAX_JSON_DEPTH = 512;
+
     /**
      * @param array<string, mixed> $payload
      */
@@ -60,9 +65,61 @@ final readonly class Action
         ];
     }
 
+    /**
+     * @throws \InvalidArgumentException If the payload holds a value that JSON cannot carry unchanged.
+     */
     public function toJson(): string
     {
-        return json_encode($this->toArray(), JSON_THROW_ON_ERROR);
+        self::assertJsonRoundTrippable($this->payload);
+
+        return json_encode(
+            $this->toArray(),
+            JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PRESERVE_ZERO_FRACTION,
+        );
+    }
+
+    /**
+     * Refuse a state value that would come back from JSON as something else.
+     * json_encode() accepts objects, but they return as arrays, so a component
+     * would only fail after the first interaction. Only null, scalars and
+     * arrays of those are allowed; JsonSerializable is refused for the same
+     * reason. NAN and INF have no JSON form.
+     *
+     * @param string $path Where $value sits, for the error message.
+     * @throws \InvalidArgumentException
+     */
+    public static function assertJsonRoundTrippable(mixed $value, string $path = '', int $depth = 0): void
+    {
+        if (is_array($value)) {
+            if ($depth > self::MAX_JSON_DEPTH) {
+                throw new \InvalidArgumentException(sprintf(
+                    'State value at "%s" is nested more than %d levels deep or references itself.',
+                    $path,
+                    self::MAX_JSON_DEPTH,
+                ));
+            }
+            foreach ($value as $key => $item) {
+                self::assertJsonRoundTrippable($item, $path === '' ? (string) $key : $path . '.' . $key, $depth + 1);
+            }
+
+            return;
+        }
+
+        if ($value === null || is_string($value) || is_int($value) || is_bool($value)) {
+            return;
+        }
+
+        if (is_float($value) && is_finite($value)) {
+            return;
+        }
+
+        throw new \InvalidArgumentException(sprintf(
+            'State value at "%s" is %s, which does not survive the JSON round trip between renders. '
+            . 'Only null, scalars and arrays are allowed. Convert it first, for example '
+            . '$date->format(DATE_ATOM) for a date.',
+            $path,
+            is_float($value) ? var_export($value, true) : get_debug_type($value),
+        ));
     }
 
     public static function setState(int $stateIndex, mixed $value, ?string $componentId = null, ?StorageType $storageType = null): self
@@ -71,6 +128,17 @@ final readonly class Action
             'index' => $stateIndex,
             'value' => $value,
         ], $componentId, $storageType);
+    }
+
+    /**
+     * Copy submitted form fields into hooks. The field-to-hook map is part of
+     * the signed action; only the values come from the client.
+     *
+     * @param array<string, int> $fields Field name => hook index
+     */
+    public static function setFields(array $fields, ?string $componentId = null, ?StorageType $storageType = null): self
+    {
+        return new self(self::SET_FIELDS, ['fields' => $fields], $componentId, $storageType);
     }
 
     /**

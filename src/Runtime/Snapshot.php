@@ -64,7 +64,7 @@ final readonly class Snapshot
      */
     public function toJson(): string
     {
-        $json = json_encode($this->toArray(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        $json = json_encode($this->toArray(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PRESERVE_ZERO_FRACTION);
         return $json;
     }
 
@@ -92,6 +92,10 @@ final readonly class Snapshot
     public static function fromJson(string $json): self
     {
         $data = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+        if (!is_array($data)) {
+            throw new \InvalidArgumentException('Invalid snapshot data: expected a JSON object');
+        }
+
         return self::fromArray($data);
     }
 
@@ -107,13 +111,13 @@ final readonly class Snapshot
         }
 
         $memo = $data['memo'];
-        if (!isset($memo['name']) || !isset($memo['key'])) {
+        if (!isset($memo['name'], $memo['key']) || !is_string($memo['name']) || !is_string($memo['key'])) {
             throw new \InvalidArgumentException('Invalid snapshot data: missing memo.name or memo.key');
         }
 
         return new self(
-            (string) $memo['name'],
-            (string) $memo['key'],
+            $memo['name'],
+            $memo['key'],
             isset($data['state']) && is_array($data['state']) ? $data['state'] : [],
             isset($data['effectDeps']) && is_array($data['effectDeps']) ? $data['effectDeps'] : [],
             isset($data['checksum']) && is_string($data['checksum']) ? $data['checksum'] : null,

@@ -12,7 +12,8 @@ final readonly class Element
     /**
      * @param string $type Element type (e.g., 'div', 'span', 'button')
      * @param array<string, mixed> $props Element properties/attributes
-     * @param array<Element|string> $children Child elements or text content
+     * @param array<mixed> $children Child elements, text, or nested arrays of them.
+     *        The Renderer rejects types it cannot render.
      */
     public function __construct(
         public string $type,
@@ -33,7 +34,7 @@ final readonly class Element
     /**
      * Create a new Element with updated children.
      *
-     * @param array<Element|string> $children
+     * @param array<mixed> $children
      */
     public function withChildren(array $children): self
     {

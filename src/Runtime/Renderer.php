@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Runtime;
 
+use function Polidog\UsePhp\Html\resolveRenderables;
+
 use Polidog\UsePhp\Snapshot\SnapshotSerializer;
 use Polidog\UsePhp\Storage\SnapshotPersist;
 use Polidog\UsePhp\Storage\StorageType;
@@ -22,6 +24,21 @@ final class Renderer
         'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
         'link', 'meta', 'param', 'source', 'track', 'wbr',
     ];
+
+    /**
+     * Elements whose content the HTML parser reads as raw text: entities are
+     * not decoded and only the matching end tag closes them.
+     */
+    private const RAW_TEXT_TAGS = ['script' => true, 'style' => true];
+
+    /**
+     * Inside these, `<script>` and `<style>` are not raw text. The parser reads
+     * their content as markup, so an unescaped `<img>` breaks out and runs.
+     * Entities are decoded there, so normal escaping is both safe and correct.
+     * `<foreignObject>` switches back to HTML parsing, where the escaped text
+     * stays literal; that is the safe side, so it gets no special case.
+     */
+    private const FOREIGN_CONTENT_ROOTS = ['svg' => true, 'math' => true];
 
     /**
      * Grammar for element (tag) names we are willing to write into the
@@ -65,11 +82,21 @@ final class Renderer
         'src' => true,
         'action' => true,
         'formaction' => true,
-        'srcdoc' => true,
         'data' => true,
         'poster' => true,
         'background' => true,
         'xlink:href' => true,
+    ];
+
+    /**
+     * Non-`aria-*` attributes where a PHP bool is written as "true"/"false".
+     *
+     * @see self::isBooleanStringAttribute()
+     */
+    private const BOOLEAN_STRING_ATTRIBUTES = [
+        'contenteditable' => true,
+        'draggable' => true,
+        'spellcheck' => true,
     ];
 
     /**
@@ -251,6 +278,7 @@ final class Renderer
     /** @var string|\Closure(): string */
     private string|\Closure $csrfToken;
     private ?SnapshotPersist $persist;
+    private int $foreignContentDepth = 0;
 
     /**
      * Signs the (componentId, action JSON) pair embedded in each action form
@@ -263,6 +291,24 @@ final class Renderer
     private ?\Closure $actionSigner;
 
     private ?string $deferQuery;
+
+    /**
+     * Action forms rendered but not yet written out. An action form cannot
+     * be emitted next to the element it belongs to: inside an application's
+     * <form> the HTML parser would drop the nested start tag and let its
+     * end tag close the outer form, and <p> or <tbody> would be broken up
+     * too. The element references the form by id instead, and the form is
+     * written at the next safe place (see flushActionForms()).
+     *
+     * @var list<string>
+     */
+    private array $pendingActionForms = [];
+
+    /** Nesting depth of renderElement(), to find the outermost call. */
+    private int $renderDepth = 0;
+
+    /** Number of <form> elements currently open in the output. */
+    private int $openFormDepth = 0;
 
     /**
      * @param string|\Closure(): string $csrfToken A closure is read when each
@@ -306,12 +352,12 @@ final class Renderer
         $inner = $this->renderElement($element);
 
         // Build attributes
-        $attrs = sprintf('data-usephp="%s"', htmlspecialchars($this->componentId, ENT_QUOTES, 'UTF-8'));
+        $attrs = sprintf('data-usephp="%s"', self::escape($this->componentId));
 
         // Add snapshot attribute if using snapshot storage
         if ($this->shouldEmbedSnapshot($state)) {
             $snapshotJson = $this->serializeSnapshot($state);
-            $attrs .= sprintf(' data-usephp-snapshot=\'%s\'', htmlspecialchars($snapshotJson, ENT_QUOTES, 'UTF-8'));
+            $attrs .= sprintf(' data-usephp-snapshot=\'%s\'', self::escape($snapshotJson));
             if ($this->persist !== null) {
                 $attrs .= sprintf(' data-usephp-persist="%s"', $this->persist->value);
             }
@@ -339,7 +385,7 @@ final class Renderer
             $snapshotJson = $this->serializeSnapshot($state);
             $inner .= sprintf(
                 '<input type="hidden" name="_usephp_snapshot" value="%s" data-usephp-snapshot-update />',
-                htmlspecialchars($snapshotJson, ENT_QUOTES, 'UTF-8')
+                self::escape($snapshotJson)
             );
         }
 
@@ -351,8 +397,22 @@ final class Renderer
      */
     public function renderElement(Element|string $element): string
     {
+        $this->renderDepth++;
+        try {
+            $html = $this->renderNode($element);
+        } finally {
+            $this->renderDepth--;
+        }
+
+        // Whatever no wrapper or application form picked up goes after the
+        // outermost element, so a direct call still returns complete output.
+        return $this->renderDepth === 0 ? $html . $this->flushActionForms() : $html;
+    }
+
+    private function renderNode(Element|string $element): string
+    {
         if (is_string($element)) {
-            return htmlspecialchars($element, ENT_QUOTES, 'UTF-8');
+            return self::escape($element);
         }
 
         // Handle Fragment
@@ -375,20 +435,11 @@ final class Renderer
             );
         }
 
-        // Validate the tag name *before* any interpolation. renderWithForm()
-        // below reuses $element->type too, so this single check covers both
-        // the plain and the form-wrapped output.
+        // Validate the tag name *before* any interpolation.
         $tag = $element->type;
         self::assertValidTagName($tag);
 
-        $props = $element->props;
-        $hasAction = isset($props['wire:click']);
-
-        // If element has an action, wrap it in a form
-        if ($hasAction) {
-            return $this->renderWithForm($element);
-        }
-
+        [$props, $submitFields] = $this->bindActions($tag, $element->props);
         $attributes = $this->renderAttributes($props);
 
         // Self-closing tags
@@ -396,37 +447,185 @@ final class Renderer
             return "<{$tag}{$attributes} />";
         }
 
-        $children = $this->renderChildren($element->children);
+        // A component wrapper is the natural home for its action forms: a
+        // partial update replaces them along with the elements using them.
+        // That goes only for the wrapper's own. An enclosing component's forms
+        // still waiting would move in with it, and the first partial update of
+        // this component would take them away from the buttons they serve.
+        $ownsActionForms = isset($props['data-usephp']) && $this->openFormDepth === 0;
+        $outerActionForms = [];
+        if ($ownsActionForms) {
+            $outerActionForms = $this->pendingActionForms;
+            $this->pendingActionForms = [];
+        }
 
-        return "<{$tag}{$attributes}>{$children}</{$tag}>";
+        $isForm = strtolower($tag) === 'form';
+        if ($isForm) {
+            $this->openFormDepth++;
+        }
+        try {
+            $children = $this->renderContent($tag, $element->children);
+        } finally {
+            if ($isForm) {
+                $this->openFormDepth--;
+            }
+        }
+
+        if ($ownsActionForms) {
+            $children .= $this->flushActionForms();
+            $this->pendingActionForms = $outerActionForms;
+        }
+
+        $html = "<{$tag}{$attributes}>{$submitFields}{$children}</{$tag}>";
+
+        return $isForm && $this->openFormDepth === 0 ? $html . $this->flushActionForms() : $html;
     }
 
     /**
-     * Render an element wrapped in a form for action handling.
+     * Write out the action forms collected so far. Only called where no
+     * <form> is open.
      */
-    private function renderWithForm(Element $element): string
+    private function flushActionForms(): string
     {
-        $action = $element->props['wire:click'];
-        $tag = $element->type;
+        $html = implode('', $this->pendingActionForms);
+        $this->pendingActionForms = [];
 
-        // Remove wire:click from props
-        $props = $element->props;
-        unset($props['wire:click']);
+        return $html;
+    }
 
-        // For button, make it a submit button
-        if ($tag === 'button') {
-            $props['type'] = 'submit';
+    /**
+     * Turn the `wire:*` props into what the browser needs to fire the action.
+     *
+     * A button (or submit input) is associated with its action form through
+     * the `form` attribute, which works without JavaScript, and a <form>
+     * with onSubmit becomes an action form itself. Any other element cannot
+     * submit a form by itself; it names the form in a `data-usephp-on-*`
+     * attribute that usephp.js acts on.
+     *
+     * @param array<string, mixed> $props
+     * @return array{array<string, mixed>, string} The props to render, and the
+     *         hidden fields to put inside the element when it is an onSubmit form.
+     */
+    private function bindActions(string $tag, array $props): array
+    {
+        $submitFields = '';
+
+        foreach ($props as $key => $action) {
+            if (!str_starts_with($key, 'wire:')) {
+                continue;
+            }
+            unset($props[$key]);
+
+            $event = substr($key, 5);
+            if (!$action instanceof Action) {
+                throw new \RuntimeException(sprintf(
+                    '%s must be an Action; got %s.',
+                    $key,
+                    get_debug_type($action),
+                ));
+            }
+
+            if ($action->type === Action::SET_FIELDS && $event !== 'submit') {
+                self::assertFieldTrigger($event, $tag, $props, $action);
+                $props['data-usephp-with-value'] = true;
+            }
+
+            if ($event === 'submit') {
+                self::assertSubmitTarget($tag, $props);
+                $submitFields = $this->renderActionFields($action);
+                $props = ['method' => 'post', 'data-usephp-form' => true] + $props;
+                if ($action->type === Action::SET_FIELDS) {
+                    $props['data-usephp-with-value'] = true;
+                }
+            } elseif ($event === 'click' && ($tag === 'button'
+                || ($tag === 'input' && in_array($props['type'] ?? null, ['submit', 'image'], true)))
+            ) {
+                if ($tag === 'button') {
+                    $props['type'] = 'submit';
+                }
+                $props['form'] = $this->addActionForm($action);
+            } elseif (in_array($event, ['click', 'change', 'input'], true)) {
+                $props['data-usephp-on-' . $event] = $this->addActionForm($action);
+            } else {
+                throw new \RuntimeException(sprintf('Unsupported event binding %s.', $key));
+            }
         }
 
-        $attributes = $this->renderAttributes($props);
-        $children = $this->renderChildren($element->children);
+        return [$props, $submitFields];
+    }
 
+    /**
+     * Outside a form's onSubmit, the only value that gets sent is that of the
+     * control firing the event. Any other field in the map would arrive
+     * missing and silently clear its hook, so the mismatch is refused here.
+     *
+     * @param array<string, mixed> $props
+     */
+    private static function assertFieldTrigger(string $event, string $tag, array $props, Action $action): void
+    {
+        $problem = match (true) {
+            $event === 'click' => 'onClick sends no field values; use onSubmit on the form, or onChange/onInput on the control',
+            !in_array($tag, ['input', 'select', 'textarea'], true) => sprintf('<%s> has no value to send', $tag),
+            !empty($props['multiple']) || ($props['type'] ?? null) === 'file' => 'a multiple or file control has no single string value',
+            ($action->payload['fields'] ?? null) === null
+                || array_keys((array) $action->payload['fields']) !== [$props['name'] ?? null] => 'the control can only send its own field, named by its name attribute',
+            default => null,
+        };
+
+        if ($problem !== null) {
+            throw new \RuntimeException('useFormAction() cannot be used here: ' . $problem . '.');
+        }
+    }
+
+    /**
+     * onSubmit takes the form over: it posts the action to the current page,
+     * with or without JavaScript. An action URL or GET method on the same
+     * form would only be honored by one of the two, so they are refused.
+     *
+     * @param array<string, mixed> $props
+     */
+    private static function assertSubmitTarget(string $tag, array $props): void
+    {
+        if (strtolower($tag) !== 'form') {
+            throw new \RuntimeException(sprintf('onSubmit only works on <form>; got <%s>.', $tag));
+        }
+        if (isset($props['action']) || strtolower((string) ($props['method'] ?? 'post')) !== 'post') {
+            throw new \RuntimeException(
+                'onSubmit posts the action to the current page; remove action and method from the <form>.',
+            );
+        }
+    }
+
+    /**
+     * Queue a hidden form carrying $action and return its id. The id is
+     * random so it stays unique on the page across separately rendered
+     * elements and partial updates.
+     */
+    private function addActionForm(Action $action): string
+    {
+        $id = 'usephp-f-' . bin2hex(random_bytes(8));
+
+        $this->pendingActionForms[] = sprintf(
+            '<form method="post" data-usephp-form id="%s" hidden>%s</form>',
+            $id,
+            $this->renderActionFields($action),
+        );
+
+        return $id;
+    }
+
+    /**
+     * The hidden fields an action POST needs: instance id, signed action,
+     * CSRF token and, for snapshot storage, the snapshot.
+     */
+    private function renderActionFields(Action $action): string
+    {
         // Build the form with hidden action data
         $actionJsonRaw = $action->toJson();
-        $actionJson = htmlspecialchars($actionJsonRaw, ENT_QUOTES, 'UTF-8');
+        $actionJson = self::escape($actionJsonRaw);
         // Prefer componentId from Action, fall back to Renderer's componentId
         $componentId = $action->componentId ?? $this->componentId;
-        $componentIdEscaped = htmlspecialchars($componentId, ENT_QUOTES, 'UTF-8');
+        $componentIdEscaped = self::escape($componentId);
 
         // Sign the action so doHandleAction() only replays actions this
         // server rendered: the client cannot change index/value/storageType
@@ -437,14 +636,11 @@ final class Renderer
             if ($signature !== null) {
                 $signatureField = sprintf(
                     '<input type="hidden" name="_usephp_action_sig" value="%s" />',
-                    htmlspecialchars($signature, ENT_QUOTES, 'UTF-8')
+                    self::escape($signature)
                 );
             }
         }
 
-        $innerElement = in_array($tag, self::SELF_CLOSING_TAGS, true)
-            ? "<{$tag}{$attributes} />"
-            : "<{$tag}{$attributes}>{$children}</{$tag}>";
 
         // Add snapshot hidden field if using snapshot storage
         // Use action's componentId to get the correct state from cache
@@ -454,7 +650,7 @@ final class Renderer
             $snapshotJson = $this->serializeSnapshot($state);
             $snapshotField = sprintf(
                 '<input type="hidden" name="_usephp_snapshot" value="%s" />',
-                htmlspecialchars($snapshotJson, ENT_QUOTES, 'UTF-8')
+                self::escape($snapshotJson)
             );
         }
 
@@ -468,7 +664,7 @@ final class Renderer
         if ($csrfToken !== '') {
             $csrfField = sprintf(
                 '<input type="hidden" name="_usephp_csrf" value="%s" />',
-                htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8')
+                self::escape($csrfToken)
             );
         }
 
@@ -476,18 +672,13 @@ final class Renderer
         if ($this->deferQuery !== null) {
             $deferQueryField = sprintf(
                 '<input type="hidden" name="_usephp_defer_query" value="%s" />',
-                htmlspecialchars($this->deferQuery, ENT_QUOTES, 'UTF-8')
+                self::escape($this->deferQuery)
             );
         }
 
-        // data-usephp-form enables JS enhancement, falls back to normal form if no JS
-        return <<<HTML
-            <form method="post" data-usephp-form style="display:inline;">
-            <input type="hidden" name="_usephp_component" value="{$componentIdEscaped}" />
-            <input type="hidden" name="_usephp_action" value="{$actionJson}" />
-            {$signatureField}{$csrfField}{$snapshotField}{$deferQueryField}{$innerElement}
-            </form>
-            HTML;
+        return '<input type="hidden" name="_usephp_component" value="' . $componentIdEscaped . '" />'
+            . '<input type="hidden" name="_usephp_action" value="' . $actionJson . '" />'
+            . $signatureField . $csrfField . $snapshotField . $deferQueryField;
     }
 
     /**
@@ -500,17 +691,14 @@ final class Renderer
         $attributes = [];
 
         foreach ($props as $key => $value) {
-            // Skip wire:* attributes (handled separately)
-            if (str_starts_with($key, 'wire:')) {
-                continue;
-            }
-
             $attrName = self::JSX_HTML_ATTR_MAP[$key] ?? $key;
             self::assertValidAttributeName($attrName);
 
             // Handle boolean attributes
             if (is_bool($value)) {
-                if ($value) {
+                if (self::isBooleanStringAttribute($attrName)) {
+                    $attributes[] = sprintf('%s="%s"', $attrName, $value ? 'true' : 'false');
+                } elseif ($value) {
                     $attributes[] = $attrName;
                 }
                 continue;
@@ -535,19 +723,51 @@ final class Renderer
 
             $stringValue = (string) $value;
 
+            // srcdoc holds an HTML document, not a URL, so no scheme check
+            // can make it safe: the iframe runs whatever scripts it contains
+            // in the page's origin. Refuse it instead of dropping it silently.
+            if (strtolower($attrName) === 'srcdoc' && $stringValue !== '') {
+                throw new \RuntimeException(
+                    'The srcdoc attribute is not supported because its value is rendered as HTML '
+                    . 'in the same origin. Use src with a separate URL instead.',
+                );
+            }
+
             // Block dangerous URL schemes in URL-context attributes. React
             // does this in v16.9+; we adopt the same default so a stringly
             // typed user input doesn't become a one-liner XSS vector.
-            if (isset(self::URL_ATTRIBUTES[$attrName]) && self::isDangerousUrl($stringValue)) {
+            // HTML attribute names are case-insensitive, so `HREF` counts too.
+            if (isset(self::URL_ATTRIBUTES[strtolower($attrName)]) && self::isDangerousUrl($stringValue)) {
                 continue;
             }
 
             // Handle regular attributes
-            $escapedValue = htmlspecialchars($stringValue, ENT_QUOTES, 'UTF-8');
+            $escapedValue = self::escape($stringValue);
             $attributes[] = sprintf('%s="%s"', $attrName, $escapedValue);
         }
 
         return $attributes ? ' ' . implode(' ', $attributes) : '';
+    }
+
+    /**
+     * True for attributes whose value is the string "true" or "false" rather
+     * than their presence: leaving out `aria-hidden` or `spellcheck` does not
+     * mean false, and a bare `aria-hidden` is not true either.
+     */
+    private static function isBooleanStringAttribute(string $attrName): bool
+    {
+        $name = strtolower($attrName);
+
+        return str_starts_with($name, 'aria-') || isset(self::BOOLEAN_STRING_ATTRIBUTES[$name]);
+    }
+
+    /**
+     * Escape text for HTML. Without ENT_SUBSTITUTE, one invalid UTF-8 byte
+     * makes htmlspecialchars() return an empty string for the whole value.
+     */
+    private static function escape(string $value): string
+    {
+        return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
     /**
@@ -585,7 +805,7 @@ final class Renderer
         if (preg_match(self::EVENT_HANDLER_ATTRIBUTE_PATTERN, $attrName) === 1) {
             throw new \RuntimeException(sprintf(
                 'Inline event handler attribute %s is not allowed. '
-                . 'Use the onClick/onChange/onInput/onSubmit/onFocus/onBlur/onLoad/onError props '
+                . 'Use the onClick/onChange/onInput/onSubmit props '
                 . 'with an Action (rendered as wire:* form actions) instead of raw JavaScript handlers.',
                 json_encode($attrName, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
             ));
@@ -594,15 +814,16 @@ final class Renderer
 
     /**
      * Return true if $value is a URL that we refuse to emit into URL-context
-     * attributes (href/src/action/...). Matches the leading-whitespace and
-     * leading-control-character tolerance that browsers apply when parsing
-     * URLs, so an attacker cannot slip `\tjavascript:` past us.
+     * attributes (href/src/action/...). Applies the same preprocessing as the
+     * WHATWG URL parser, so an attacker cannot slip `\tjavascript:` or
+     * `java\tscript:` past us. The check only decides whether to drop the
+     * attribute; a value that passes is emitted unchanged.
      */
     private static function isDangerousUrl(string $value): bool
     {
-        // Strip leading whitespace + ASCII control bytes the way browsers do
-        // when resolving a URL. \0..\x20 covers TAB, LF, CR, NUL etc.
-        $trimmed = ltrim($value, "\x00..\x20");
+        // Browsers remove TAB, LF and CR from anywhere in a URL, then strip
+        // leading C0 controls and spaces.
+        $trimmed = ltrim(str_replace(["\t", "\r", "\n"], '', $value), "\x00..\x20");
         if ($trimmed === '') {
             return false;
         }
@@ -621,9 +842,86 @@ final class Renderer
     }
 
     /**
-     * Render children elements.
+     * Render the body of a `<$tag>` element, choosing the escaping that the
+     * HTML parser's handling of that element requires.
      *
-     * @param array<Element|string|int|float> $children
+     * @param array<mixed> $children
+     */
+    private function renderContent(string $tag, array $children): string
+    {
+        $lowerTag = strtolower($tag);
+
+        if (isset(self::RAW_TEXT_TAGS[$lowerTag]) && $this->foreignContentDepth === 0) {
+            return self::renderRawText($lowerTag, $children);
+        }
+
+        if (!isset(self::FOREIGN_CONTENT_ROOTS[$lowerTag])) {
+            return $this->renderChildren($children);
+        }
+
+        $this->foreignContentDepth++;
+        try {
+            return $this->renderChildren($children);
+        } finally {
+            $this->foreignContentDepth--;
+        }
+    }
+
+    /**
+     * Join the children of a `<script>` or `<style>` without escaping. The
+     * parser does not decode entities in these elements, so escaping corrupts
+     * the code. It would not make the content safe either: the only sequence
+     * that matters to the parser is the end tag, so that is refused, and it is
+     * checked on the joined text so it cannot be split across children.
+     * Never pass untrusted input here.
+     *
+     * @param array<mixed> $children
+     */
+    private static function renderRawText(string $lowerTag, array $children): string
+    {
+        $text = self::joinRawText($children);
+
+        if (stripos($text, '</' . $lowerTag) !== false) {
+            throw new \RuntimeException(sprintf(
+                'The content of <%1$s> must not contain "</%1$s": it would close the element early.',
+                $lowerTag,
+            ));
+        }
+
+        return $text;
+    }
+
+    /**
+     * @param array<mixed> $children
+     */
+    private static function joinRawText(array $children): string
+    {
+        $text = '';
+
+        foreach ($children as $child) {
+            if (is_array($child)) {
+                $text .= self::joinRawText($child);
+            } elseif ($child === null || is_bool($child)) {
+                continue;
+            } elseif (is_string($child) || is_int($child) || is_float($child) || $child instanceof \Stringable) {
+                $text .= (string) $child;
+            } else {
+                throw new \RuntimeException(sprintf(
+                    'Cannot render a child of type %s inside <script> or <style>: only text is allowed.',
+                    get_debug_type($child),
+                ));
+            }
+        }
+
+        return $text;
+    }
+
+    /**
+     * Render children, flattening nested arrays. null and booleans render
+     * nothing, as in React, so `$cond ? <x/> : null` stays convenient. Any
+     * other type throws: dropping it would hide the bug.
+     *
+     * @param array<mixed> $children
      */
     private function renderChildren(array $children): string
     {
@@ -632,14 +930,31 @@ final class Renderer
         foreach ($children as $child) {
             if ($child instanceof Element) {
                 $html .= $this->renderElement($child);
-            } elseif (is_string($child)) {
-                $html .= htmlspecialchars($child, ENT_QUOTES, 'UTF-8');
-            } elseif (is_numeric($child)) {
+            } elseif (is_array($child)) {
+                $html .= $this->renderChildren($child);
+            } elseif ($child instanceof Renderable) {
+                $html .= $this->renderChildren(resolveRenderables([$child]));
+            } elseif ($child === null || is_bool($child)) {
+                continue;
+            } elseif (is_string($child) || $child instanceof \Stringable) {
+                $html .= self::escape((string) $child);
+            } elseif (is_int($child) || is_float($child)) {
                 $html .= (string) $child;
+            } else {
+                throw self::unrenderableChild($child);
             }
         }
 
         return $html;
+    }
+
+    private static function unrenderableChild(mixed $child): \RuntimeException
+    {
+        return new \RuntimeException(sprintf(
+            'Cannot render a child of type %s. Children must be an Element, Renderable, '
+            . 'string, number, Stringable, null, bool, or an array of those.',
+            get_debug_type($child),
+        ));
     }
 
     /**
@@ -722,12 +1037,12 @@ final class Renderer
         // `reloadDefer()`. Absent the opt-in there is no name attribute and
         // the markup is byte-identical to before this feature existed.
         $nameAttr = $reloadable === true
-            ? ' data-usephp-defer-name="' . htmlspecialchars($name, ENT_QUOTES, 'UTF-8') . '"'
+            ? ' data-usephp-defer-name="' . self::escape($name) . '"'
             : '';
 
         return sprintf(
             '<div data-usephp-defer-url="%s"%s%s%s>%s</div>',
-            htmlspecialchars($url, ENT_QUOTES, 'UTF-8'),
+            self::escape($url),
             $cacheAttr,
             $cacheTtlAttr,
             $nameAttr,
@@ -763,6 +1078,9 @@ final class Renderer
             );
         }
         $snapshot = $state->createSnapshot();
+        // The snapshot goes through JSON like an action does, so an object in
+        // state would turn into an array on the next request.
+        Action::assertJsonRoundTrippable($snapshot->state, 'state');
         return $this->snapshotSerializer->serialize($snapshot);
     }
 }

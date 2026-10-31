@@ -20,7 +20,7 @@ final class SessionStorage implements StateStorageInterface
     {
         $this->ensureSessionStarted();
 
-        return $_SESSION[$key] ?? $default;
+        return \array_key_exists($key, $_SESSION ?? []) ? $_SESSION[$key] : $default;
     }
 
     public function set(string $key, mixed $value): void
@@ -33,7 +33,7 @@ final class SessionStorage implements StateStorageInterface
     {
         $this->ensureSessionStarted();
 
-        return isset($_SESSION[$key]);
+        return \array_key_exists($key, $_SESSION ?? []);
     }
 
     public function delete(string $key): void

@@ -39,6 +39,65 @@ function useState(mixed $initial): array
 
 
 /**
+ * Build an action that copies submitted form fields into useState hooks.
+ *
+ *   [$title, $setTitle] = useState('');
+ *   H::form(
+ *       onSubmit: useFormAction(['title' => $setTitle]),
+ *       children: [H::input(name: 'title', value: $title), H::button(children: 'Save')],
+ *   );
+ *
+ * Works on a form's onSubmit, and on onChange/onInput of a named control for
+ * its own field. The value set is what the client sent: a string of at most
+ * {@see \Polidog\UsePhp\UsePHP::MAX_FORM_FIELD_BYTES} bytes, empty when the
+ * field was not sent (an unchecked checkbox). Treat it as untrusted. Which
+ * field goes to which hook is signed and can't be changed by the client.
+ *
+ * @param array<mixed> $fields Field name => setter from useState()
+ * @throws \InvalidArgumentException If a name can't be a form field or a value isn't a setter.
+ */
+function useFormAction(array $fields): Action
+{
+    if ($fields === []) {
+        throw new \InvalidArgumentException('useFormAction() needs at least one field.');
+    }
+
+    $map = [];
+    $target = null;
+
+    foreach ($fields as $name => $setter) {
+        // Other names can't be read back from $_POST: PHP turns `tags[]` into
+        // an array and renames `a.b`, and `_usephp_*` belongs to the framework.
+        if (!is_string($name) || preg_match('/^[A-Za-z_][A-Za-z0-9_\-]*$/', $name) !== 1
+            || str_starts_with($name, '_usephp_')
+        ) {
+            throw new \InvalidArgumentException(sprintf(
+                'useFormAction(): %s is not a usable form field name.',
+                json_encode($name, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            ));
+        }
+
+        $action = $setter instanceof \Closure ? $setter(null) : null;
+        $index = $action instanceof Action && $action->type === 'setState' ? ($action->payload['index'] ?? null) : null;
+        if (!$action instanceof Action || !is_int($index)) {
+            throw new \InvalidArgumentException(sprintf(
+                'useFormAction(): the value for field "%s" must be a setter returned by useState().',
+                $name,
+            ));
+        }
+
+        if ($target !== null && $target->componentId !== $action->componentId) {
+            throw new \InvalidArgumentException('useFormAction(): all setters must belong to the same component.');
+        }
+
+        $map[$name] = $index;
+        $target = $action;
+    }
+
+    return Action::setFields($map, $target->componentId, $target->storageType);
+}
+
+/**
  * React-like useEffect hook that runs side effects.
  *
  * The effect callback is executed when:
@@ -48,7 +107,17 @@ function useState(mixed $initial): array
  * If $deps is null, the effect runs on every render.
  * If $deps is an empty array [], the effect runs only on mount.
  *
- * @param callable $callback The effect callback, optionally returns a cleanup function
+ * A cleanup function lives only in memory for the current request. It runs
+ * before the same effect re-runs within that request, and is otherwise
+ * discarded when the request ends: PHP cannot carry a Closure across requests,
+ * so a cleanup returned in one request never runs in a later one, and there is
+ * no unmount. Do not rely on it to release anything that outlives the request.
+ *
+ * Only a returned Closure is treated as a cleanup. Any other return value is
+ * ignored, including callable strings and arrays; use first-class callable
+ * syntax (`$handle->close(...)`) to return a method.
+ *
+ * @param callable $callback The effect callback, optionally returns a cleanup Closure
  * @param array<mixed>|null $deps Dependency array (null = run every time, [] = only on mount)
  */
 function useEffect(callable $callback, ?array $deps = null): void
@@ -68,11 +137,12 @@ function useEffect(callable $callback, ?array $deps = null): void
         // Run any cleanup from previous effect
         $componentState->runEffectCleanup($index);
 
-        // Run the effect and capture cleanup function if returned
-        /** @var (callable(): void)|null $cleanup */
+        // Only a Closure counts as a cleanup. Arrow functions return whatever
+        // their expression yields, so is_callable() would also accept data such
+        // as `fn() => 'system'` and execute it on the next run.
         $cleanup = $callback();
 
-        if ($cleanup !== null) {
+        if ($cleanup instanceof \Closure) {
             $componentState->setEffectCleanup($index, $cleanup);
         }
 

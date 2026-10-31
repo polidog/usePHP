@@ -17,6 +17,7 @@ use Polidog\UsePhp\Router\SnapshotBehavior;
 use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\ComponentState;
 use Polidog\UsePhp\Runtime\Element;
+use Polidog\UsePhp\Runtime\FunctionComponent;
 use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\Runtime\Renderer;
 use Polidog\UsePhp\Runtime\Snapshot;
@@ -118,14 +119,13 @@ final class UsePHP
     private string $deferPrefix = Renderer::DEFAULT_DEFER_PREFIX;
 
     /**
-     * True while {@see doHandleDeferred()} is rendering an endpoint response.
-     * Read by {@see \Polidog\UsePhp\Runtime\FunctionComponent} so the wrapper
-     * skips its placeholder branch and renders the inner component inline.
-     * Class-based defer targets don't need this flag — they're routed through
-     * the dedicated class-component path inside {@see renderDeferredTarget()}
-     * only on the endpoint side, so there is no placeholder branch to skip.
+     * The registered name of the endpoint {@see doHandleDeferred()} is
+     * rendering, or null outside of one. Read through
+     * {@see isDeferredEndpointTarget()} so that only the endpoint's own
+     * component skips its placeholder branch; class-based defer targets are
+     * routed through {@see renderDeferredTarget()} and have no such branch.
      */
-    private bool $renderingDeferredEndpoint = false;
+    private ?string $deferredEndpointName = null;
 
     /**
      * What the handler passed to {@see renderElement()} during a replay, for a
@@ -388,15 +388,28 @@ final class UsePHP
     }
 
     /**
-     * Whether a defer endpoint render is currently in flight. The wrapping
-     * `FunctionComponent` (and the class-component path) consults this to
-     * decide between emitting a placeholder and actually rendering inline.
+     * Whether $component is what the defer endpoint currently being rendered
+     * serves: the registered target itself, or a component declaring the
+     * endpoint's name (a plain callable may delegate to it, and a placeholder
+     * for its own URL would refetch forever).
+     *
+     * Every other deferred component stays a placeholder even during an
+     * endpoint render. It has its own endpoint and its own Cache-Control, so
+     * inlining it would serve its output under this endpoint's policy, and
+     * a public parent would then expose session-dependent content to a CDN.
      *
      * @internal Not part of the public stable API.
      */
-    public function isRenderingDeferredEndpoint(): bool
+    public function isDeferredEndpointTarget(FunctionComponent $component): bool
     {
-        return $this->renderingDeferredEndpoint;
+        if ($this->deferredEndpointName === null) {
+            return false;
+        }
+
+        $target = $this->deferredRegistry[$this->deferredEndpointName]['component'] ?? null;
+
+        return ($target !== null && ($this->psxLoaded[$target] ?? null) === $component)
+            || $component->defer?->name === $this->deferredEndpointName;
     }
 
     /**
@@ -798,6 +811,11 @@ final class UsePHP
     private const MAX_CARRIED_SNAPSHOTS = 256;
 
     /**
+     * Largest value useFormAction() accepts for one field, in bytes.
+     */
+    public const MAX_FORM_FIELD_BYTES = 65535;
+
+    /**
      * Sign an action for the given component instance.
      *
      * Actions are rendered by the server and replayed by the browser, so the
@@ -1115,8 +1133,7 @@ final class UsePHP
 
             // Handle POST actions first
             if ($request->isPost() && isset($_POST['_usephp_action'])) {
-                $html = $this->doHandleAction();
-                echo $html;
+                echo $this->guardActionPage($request) ?? $this->doHandleAction();
                 return;
             }
 
@@ -1138,6 +1155,12 @@ final class UsePHP
 
             $this->currentMatch = $match;
 
+            $blocked = $this->runRouteMiddleware($match, $request);
+            if ($blocked !== null) {
+                echo $blocked;
+                return;
+            }
+
             // Handle snapshot restoration for persistent/session behaviors
             $this->handleSnapshotRestoration($request, $match);
 
@@ -1149,14 +1172,18 @@ final class UsePHP
 
     /**
      * Run a matched route's handler and render what it gives back.
+     *
+     * @throws \LogicException If the handler is neither a registered component
+     *         nor a callable (see resolveComponentName()).
      */
     private function renderRouteHandler(RouteMatch $match, RequestContext $request): string
     {
         $handler = $match->handler;
+        $componentName = is_string($handler) ? $this->resolveComponentName($handler) : null;
 
-        if (is_string($handler) && class_exists($handler)) {
+        if ($componentName !== null) {
             // Component class
-            return $this->render($handler);
+            return $this->render($componentName);
         }
 
         if (is_callable($handler)) {
@@ -1166,7 +1193,138 @@ final class UsePHP
             return $result instanceof Element ? $this->renderElement($result) : (string) $result;
         }
 
-        return '';
+        throw new \LogicException(sprintf(
+            'Route handler %s is neither a registered component nor a callable.',
+            $handler,
+        ));
+    }
+
+    /**
+     * Run a matched route's middleware, in order, before its handler.
+     *
+     * {@see run()} and {@see handleAction()} do this automatically; call it
+     * from a custom front controller after routing and before invoking the
+     * handler, or the route's guards won't run.
+     *
+     * See {@see RouteBuilder::middleware()} for what a middleware can return.
+     *
+     * @return string|null The response body if a middleware ended the request
+     *         (echo it and stop), null if the handler should run.
+     * @throws \LogicException If a middleware can't be resolved or returns
+     *         something uninterpretable. A guard that isn't understood must not
+     *         leave the route open.
+     */
+    public function runRouteMiddleware(RouteMatch $match, RequestContext $request): ?string
+    {
+        foreach ($match->middleware as $middleware) {
+            $result = $this->resolveMiddleware($middleware)($match->params, $request);
+
+            if ($result === null || $result === true) {
+                continue;
+            }
+            if ($result === false) {
+                http_response_code(403);
+                $this->emitHeader('Cache-Control: no-store');
+
+                return 'Forbidden';
+            }
+            if ($result instanceof Element) {
+                return $this->renderElement($result);
+            }
+            if (is_string($result)) {
+                return $result;
+            }
+
+            throw new \LogicException(sprintf(
+                'Route middleware must return null, a bool, a string or an Element; got %s.',
+                get_debug_type($result),
+            ));
+        }
+
+        return null;
+    }
+
+    /**
+     * @param callable|string $middleware A callable or an invokable class name
+     * @throws \LogicException If $middleware is neither
+     */
+    private function resolveMiddleware(callable|string $middleware): callable
+    {
+        if (is_callable($middleware)) {
+            return $middleware;
+        }
+        if (class_exists($middleware)) {
+            $instance = new $middleware();
+            if (is_callable($instance)) {
+                return $instance;
+            }
+        }
+
+        throw new \LogicException(sprintf(
+            'Route middleware %s is neither a callable nor an invokable class.',
+            $middleware,
+        ));
+    }
+
+    /**
+     * Apply the guards of the page an action was POSTed to.
+     *
+     * Actions are dispatched before routing and the POST itself doesn't match
+     * the page's GET route, so the route has to be looked up here; otherwise
+     * guards would stop a visitor from viewing a page but not from acting on it.
+     * The match replaces any cached `currentMatch`, which may belong to an
+     * earlier request in a long-lived process and must not decide this one.
+     *
+     * @return string|null The response body if a middleware ended the request,
+     *         null if the action should run.
+     */
+    private function guardActionPage(RequestContext $request): ?string
+    {
+        if ($this->router === null) {
+            return null;
+        }
+
+        $this->currentMatch = $this->router->match(new RequestContext(
+            method: 'GET',
+            path: $request->path,
+            queryString: $request->queryString,
+            query: $request->query,
+            headers: $request->headers,
+        ));
+
+        return $this->currentMatch === null ? null : $this->runRouteMiddleware($this->currentMatch, $request);
+    }
+
+    /**
+     * Resolve a string route handler to the name it is registered under: the
+     * registry is keyed by {@see ComponentInterface::getComponentName()}, which
+     * `#[Component(name: ...)]` makes different from the class name.
+     *
+     * Returns null when the string does not refer to a component at all, so it
+     * can still be tried as a callable.
+     *
+     * @throws \LogicException If $handler is a component class that was not
+     *         registered. It isn't registered on the fly: an omitted register()
+     *         is a configuration mistake and should not go unnoticed.
+     */
+    private function resolveComponentName(string $handler): ?string
+    {
+        if ($this->registry->has($handler)) {
+            return $handler;
+        }
+        if (!is_subclass_of($handler, ComponentInterface::class)) {
+            return null;
+        }
+
+        $name = $handler::getComponentName();
+        if ($this->registry->get($name) !== $handler) {
+            throw new \LogicException(sprintf(
+                'Route handler %1$s is not registered. Call UsePHP::register(%1$s::class) first.',
+                $handler,
+            ));
+        }
+
+        return $name;
     }
 
     /**
@@ -1504,7 +1662,7 @@ final class UsePHP
         RenderContext::setApp($this);
 
         try {
-            return $this->doHandleAction();
+            return $this->guardActionPage(RequestContext::fromGlobals()) ?? $this->doHandleAction();
         } finally {
             RenderContext::clearApp();
         }
@@ -1615,10 +1773,10 @@ final class UsePHP
         // continuation of any page-level render pass.
         RenderContext::beginRender();
 
-        // Flip the endpoint-render flag so deferred wrappers (FunctionComponent
-        // wrappers from `fc(..., defer: ...)`) skip their placeholder branch
-        // and actually render the inner component here.
-        $this->renderingDeferredEndpoint = true;
+        // Name the endpoint being rendered so its own FunctionComponent wrapper
+        // skips the placeholder branch. Nested deferred components keep theirs
+        // (see isDeferredEndpointTarget()).
+        $this->deferredEndpointName = $name;
 
         try {
             $element = $this->renderDeferredTarget($registration['component'], $props);
@@ -1638,7 +1796,7 @@ final class UsePHP
             $this->emitHeader('Cache-Control: no-store');
             return 'Failed to render deferred component.';
         } finally {
-            $this->renderingDeferredEndpoint = false;
+            $this->deferredEndpointName = null;
         }
 
         // Class components read their defer params from $_GET, but their forms
@@ -1813,6 +1971,9 @@ final class UsePHP
             }
             $state->setState($index, $value);
         }
+        if ($action->type === Action::SET_FIELDS && !$this->applyFormFields($action, $state)) {
+            return $this->respondBadRequest('Invalid form data');
+        }
 
         // Partial update (AJAX) - return only component HTML
         if ($isPartial) {
@@ -1940,7 +2101,7 @@ final class UsePHP
         // The answer to a POST is not a page to keep.
         $this->emitHeader('Cache-Control: no-store');
 
-        return self::carrySnapshotsInForms($printed . $html);
+        return $this->carrySnapshotsInForms($printed . $html);
     }
 
     /**
@@ -1949,24 +2110,39 @@ final class UsePHP
      * Without JavaScript the next action is a plain POST of one form, and an
      * Isolated page keeps state nowhere else, so each form has to bring along
      * the other instances' current snapshots or the next answer would reset
-     * them. Rendered attribute values are already escaped for an attribute, and
-     * a page's text cannot produce the quote these patterns look for.
+     * them. This works on the finished HTML because a handler can answer with
+     * a string, which leaves no tree to walk.
+     *
+     * The HTML can hold more than the renderer's own output: raw text elements
+     * are skipped, and a value that does not verify stays behind, since it
+     * would make the server reject the next action.
      */
-    private static function carrySnapshotsInForms(string $html): string
+    private function carrySnapshotsInForms(string $html): string
     {
-        preg_match_all('/\sdata-usephp-snapshot=(?:"([^"]*+)"|\'([^\']*+)\')/', $html, $matches, PREG_SET_ORDER);
+        $outsideRawText = '<(script|style)\b.*?</\1\s*>(*SKIP)(*FAIL)|';
+
+        preg_match_all(
+            '~' . $outsideRawText . '\sdata-usephp-snapshot=(?:"([^"]*+)"|\'([^\']*+)\')~is',
+            $html,
+            $matches,
+            PREG_SET_ORDER,
+        );
 
         $fields = '';
         $count = 0;
         $seen = [];
         foreach ($matches as $match) {
-            $value = ($match[2] ?? '') !== '' ? $match[2] : ($match[1] ?? '');
+            $value = ($match[3] ?? '') !== '' ? $match[3] : ($match[2] ?? '');
             if (isset($seen[$value]) || $count === self::MAX_CARRIED_SNAPSHOTS) {
                 continue;
             }
             $seen[$value] = true;
+            if (!$this->verifiesAsSnapshot(html_entity_decode($value, ENT_QUOTES, 'UTF-8'))) {
+                continue;
+            }
             $count++;
-            $fields .= '<input type="hidden" name="_usephp_snapshots[]" value="' . $value . '" />';
+            // Still escaped the way it was in the attribute.
+            $fields .= '<input type="hidden" name="_usephp_snapshots[]" value="' . str_replace("'", '&#039;', $value) . '" />';
         }
 
         // A form's own snapshot is ignored on the way back, so a page with a
@@ -1976,10 +2152,21 @@ final class UsePHP
         }
 
         return preg_replace_callback(
-            '/<form\b[^>]*?\bdata-usephp-form\b[^>]*>/',
+            '~' . $outsideRawText . '<form\b[^>]*?\bdata-usephp-form\b[^>]*>~is',
             static fn(array $form): string => $form[0] . $fields,
             $html,
         ) ?? $html;
+    }
+
+    private function verifiesAsSnapshot(string $json): bool
+    {
+        try {
+            $this->getSnapshotSerializer()->deserialize($json);
+
+            return true;
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     /**
@@ -2047,6 +2234,43 @@ final class UsePHP
         }
 
         return array_keys($snapshots);
+    }
+
+    /**
+     * Copy the POST fields named by a signed {@see Action::setFields()} action
+     * into their hooks. The caller has verified the signature, so the names
+     * and indexes are the server's; the values are client input, and all of
+     * them are checked before any is written. Returns false to reject.
+     */
+    private function applyFormFields(Action $action, ComponentState $state): bool
+    {
+        $fields = $action->payload['fields'] ?? null;
+        if (!is_array($fields) || $fields === []) {
+            return false;
+        }
+
+        $values = [];
+        foreach ($fields as $name => $index) {
+            if (!is_int($index) || $index < 0 || $index > self::MAX_HOOK_INDEX) {
+                return false;
+            }
+            // A field that wasn't sent is an unchecked checkbox, which has to
+            // be able to clear its hook.
+            $value = $_POST[$name] ?? '';
+            // Invalid UTF-8 would make the snapshot's JSON encoding throw.
+            if (!is_string($value) || strlen($value) > self::MAX_FORM_FIELD_BYTES
+                || preg_match('//u', $value) !== 1
+            ) {
+                return false;
+            }
+            $values[$index] = $value;
+        }
+
+        foreach ($values as $index => $value) {
+            $state->setState($index, $value);
+        }
+
+        return true;
     }
 
     /**
@@ -2179,6 +2403,11 @@ final class UsePHP
             return $this->respondBadRequest('Invalid snapshot');
         }
 
+        // A form from a defer endpoint brings the endpoint's query with it (see
+        // doRenderComponentPartialWithInstanceId()), and the forms re-rendered
+        // here have to keep it for a class component among them.
+        $deferQuery = $_POST['_usephp_defer_query'] ?? null;
+
         $renderer = new Renderer(
             $instanceId,
             $this->tryGetSnapshotSerializer(),
@@ -2186,6 +2415,7 @@ final class UsePHP
             $this->deferPrefix,
             $this->getCsrfToken(...),
             actionSigner: $this->actionSigner(),
+            deferQuery: is_string($deferQuery) && $deferQuery !== '' ? $deferQuery : null,
         );
 
         // renderPartial() emits the wrapper's contents. For Snapshot storage it
@@ -2204,7 +2434,9 @@ final class UsePHP
      * the placeholder. The target gets the props its endpoint would, and each
      * one only renders when the search reaches it, because deferred content is
      * often deferred for being slow. One that fails says nothing about the
-     * instance being looked for, so the search goes on.
+     * instance being looked for, so the search goes on. A placeholder inside a
+     * target stays one, as on the endpoint (see isDeferredEndpointTarget()), and
+     * is followed the same way.
      *
      * @param list<Element> $roots
      * @return array{0: Element, 1: list<Element>}|null The wrapper and every tree searched
@@ -2262,13 +2494,17 @@ final class UsePHP
     }
 
     /**
+     * Render a defer target the way its endpoint does: only that target skips
+     * its placeholder, and `$_GET` holds the endpoint's query.
+     *
      * @param array<string, string> $props
      */
     private function renderDeferredForReplay(string $name, array $props): ?Element
     {
-        RenderContext::setApp($this);
         RenderContext::beginRender();
-        $this->renderingDeferredEndpoint = true;
+        $this->deferredEndpointName = $name;
+        $outerGet = $_GET;
+        $_GET = $props;
         ob_start();
         try {
             return $this->renderDeferredTarget($this->deferredRegistry[$name]['component'], $props);
@@ -2278,7 +2514,8 @@ final class UsePHP
             return null;
         } finally {
             ob_end_clean();
-            $this->renderingDeferredEndpoint = false;
+            $_GET = $outerGet;
+            $this->deferredEndpointName = null;
         }
     }
 
@@ -2352,7 +2589,9 @@ final class UsePHP
      */
     private function doCreateElement(string $componentName, ?string $key = null): Element
     {
+        $outerApp = RenderContext::getApp();
         RenderContext::setApp($this);
+        $parentState = ComponentState::current();
 
         try {
             $component = $this->registry->create($componentName);
@@ -2389,7 +2628,8 @@ final class UsePHP
 
             return new Element('div', $props, [$innerElement]);
         } finally {
-            RenderContext::clearApp();
+            ComponentState::setCurrent($parentState);
+            RenderContext::setApp($outerApp);
         }
     }
 
@@ -2398,7 +2638,9 @@ final class UsePHP
      */
     private function doRenderElement(Element $element): string
     {
+        $outerApp = RenderContext::getApp();
         RenderContext::setApp($this);
+        $parentState = ComponentState::current();
 
         if ($this->replayedElements !== null) {
             $this->replayedElements[] = $element;
@@ -2415,7 +2657,8 @@ final class UsePHP
             );
             return $renderer->renderElement($element);
         } finally {
-            RenderContext::clearApp();
+            ComponentState::setCurrent($parentState);
+            RenderContext::setApp($outerApp);
         }
     }
 
@@ -2424,7 +2667,9 @@ final class UsePHP
      */
     private function doRenderComponent(string $componentName, ?string $key = null): string
     {
+        $outerApp = RenderContext::getApp();
         RenderContext::setApp($this);
+        $parentState = ComponentState::current();
 
         try {
             $component = $this->registry->create($componentName);
@@ -2457,7 +2702,8 @@ final class UsePHP
 
             return $renderer->render(fn() => $component->render());
         } finally {
-            RenderContext::clearApp();
+            ComponentState::setCurrent($parentState);
+            RenderContext::setApp($outerApp);
         }
     }
 

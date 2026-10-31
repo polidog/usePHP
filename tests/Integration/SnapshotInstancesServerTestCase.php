@@ -29,32 +29,36 @@ abstract class SnapshotInstancesServerTestCase extends ActionFlowServerTestCase
     }
 
     /**
-     * Fields of the form holding the button whose text starts with $label.
+     * Fields of the form that the button whose text starts with $label submits.
      * Fields named `x[]` come back as a list under `x`.
      *
      * @return array<string, mixed>
      */
     protected static function formFor(string $html, string $label): array
     {
-        preg_match_all('/<form\b.*?<\/form>/s', $html, $forms);
-        foreach ($forms[0] as $form) {
-            if (!str_contains($form, '>' . $label . '=')) {
-                continue;
-            }
-            preg_match_all('/<input type="hidden" name="([^"]+)" value="([^"]*)"/', $form, $inputs, PREG_SET_ORDER);
-            $fields = [];
-            foreach ($inputs as $input) {
-                $value = html_entity_decode($input[2], ENT_QUOTES, 'UTF-8');
-                if (str_ends_with($input[1], '[]')) {
-                    $fields[substr($input[1], 0, -2)][] = $value;
-                } else {
-                    $fields[$input[1]] = $value;
-                }
-            }
+        self::assertSame(
+            1,
+            preg_match('/<button\b[^>]*\bform="([^"]+)"[^>]*>\s*' . preg_quote($label, '/') . '=/', $html, $button),
+            "no button for {$label} in: {$html}",
+        );
+        self::assertSame(
+            1,
+            preg_match('/<form\b[^>]*\bid="' . preg_quote($button[1], '/') . '"[^>]*>.*?<\/form>/s', $html, $form),
+            "no form for {$label} in: {$html}",
+        );
 
-            return $fields;
+        preg_match_all('/<input type="hidden" name="([^"]+)" value="([^"]*)"/', $form[0], $inputs, PREG_SET_ORDER);
+        $fields = [];
+        foreach ($inputs as $input) {
+            $value = html_entity_decode($input[2], ENT_QUOTES, 'UTF-8');
+            if (str_ends_with($input[1], '[]')) {
+                $fields[substr($input[1], 0, -2)][] = $value;
+            } else {
+                $fields[$input[1]] = $value;
+            }
         }
-        self::fail("no form for {$label} in: {$html}");
+
+        return $fields;
     }
 
     /**
