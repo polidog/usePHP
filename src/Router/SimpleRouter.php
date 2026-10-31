@@ -168,6 +168,18 @@ final class SimpleRouter implements RouterInterface
             $path = rtrim($path, '/');
         }
 
+        // HEAD is answered by the route that would answer GET, unless a route
+        // was registered for HEAD itself. The handler runs as usual: the SAPI
+        // drops the body of a HEAD response.
+        if ($method === 'HEAD') {
+            foreach ($this->routes as $route) {
+                if ($route->method === 'HEAD' && ($params = $route->match($path)) !== null) {
+                    return $route->toRouteMatch($params);
+                }
+            }
+            $method = 'GET';
+        }
+
         foreach ($this->routes as $route) {
             // Check method
             if ($route->method !== '*' && $route->method !== $method) {

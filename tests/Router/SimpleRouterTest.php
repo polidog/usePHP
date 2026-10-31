@@ -356,6 +356,54 @@ class SimpleRouterTest extends TestCase
         $this->assertNull($this->router->match(new RequestContext('GET', $path)));
     }
 
+    // ------------------------------------------------------------------
+    // #90: HEAD is answered by the route that would answer GET.
+    // ------------------------------------------------------------------
+
+    public function testHeadFallsBackToGetRoute(): void
+    {
+        $this->router->get('/users/{id}', 'User');
+
+        $match = $this->router->match(new RequestContext('HEAD', '/users/7'));
+
+        $this->assertSame('User', $match?->handler);
+        $this->assertSame(['id' => '7'], $match->params);
+    }
+
+    public function testExplicitHeadRouteWinsOverAnEarlierGetRoute(): void
+    {
+        $this->router->get('/x', 'Get');
+        $this->router->addRoute('HEAD', '/x', 'Head');
+
+        $this->assertSame('Head', $this->router->match(new RequestContext('HEAD', '/x'))?->handler);
+        $this->assertSame('Get', $this->router->match(new RequestContext('GET', '/x'))?->handler);
+    }
+
+    public function testHeadPicksTheSameRouteAsGetWhenAnyRouteAlsoMatches(): void
+    {
+        $this->router->get('/x', 'Get');
+        $this->router->any('/x', 'Any');
+        $this->router->any('/y', 'Any');
+        $this->router->get('/y', 'Get');
+
+        $this->assertSame('Get', $this->router->match(new RequestContext('HEAD', '/x'))?->handler);
+        $this->assertSame('Any', $this->router->match(new RequestContext('HEAD', '/y'))?->handler);
+    }
+
+    public function testHeadDoesNotFallBackToOtherMethods(): void
+    {
+        $this->router->post('/x', 'Post');
+
+        $this->assertNull($this->router->match(new RequestContext('HEAD', '/x')));
+    }
+
+    public function testGetDoesNotMatchHeadOnlyRoute(): void
+    {
+        $this->router->addRoute('HEAD', '/x', 'Head');
+
+        $this->assertNull($this->router->match(new RequestContext('GET', '/x')));
+    }
+
     public function testCustomRegexEndingInASlashKeepsThatSlash(): void
     {
         $this->router->get('/dir/{name:[a-z]+/}end', 'Slash');
