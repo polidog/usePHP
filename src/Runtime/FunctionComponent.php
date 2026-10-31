@@ -73,12 +73,16 @@ final class FunctionComponent
         unset($props['key']);
 
         $instanceId = RenderContext::beginComponent($componentName, $instanceKey);
+        $parentState = ComponentState::current();
         $state = ComponentState::getInstance($instanceId, $this->storageType);
         ComponentState::reset();
 
-        $result = ($this->inner)($props);
-
-        RenderContext::endComponent();
+        try {
+            $result = ($this->inner)($props);
+        } finally {
+            RenderContext::endComponent();
+            ComponentState::setCurrent($parentState);
+        }
 
         $wrapperProps = ['data-usephp' => $instanceId];
 

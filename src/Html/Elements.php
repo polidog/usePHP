@@ -1384,14 +1384,16 @@ function resolveFunctionComponent(Element $element): Element
 
     $componentName = getFunctionComponentName($component);
     $instanceId = RenderContext::beginComponent($componentName, $key);
+    $parentState = ComponentState::current();
     ComponentState::getInstance($instanceId);
     ComponentState::reset();
 
-    $result = $component($props);
-
-    RenderContext::endComponent();
-
-    return $result;
+    try {
+        return $component($props);
+    } finally {
+        RenderContext::endComponent();
+        ComponentState::setCurrent($parentState);
+    }
 }
 
 /**

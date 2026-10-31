@@ -80,6 +80,15 @@ final class ComponentState
         return self::$current;
     }
 
+    /**
+     * Make $state the instance hooks bind to. A component rendering a child
+     * inside its own render uses this to take the hooks back afterwards.
+     */
+    public static function setCurrent(?self $state): void
+    {
+        self::$current = $state;
+    }
+
     public static function reset(): void
     {
         if (self::$current !== null) {
