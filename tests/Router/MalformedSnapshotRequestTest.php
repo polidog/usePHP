@@ -158,6 +158,7 @@ final class MalformedSnapshotRequestTest extends TestCase
         $_POST = [
             '_usephp_component' => 'MalformedSnapshotCounter#0',
             '_usephp_action' => '{"type":"restore","payload":[]}',
+            '_usephp_action_sig' => (string) $app->signAction('MalformedSnapshotCounter#0', UsePHP::RESTORE_SIGNING_INPUT),
             '_usephp_snapshot' => $snapshot,
             '_usephp_csrf' => $app->getCsrfToken(),
         ];

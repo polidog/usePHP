@@ -1075,7 +1075,7 @@ final class SecurityHardeningTest extends TestCase
             $app = $this->signedCounterApp();
             $json = self::setStateJson(0, 41);
             $html = $this->postAction($app, 'SignedActionCounter#0', $json, [
-                '_usephp_action_sig' => (string) $app->signAction('SignedActionCounter#0', $json),
+                '_usephp_action_sig' => (string) $app->signAction('SignedActionCounter#0', $json, '/counter'),
             ]);
 
             self::assertSame(200, http_response_code());
@@ -1110,7 +1110,7 @@ final class SecurityHardeningTest extends TestCase
         $savedPost = $_POST;
         try {
             $app = $this->signedCounterApp();
-            $signature = (string) $app->signAction('SignedActionCounter#0', self::setStateJson(0, 1));
+            $signature = (string) $app->signAction('SignedActionCounter#0', self::setStateJson(0, 1), '/counter');
 
             // Change the value the server signed.
             $html = $this->postAction($app, 'SignedActionCounter#0', self::setStateJson(0, 999), ['_usephp_action_sig' => $signature]);
@@ -1161,7 +1161,7 @@ final class SecurityHardeningTest extends TestCase
             $app = $this->signedCounterApp();
             // Sign it so the shape check — not the signature check — is what rejects it.
             $html = $this->postAction($app, 'SignedActionCounter#0', $actionJson, [
-                '_usephp_action_sig' => (string) $app->signAction('SignedActionCounter#0', $actionJson),
+                '_usephp_action_sig' => (string) $app->signAction('SignedActionCounter#0', $actionJson, '/counter'),
             ]);
 
             self::assertSame('Invalid action data', $html);
@@ -1192,7 +1192,7 @@ final class SecurityHardeningTest extends TestCase
             $app = $this->signedCounterApp();
             $json = self::setStateJson(0, 1);
             $html = $this->postAction($app, $instanceId, $json, [
-                '_usephp_action_sig' => (string) $app->signAction($instanceId, $json),
+                '_usephp_action_sig' => (string) $app->signAction($instanceId, $json, '/counter'),
             ]);
 
             self::assertSame('Invalid action request', $html);
@@ -1219,16 +1219,68 @@ final class SecurityHardeningTest extends TestCase
 
             // A valid snapshot that belongs to another instance.
             $other = $app->getSnapshotSerializer()->serialize(new Snapshot('SignedActionCounter', '1', [0 => 7]));
-            $html = $this->postAction($app, 'SignedActionCounter#0', $restore, ['_usephp_snapshot' => $other]);
+            $signature = (string) $app->signAction('SignedActionCounter#0', UsePHP::RESTORE_SIGNING_INPUT, '/counter');
+            $html = $this->postAction($app, 'SignedActionCounter#0', $restore, ['_usephp_snapshot' => $other, '_usephp_action_sig' => $signature]);
             self::assertSame('Invalid snapshot', $html);
             self::assertSame(400, http_response_code());
 
             // A restore that smuggles a mutation in its payload.
             $mutating = '{"type":"restore","payload":{"index":0,"value":1},"componentId":"SignedActionCounter#0","storageType":"snapshot"}';
             $own = $app->getSnapshotSerializer()->serialize(new Snapshot('SignedActionCounter', '0', [0 => 7]));
-            $html = $this->postAction($app, 'SignedActionCounter#0', $mutating, ['_usephp_snapshot' => $own]);
+            $html = $this->postAction($app, 'SignedActionCounter#0', $mutating, ['_usephp_snapshot' => $own, '_usephp_action_sig' => $signature]);
             self::assertSame('Invalid action request', $html);
             self::assertSame(400, http_response_code());
+
+            // A signature for restoring on another page.
+            $html = $this->postAction($app, 'SignedActionCounter#0', $restore, [
+                '_usephp_snapshot' => $own,
+                '_usephp_action_sig' => (string) $app->signAction('SignedActionCounter#0', UsePHP::RESTORE_SIGNING_INPUT, '/elsewhere'),
+            ]);
+            self::assertSame('Invalid action signature', $html);
+            self::assertSame(400, http_response_code());
+        } finally {
+            $_POST = $savedPost;
+            $_SERVER = $savedServer;
+            http_response_code(200);
+        }
+    }
+
+    public function testRunBindsAnActionToThePathItWasGivenNotTheRawUri(): void
+    {
+        $savedServer = $_SERVER;
+        $savedPost = $_POST;
+        try {
+            // A front controller that strips a mount prefix before routing.
+            $_SERVER['REQUEST_URI'] = '/mount/page';
+            $_SERVER['HTTP_HOST'] = 'example.test';
+            $_SERVER['HTTP_ORIGIN'] = 'http://example.test';
+            $_SERVER['HTTP_X_USEPHP_PARTIAL'] = '1';
+
+            $app = $this->signedCounterApp();
+            $router = new \Polidog\UsePhp\Router\SimpleRouter();
+            $app->setRouter($router);
+            $router->get('/page', SignedActionCounter::class);
+            $router->get('/other', SignedActionCounter::class);
+
+            $run = static function (string $method, string $path) use ($app): string {
+                ob_start();
+                $app->run(new RequestContext(method: $method, path: $path));
+
+                return (string) ob_get_clean();
+            };
+
+            $_SERVER['REQUEST_METHOD'] = 'GET';
+            $page = $run('GET', '/page');
+            self::assertGreaterThan(0, preg_match_all('/name="(_usephp_[a-z_]+)" value="([^"]*)"/', $page, $m));
+            $_POST = array_combine($m[1], array_map(static fn(string $v): string => html_entity_decode($v, ENT_QUOTES, 'UTF-8'), $m[2]));
+
+            $_SERVER['REQUEST_METHOD'] = 'POST';
+            self::assertStringContainsString('Invalid action signature', $run('POST', '/other'));
+            self::assertSame(400, http_response_code());
+
+            http_response_code(200);
+            self::assertStringContainsString('count=', $run('POST', '/page/'));
+            self::assertSame(200, http_response_code());
         } finally {
             $_POST = $savedPost;
             $_SERVER = $savedServer;
@@ -1363,15 +1415,23 @@ final class SecurityHardeningTest extends TestCase
             $app->restoreSnapshot($request, $match);
         }
 
+        // Forms are signed for the page being rendered.
+        $savedUri = $_SERVER['REQUEST_URI'] ?? null;
+        $_SERVER['REQUEST_URI'] = $path;
         RenderContext::setApp($app);
         try {
             $element = ($match->handler)($match->params, $request);
+            self::assertInstanceOf(Element::class, $element);
+
+            return $app->renderElement($element);
         } finally {
             RenderContext::clearApp();
+            if ($savedUri === null) {
+                unset($_SERVER['REQUEST_URI']);
+            } else {
+                $_SERVER['REQUEST_URI'] = $savedUri;
+            }
         }
-        self::assertInstanceOf(Element::class, $element);
-
-        return $app->renderElement($element);
     }
 
     // ------------------------------------------------------------------

@@ -1480,6 +1480,9 @@
             storageType: 'snapshot',
         }));
         formData.set('_usephp_snapshot', saved);
+        if (component.dataset.usephpRestoreSig) {
+            formData.set('_usephp_action_sig', component.dataset.usephpRestoreSig);
+        }
         // The session-bound CSRF token (when a session is active) is embedded
         // in every usephp form; borrow it from one of ours.
         const csrf = component.querySelector('input[name="_usephp_csrf"]')

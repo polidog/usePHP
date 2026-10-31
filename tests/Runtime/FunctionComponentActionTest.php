@@ -138,6 +138,13 @@ final class FunctionComponentActionTest extends TestCase
         return $app->handleAction();
     }
 
+    private static function restoreSignature(string $page): string
+    {
+        self::assertSame(1, \preg_match('/data-usephp-restore-sig="([^"]+)"/', $page, $m), 'no restore signature in: ' . $page);
+
+        return \html_entity_decode($m[1], \ENT_QUOTES, 'UTF-8');
+    }
+
     private static function renderRoute(UsePHP $app, string $path): string
     {
         // Each page render is its own request: nothing survives from the last one.
@@ -146,6 +153,9 @@ final class FunctionComponentActionTest extends TestCase
 
         $match = $app->getRouter()->match(new RequestContext(method: 'GET', path: $path));
         self::assertNotNull($match);
+
+        // Forms are signed for the page being rendered.
+        $_SERVER['REQUEST_URI'] = $path;
 
         RenderContext::setApp($app);
         try {
@@ -263,7 +273,7 @@ final class FunctionComponentActionTest extends TestCase
         $page = self::renderRoute($app, '/p');
 
         self::assertMatchesRegularExpression(
-            '/<div data-usephp="[^"]*#persisted" data-usephp-snapshot="[^"]+" data-usephp-persist="sessionStorage">/',
+            '/<div data-usephp="[^"]*#persisted" data-usephp-snapshot="[^"]+" data-usephp-persist="sessionStorage" data-usephp-restore-sig="[^"]+">/',
             $page,
         );
     }
@@ -319,6 +329,7 @@ final class FunctionComponentActionTest extends TestCase
         $restored = self::submitPartial($app, '/snapshot', [
             'component' => $instanceId,
             'action' => \json_encode(['type' => 'restore', 'payload' => [], 'componentId' => $instanceId, 'storageType' => 'snapshot'], \JSON_THROW_ON_ERROR),
+            'signature' => self::restoreSignature($page),
             'snapshot' => $savedSnapshot,
         ]);
 
@@ -351,6 +362,7 @@ final class FunctionComponentActionTest extends TestCase
         $html = self::submitPartial($app, '/snapshot', [
             'component' => $instanceId,
             'action' => \json_encode(['type' => 'restore', 'payload' => [], 'componentId' => $instanceId, 'storageType' => 'snapshot'], \JSON_THROW_ON_ERROR),
+            'signature' => self::restoreSignature($page),
             'snapshot' => $forged,
         ]);
 

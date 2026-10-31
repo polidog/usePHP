@@ -73,7 +73,7 @@ final class FormActionTest extends TestCase
     private function submit(array $fields, array $post): int
     {
         $json = Action::setFields($fields, self::INSTANCE)->toJson();
-        $signature = $this->app->signAction(self::INSTANCE, $json);
+        $signature = $this->app->signAction(self::INSTANCE, $json, '/');
         self::assertNotNull($signature);
 
         $_SERVER['REQUEST_METHOD'] = 'POST';
@@ -153,7 +153,7 @@ final class FormActionTest extends TestCase
     public function testTamperingWithTheFieldMapBreaksTheSignature(): void
     {
         $json = Action::setFields(['title' => 0], self::INSTANCE)->toJson();
-        $signature = $this->app->signAction(self::INSTANCE, $json);
+        $signature = $this->app->signAction(self::INSTANCE, $json, '/');
         self::assertNotNull($signature);
 
         $_SERVER['REQUEST_METHOD'] = 'POST';
@@ -260,6 +260,8 @@ final class FormActionTest extends TestCase
             return $component();
         });
 
+        // Forms are signed for the page being rendered.
+        $_SERVER['REQUEST_URI'] = '/page';
         RenderContext::setApp($app);
         RenderContext::beginRender();
         $page = $app->renderElement($component());
