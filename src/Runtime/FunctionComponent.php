@@ -22,9 +22,10 @@ use Polidog\UsePhp\Storage\StorageType;
  * so a manual `registerDeferred()` call is unnecessary in the normal flow.
  *
  * When `$defer` is set, invoking the component emits an `H::defer(...)`
- * placeholder on the page-render path, and runs the inner callable on the
- * defer-endpoint render path (so the same component definition serves both
- * sides of the round trip).
+ * placeholder on the page-render path, and runs the inner callable only when
+ * rendering its own defer endpoint (so the same component definition serves
+ * both sides of the round trip). A deferred component nested inside another
+ * endpoint stays a placeholder and loads through its own endpoint.
  */
 final class FunctionComponent
 {
@@ -54,7 +55,7 @@ final class FunctionComponent
     {
         if ($this->defer !== null) {
             $app = RenderContext::getApp();
-            if ($app === null || !$app->isRenderingDeferredEndpoint()) {
+            if ($app === null || !$app->isDeferredEndpointTarget($this)) {
                 return $this->defer->buildPlaceholder($props);
             }
         }
