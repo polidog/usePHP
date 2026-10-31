@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Tests\Runtime;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Router\SimpleRouter;
+use Polidog\UsePhp\Runtime\ComponentState;
 use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\Runtime\Renderer;
@@ -19,6 +21,8 @@ use Polidog\UsePhp\UsePHP;
 
 class HooksTest extends TestCase
 {
+    private static int $cleanupCalls = 0;
+
     protected function setUp(): void
     {
         // Start session for tests
@@ -162,6 +166,207 @@ class HooksTest extends TestCase
         // Second render - cleanup from previous effect should run
         $renderer->render($component);
         $this->assertTrue($cleanupRan, 'Cleanup should run before new effect');
+    }
+
+    public function testEffectCleanupIsNeverWrittenToStorage(): void
+    {
+        // A Closure in $_SESSION makes the end-of-request session write fatal.
+        $renderer = new Renderer('effect-cleanup-storage');
+
+        $renderer->render(function (): Element {
+            useEffect(fn() => static function (): void {}, []);
+
+            return H::div();
+        });
+
+        serialize($_SESSION);
+        $this->assertArrayNotHasKey('usephp:effect-cleanup-storage:effect_cleanup:0', $_SESSION);
+    }
+
+    public function testEffectCleanupRunsOnlyOncePerEffectRun(): void
+    {
+        $renderer = new Renderer('effect-cleanup-once');
+        $cleanups = 0;
+        $stateKey = 'usephp:effect-cleanup-once:state:0';
+        $effectRuns = 0;
+
+        $component = function () use (&$cleanups, &$effectRuns): Element {
+            [$count] = useState(0);
+            useEffect(function () use (&$cleanups, &$effectRuns) {
+                $effectRuns++;
+
+                // Only the first effect run registers a cleanup.
+                return $effectRuns === 1 ? function () use (&$cleanups): void {
+                    $cleanups++;
+                } : null;
+            }, [$count]);
+
+            return H::div();
+        };
+
+        $renderer->render($component);
+        $_SESSION[$stateKey] = 1;
+        $renderer->render($component);
+        $_SESSION[$stateKey] = 2;
+        $renderer->render($component);
+
+        $this->assertSame(3, $effectRuns);
+        $this->assertSame(1, $cleanups);
+    }
+
+    public function testEffectCleanupDoesNotSurviveIntoTheNextRequest(): void
+    {
+        $renderer = new Renderer('effect-cleanup-request');
+        $cleanupRan = false;
+        $stateKey = 'usephp:effect-cleanup-request:state:0';
+
+        $component = function () use (&$cleanupRan): Element {
+            [$count] = useState(0);
+            useEffect(function () use (&$cleanupRan) {
+                return function () use (&$cleanupRan): void {
+                    $cleanupRan = true;
+                };
+            }, [$count]);
+
+            return H::div();
+        };
+
+        $renderer->render($component);
+
+        // A new request starts with no in-memory ComponentState.
+        ComponentState::clearInstances();
+        $_SESSION[$stateKey] = 1;
+        $renderer->render($component);
+
+        $this->assertFalse($cleanupRan);
+    }
+
+    public function testClearStateDropsPendingEffectCleanup(): void
+    {
+        $state = ComponentState::getInstance('effect-cleanup-clear');
+        $cleanupRan = false;
+        $state->setEffectCleanup(0, function () use (&$cleanupRan): void {
+            $cleanupRan = true;
+        });
+
+        $state->clearState();
+        $state->runEffectCleanup(0);
+
+        $this->assertFalse($cleanupRan);
+    }
+
+    public static function recordCleanupCall(): void
+    {
+        self::$cleanupCalls++;
+    }
+
+    /**
+     * @return iterable<string, array{mixed}>
+     */
+    public static function nonCleanupEffectReturnValues(): iterable
+    {
+        yield 'int' => [1];
+        yield 'text' => ['text'];
+        yield 'bool' => [true];
+        yield 'plain array' => [['a', 'b']];
+        yield 'object' => [new \stdClass()];
+        // Callable-shaped data the application merely returned. Running it
+        // later would let an effect's result decide what gets executed.
+        yield 'function name' => ['system'];
+        yield 'static method string' => [self::class . '::recordCleanupCall'];
+        yield 'static method array' => [[self::class, 'recordCleanupCall']];
+        yield 'invokable object' => [new class {
+            public function __invoke(): void
+            {
+                HooksTest::recordCleanupCall();
+            }
+        }];
+    }
+
+    #[DataProvider('nonCleanupEffectReturnValues')]
+    public function testEffectReturnValueThatIsNotAClosureIsIgnored(mixed $returned): void
+    {
+        self::$cleanupCalls = 0;
+        $id = 'effect-return-' . uniqid();
+        $renderer = new Renderer($id);
+        $stateKey = "usephp:{$id}:state:0";
+        $component = function () use ($returned): Element {
+            [$count] = useState(0);
+            useEffect(fn() => $returned, [$count]);
+
+            return H::div();
+        };
+
+        $renderer->render($component);
+        // Re-running the effect would invoke anything kept as a cleanup; for
+        // 'system' that throws an ArgumentCountError.
+        $_SESSION[$stateKey] = 1;
+        $renderer->render($component);
+
+        $this->assertSame(0, self::$cleanupCalls);
+    }
+
+    public function testUseEffectToleratesDepsChangingFromNullToArray(): void
+    {
+        $renderer = new Renderer('effect-null-deps');
+        $runs = 0;
+        $deps = null;
+        $component = function () use (&$runs, &$deps): Element {
+            useEffect(function () use (&$runs): void {
+                $runs++;
+            }, $deps);
+
+            return H::div();
+        };
+
+        $renderer->render($component);
+        $deps = ['a'];
+        $renderer->render($component);
+        $renderer->render($component);
+
+        $this->assertSame(2, $runs);
+    }
+
+    public function testUseEffectDepsTreatNullValueAsAValue(): void
+    {
+        $renderer = new Renderer('effect-null-dep-value');
+        $runs = 0;
+        $deps = [null];
+        $component = function () use (&$runs, &$deps): Element {
+            useEffect(function () use (&$runs): void {
+                $runs++;
+            }, $deps);
+
+            return H::div();
+        };
+
+        $renderer->render($component);
+        $renderer->render($component);
+        $this->assertSame(1, $runs);
+
+        $deps = ['x'];
+        $renderer->render($component);
+        $this->assertSame(2, $runs);
+    }
+
+    public function testSetStateNullIsKeptInSessionStorage(): void
+    {
+        ComponentState::clearInstances();
+        $state = ComponentState::getInstance('set-null-session');
+
+        $this->assertSame('initial', $state->getState(0, 'initial'));
+        $state->setState(0, null);
+
+        $this->assertNull($state->getState(0, 'initial'));
+    }
+
+    public function testNullInitialStateIsStoredOnce(): void
+    {
+        ComponentState::clearInstances();
+        $state = ComponentState::getInstance('null-initial');
+
+        $this->assertNull($state->getState(0, null));
+        $this->assertArrayHasKey('usephp:null-initial:state:0', $_SESSION);
     }
 
     public function testMultipleUseEffects(): void

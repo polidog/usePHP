@@ -1482,14 +1482,21 @@ function createElement(string $type, array $params): Element
  * - Tracks the component in RenderContext's component stack
  * - Sets up ComponentState if not already set
  *
- * @param array<Element|Renderable|string> $children
- * @return array<Element|string>
+ * Nested arrays are flattened in place, so a component inside
+ * `{array_map(...)}` is expanded in document order like its siblings.
+ *
+ * @param array<mixed> $children
+ * @return list<mixed>
  */
 function resolveRenderables(array $children): array
 {
     $resolved = [];
     foreach ($children as $child) {
-        if ($child instanceof Element && $child->type === '__function_component__') {
+        if (is_array($child)) {
+            foreach (resolveRenderables($child) as $nested) {
+                $resolved[] = $nested;
+            }
+        } elseif ($child instanceof Element && $child->type === '__function_component__') {
             // Function component Element
             $resolved[] = resolveFunctionComponent($child);
         } elseif ($child instanceof BaseComponent) {
@@ -1526,19 +1533,24 @@ function resolveFunctionComponent(Element $element): Element
     $component = $element->props['__component'];
     /** @var array<string, mixed> $props */
     $props = $element->props['__props'];
-    /** @var string|null $key */
+    /** @var int|string|null $key */
     $key = $element->props['__key'];
+    if (is_int($key)) {
+        $key = (string) $key;
+    }
 
     $componentName = getFunctionComponentName($component);
     $instanceId = RenderContext::beginComponent($componentName, $key);
+    $parentState = ComponentState::current();
     ComponentState::getInstance($instanceId);
     ComponentState::reset();
 
-    $result = $component($props);
-
-    RenderContext::endComponent();
-
-    return $result;
+    try {
+        return $component($props);
+    } finally {
+        RenderContext::endComponent();
+        ComponentState::setCurrent($parentState);
+    }
 }
 
 /**

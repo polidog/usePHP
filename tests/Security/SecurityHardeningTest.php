@@ -1287,6 +1287,67 @@ final class SecurityHardeningTest extends TestCase
     }
 
     /**
+     * @return iterable<string, array{0: string, 1: string}>
+     */
+    public static function redirectTargetProvider(): iterable
+    {
+        yield 'plain path' => ['/counter', '/counter'];
+        yield 'keeps the query' => ['/counter?tab=2&page=3', '/counter?tab=2&page=3'];
+        yield 'drops the snapshot' => ['/cart?_snapshot=abc', '/cart'];
+        yield 'drops the snapshot among others' => ['/cart?a=1&_snapshot=abc&b=2', '/cart?a=1&b=2'];
+        yield 'drops an encoded snapshot name' => ['/cart?%5Fsnapshot=abc&a=1', '/cart?a=1'];
+        yield 'drops an array snapshot' => ['/cart?_snapshot[x]=abc&_snapshot[]=d&a=1', '/cart?a=1'];
+        yield 'keeps similar names' => ['/cart?_snapshots=1&x_snapshot=2', '/cart?_snapshots=1&x_snapshot=2'];
+        yield 'keeps framework-looking names' => ['/p?_usephp_action=x&_usephp_csrf=y', '/p?_usephp_action=x&_usephp_csrf=y'];
+        yield 'keeps arrays untouched' => ['/p?a[]=1&a[]=2&b[k]=3', '/p?a[]=1&a[]=2&b[k]=3'];
+        yield 'keeps names parse_str would rewrite' => ['/p?a.b=1&c%20d=2', '/p?a.b=1&c%20d=2'];
+        yield 'keeps valueless and empty params' => ['/p?flag&empty=', '/p?flag&empty='];
+        yield 'empty query' => ['/p?', '/p'];
+        yield 'drops the fragment' => ['/p?a=1#frag', '/p?a=1'];
+        yield 'url in the query is only data' => ['/counter?next=//evil.example', '/counter?next=//evil.example'];
+        yield 'protocol-relative authority is dropped' => ['//evil.example/counter?a=1', '/counter?a=1'];
+        yield 'protocol-relative authority without path' => ['//evil.example?a=1', '/?a=1'];
+        yield 'backslash authority' => ['/\\evil.example/counter?a=1', '/evil.example/counter?a=1'];
+        yield 'triple slash' => ['///evil.example/counter?a=1', '/evil.example/counter?a=1'];
+        yield 'absolute url keeps only path and query' => ['https://evil.example/counter?a=1', '/counter?a=1'];
+        yield 'control characters in the query' => ["/counter?a=1\r\nX-Injected: 1", '/'];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('redirectTargetProvider')]
+    public function testNormalizeRedirectTargetKeepsTheQueryButNotTheAuthority(string $requestUri, string $expected): void
+    {
+        self::assertSame($expected, UsePHP::normalizeRedirectTarget($requestUri));
+    }
+
+    public function testNormalizeRedirectTargetHonorsACustomSnapshotParam(): void
+    {
+        self::assertSame(
+            '/cart?_snapshot=kept',
+            UsePHP::normalizeRedirectTarget('/cart?_snapshot=kept&state=abc', 'state'),
+        );
+    }
+
+    public function testCreateRedirectUrlPreservesTheRestOfTheQuery(): void
+    {
+        $router = new SimpleRouter(new SnapshotSerializer('s3cret'));
+
+        $url = $router->createRedirectUrl('/cart?a[]=1&a[]=2&b.c=3&_snapshot=old', new Snapshot('Cart', '0', [0 => 1]));
+
+        self::assertStringStartsWith('/cart?a[]=1&a[]=2&b.c=3&_snapshot=', $url);
+        self::assertSame(1, substr_count($url, '_snapshot='));
+        self::assertStringNotContainsString('old', $url);
+    }
+
+    public function testCreateRedirectUrlHandlesAPathWithoutAQuery(): void
+    {
+        $router = new SimpleRouter(new SnapshotSerializer('s3cret'));
+
+        $url = $router->createRedirectUrl('/cart', new Snapshot('Cart', '0', [0 => 1]));
+
+        self::assertStringStartsWith('/cart?_snapshot=', $url);
+    }
+
+    /**
      * Render a GET route the way UsePHP::run() would, as its own request.
      */
     private function renderRoute(UsePHP $app, string $path, bool $restoreSnapshot = false): string
@@ -1467,7 +1528,7 @@ final class SecurityHardeningTest extends TestCase
             self::assertSame('', $html);
             self::assertSame(1, $exited);
             self::assertSame(303, http_response_code());
-            self::assertContains('Location: /counter', $headers);
+            self::assertContains('Location: /counter?x=1', $headers);
         } finally {
             $_POST = $savedPost;
             $_SERVER = $savedServer;

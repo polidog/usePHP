@@ -14,16 +14,16 @@ return fc(function (array $props) {
     [$count, $setCount] = useState($props['initial'] ?? 0);
 
     return (
-        H::div(className: 'counter', children: [
-            H::h1(children: 'usePHP Counter (PSX)'),
-            H::div(className: 'counter-display', children: [
-                H::span(children: ['Count: ', $count]),
-            ]),
-            H::div(className: 'counter-buttons', children: [
-                H::button(className: 'btn btn-decrement', onClick: fn() => $setCount($count - 1), children: '-'),
-                H::button(className: 'btn btn-increment', onClick: fn() => $setCount($count + 1), children: '+'),
-                H::button(className: 'btn btn-reset', onClick: fn() => $setCount(0), children: 'Reset'),
-            ]),
-        ])
+        \Polidog\UsePhp\Html\createElement('div', ['className' => 'counter', 'children' => [
+\Polidog\UsePhp\Html\createElement('h1', ['children' => ['usePHP Counter (PSX)']]), 
+\Polidog\UsePhp\Html\createElement('div', ['className' => 'counter-display', 'children' => [
+\Polidog\UsePhp\Html\createElement('span', ['children' => ['Count: ', $count]])
+]]), 
+\Polidog\UsePhp\Html\createElement('div', ['className' => 'counter-buttons', 'children' => [
+\Polidog\UsePhp\Html\createElement('button', ['className' => 'btn btn-decrement', 'onClick' => fn() => $setCount($count - 1), 'children' => ['-']]), 
+\Polidog\UsePhp\Html\createElement('button', ['className' => 'btn btn-increment', 'onClick' => fn() => $setCount($count + 1), 'children' => ['+']]), 
+\Polidog\UsePhp\Html\createElement('button', ['className' => 'btn btn-reset', 'onClick' => fn() => $setCount(0), 'children' => ['Reset']])
+]])
+]])
     );
 }, 'psx-counter', StorageType::Snapshot);

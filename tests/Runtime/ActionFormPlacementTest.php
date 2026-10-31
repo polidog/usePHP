@@ -178,6 +178,39 @@ final class ActionFormPlacementTest extends TestCase
         );
     }
 
+    public function testHoistedAndOnSubmitFormsCarryTheDeferQuery(): void
+    {
+        $renderer = new Renderer('test#0', deferQuery: 'a=1&b=2');
+        $action = Action::setState(0, 1, 'test#0');
+        $field = '<input type="hidden" name="_usephp_defer_query" value="a=1&amp;b=2" />';
+
+        self::assertStringContainsString($field, $renderer->renderElement(H::button(onClick: $action)));
+        self::assertStringContainsString($field, $renderer->renderElement(H::form(onSubmit: $action)));
+    }
+
+    public function testCsrfTokenIsReadWhenTheFormIsEmitted(): void
+    {
+        $renderer = new Renderer('test#0', csrfToken: static fn(): string => 'late-token');
+
+        self::assertStringContainsString(
+            'name="_usephp_csrf" value="late-token"',
+            $renderer->renderElement($this->actionButton()),
+        );
+    }
+
+    public function testRawTextAndForeignContentKeepTheirRulesNextToActionForms(): void
+    {
+        $html = new Renderer('test#0')->renderElement(H::form(id: 'app', children: [
+            H::__callStatic('style', ['children' => 'a > b { color: red }']),
+            H::svg(children: [H::__callStatic('style', ['children' => '<x>'])]),
+            $this->actionButton(),
+        ]));
+
+        self::assertStringContainsString('<style>a > b { color: red }</style>', $html);
+        self::assertStringContainsString('<svg><style>&lt;x&gt;</style></svg>', $html);
+        self::assertMatchesRegularExpression('/<\/form><form method="post" data-usephp-form id="usephp-f-/', $html);
+    }
+
     public function testNonActionPropInWireNamespaceIsRefused(): void
     {
         $this->expectException(\RuntimeException::class);

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Tests\Router;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Router\RequestContext;
 use Polidog\UsePhp\Router\RouteGroup;
@@ -233,5 +234,180 @@ class SimpleRouterTest extends TestCase
 
         $this->assertNotNull($match);
         $this->assertEquals(SnapshotBehavior::Isolated, $match->snapshotBehavior);
+    }
+
+    // ------------------------------------------------------------------
+    // #89: literal parts of a pattern are literal, not regex fragments.
+    // ------------------------------------------------------------------
+
+    public function testLiteralDotInPatternOnlyMatchesADot(): void
+    {
+        $this->router->get('/file.txt', 'File');
+
+        $this->assertNotNull($this->router->match(new RequestContext('GET', '/file.txt')));
+        $this->assertNull($this->router->match(new RequestContext('GET', '/fileXtxt')));
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function regexMetaLiteralProvider(): iterable
+    {
+        yield 'plus' => ['/a+b', '/aab'];
+        yield 'star' => ['/a*', '/aaa'];
+        yield 'group' => ['/(x|y)', '/x'];
+        yield 'class' => ['/[ab]', '/a'];
+        yield 'question' => ['/ab?', '/a'];
+    }
+
+    #[DataProvider('regexMetaLiteralProvider')]
+    public function testRegexMetaCharactersInLiteralsAreEscaped(string $pattern, string $wouldMatchIfUnescaped): void
+    {
+        $this->router->get($pattern, 'Literal');
+
+        $this->assertNotNull($this->router->match(new RequestContext('GET', $pattern)));
+        $this->assertNull($this->router->match(new RequestContext('GET', $wouldMatchIfUnescaped)));
+    }
+
+    public function testParameterSyntaxSurvivesLiteralEscaping(): void
+    {
+        $this->router->get('/v1.0/{id:\d+}.json', 'Typed');
+        $this->router->get('/opt.dir/{slug?}', 'Optional');
+        $this->router->get('/opt.typed/{n?:\d+}', 'OptionalTyped');
+        $this->router->get('/tree/{path:a/.+}', 'Slashed');
+
+        $this->assertSame(['id' => '42'], $this->router->match(new RequestContext('GET', '/v1.0/42.json'))?->params);
+        $this->assertNull($this->router->match(new RequestContext('GET', '/v1x0/42.json')));
+        $this->assertNull($this->router->match(new RequestContext('GET', '/v1.0/abc.json')));
+        $this->assertNull($this->router->match(new RequestContext('GET', '/v1.0/42xjson')));
+
+        $this->assertSame([], $this->router->match(new RequestContext('GET', '/opt.dir'))?->params);
+        $this->assertSame(['slug' => 'x'], $this->router->match(new RequestContext('GET', '/opt.dir/x'))?->params);
+        $this->assertNull($this->router->match(new RequestContext('GET', '/optxdir/x')));
+
+        $this->assertSame([], $this->router->match(new RequestContext('GET', '/opt.typed'))?->params);
+        $this->assertSame(['n' => '7'], $this->router->match(new RequestContext('GET', '/opt.typed/7'))?->params);
+        $this->assertNull($this->router->match(new RequestContext('GET', '/opt.typed/x')));
+
+        $this->assertSame(['path' => 'a/b/c'], $this->router->match(new RequestContext('GET', '/tree/a/b/c'))?->params);
+    }
+
+    // ------------------------------------------------------------------
+    // #91: parameters are percent-decoded after matching, the path is not.
+    // ------------------------------------------------------------------
+
+    public function testParametersArePercentDecoded(): void
+    {
+        $this->router->get('/p/{name}', 'Page');
+
+        $match = $this->router->match(new RequestContext('GET', '/p/%E6%97%A5%E6%9C%AC'));
+
+        $this->assertSame(['name' => '日本'], $match?->params);
+    }
+
+    public function testEncodedSlashDoesNotSplitASegment(): void
+    {
+        $this->router->get('/p/{name}', 'Page');
+
+        $this->assertSame(['name' => 'a/b'], $this->router->match(new RequestContext('GET', '/p/a%2Fb'))?->params);
+        $this->assertNull($this->router->match(new RequestContext('GET', '/p/a/b')));
+    }
+
+    public function testParametersAreDecodedExactlyOnce(): void
+    {
+        $this->router->get('/p/{name}', 'Page');
+
+        $this->assertSame(['name' => 'a%2Fb'], $this->router->match(new RequestContext('GET', '/p/a%252Fb'))?->params);
+    }
+
+    public function testPlusInAParameterStaysAPlus(): void
+    {
+        $this->router->get('/p/{name}', 'Page');
+
+        $this->assertSame(['name' => 'a+b'], $this->router->match(new RequestContext('GET', '/p/a+b'))?->params);
+    }
+
+    public function testCustomRegexIsAppliedBeforeDecoding(): void
+    {
+        $this->router->get('/n/{id:\d+}', 'Number');
+
+        $this->assertNull($this->router->match(new RequestContext('GET', '/n/%31x')));
+        $this->assertNull($this->router->match(new RequestContext('GET', '/n/%31')));
+        $this->assertSame(['id' => '1'], $this->router->match(new RequestContext('GET', '/n/1'))?->params);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function undecodableParameterProvider(): iterable
+    {
+        yield 'lone continuation byte' => ['/p/%80'];
+        yield 'invalid lead byte' => ['/p/%FF'];
+        yield 'truncated sequence' => ['/p/%E6%97'];
+        yield 'overlong encoding of a slash' => ['/p/%C0%AF'];
+        yield 'NUL byte' => ['/p/a%00b'];
+    }
+
+    #[DataProvider('undecodableParameterProvider')]
+    public function testParameterThatDoesNotDecodeToUsableTextIsNotAMatch(string $path): void
+    {
+        $this->router->get('/p/{name}', 'Page');
+
+        $this->assertNull($this->router->match(new RequestContext('GET', $path)));
+    }
+
+    // ------------------------------------------------------------------
+    // #90: HEAD is answered by the route that would answer GET.
+    // ------------------------------------------------------------------
+
+    public function testHeadFallsBackToGetRoute(): void
+    {
+        $this->router->get('/users/{id}', 'User');
+
+        $match = $this->router->match(new RequestContext('HEAD', '/users/7'));
+
+        $this->assertSame('User', $match?->handler);
+        $this->assertSame(['id' => '7'], $match->params);
+    }
+
+    public function testExplicitHeadRouteWinsOverAnEarlierGetRoute(): void
+    {
+        $this->router->get('/x', 'Get');
+        $this->router->addRoute('HEAD', '/x', 'Head');
+
+        $this->assertSame('Head', $this->router->match(new RequestContext('HEAD', '/x'))?->handler);
+        $this->assertSame('Get', $this->router->match(new RequestContext('GET', '/x'))?->handler);
+    }
+
+    public function testHeadPicksTheSameRouteAsGetWhenAnyRouteAlsoMatches(): void
+    {
+        $this->router->get('/x', 'Get');
+        $this->router->any('/x', 'Any');
+        $this->router->any('/y', 'Any');
+        $this->router->get('/y', 'Get');
+
+        $this->assertSame('Get', $this->router->match(new RequestContext('HEAD', '/x'))?->handler);
+        $this->assertSame('Any', $this->router->match(new RequestContext('HEAD', '/y'))?->handler);
+    }
+
+    public function testHeadDoesNotFallBackToOtherMethods(): void
+    {
+        $this->router->post('/x', 'Post');
+
+        $this->assertNull($this->router->match(new RequestContext('HEAD', '/x')));
+    }
+
+    public function testGetDoesNotMatchHeadOnlyRoute(): void
+    {
+        $this->router->addRoute('HEAD', '/x', 'Head');
+
+        $this->assertNull($this->router->match(new RequestContext('GET', '/x')));
+    }
+
+    public function testCustomRegexEndingInASlashKeepsThatSlash(): void
+    {
+        $this->router->get('/dir/{name:[a-z]+/}end', 'Slash');
+
+        $this->assertSame(['name' => 'x/'], $this->router->match(new RequestContext('GET', '/dir/x/end'))?->params);
     }
 }

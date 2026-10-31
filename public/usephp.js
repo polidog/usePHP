@@ -566,6 +566,21 @@
     // Partial form submission
     // =====================================================================
 
+    // One request per component at a time. Setter values are fixed into the
+    // form when it is rendered, so a second submit during the first would
+    // replay the same stale value and its stale snapshot would overwrite the
+    // first response.
+    //
+    // A submit that arrives while busy is dropped, not queued for the form
+    // the response renders: `onClick: fn() => $delete($row)` is bound to
+    // whatever the server rendered there, so replaying a double click after
+    // the morph could delete the next row. A lost click shows on screen and
+    // can be repeated; a replay on the wrong target cannot be undone.
+    //
+    // The lock is not the `disabled` attribute, which would take focus off
+    // the button, nor aria-busy, which a parent's morph can remove.
+    const busyComponents = new WeakSet();
+
     // A partial submit that came back non-OK (or threw) must NOT be
     // replayed as a full-page `form.submit()`: the request may already
     // have been processed server-side (render failed after the state
@@ -615,21 +630,22 @@
         return document.querySelector('[data-usephp="' + CSS.escape(id) + '"]') || closest;
     }
 
-    // Latest request per component: the response to an older one must not
-    // overwrite a newer one that overtook it.
-    const latestSubmit = new WeakMap();
-
-    // `source` is the element that fired the action; `submitter` is passed to
-    // FormData so a named submit button is sent just as without JavaScript.
-    async function submitAction(form, { source = null, submitter = null } = {}) {
+    // `source` is the element that fired the action, `event` the trigger event
+    // it fired on. `submitter` is passed to FormData so a named submit button
+    // is sent just as without JavaScript.
+    async function submitAction(form, { source = null, submitter = null, event = null } = {}) {
         const component = componentForForm(form);
         if (!component) {
             form.submit();
             return;
         }
 
-        const seq = (latestSubmit.get(component) || 0) + 1;
-        latestSubmit.set(component, seq);
+        queueResendIfBusy(component, form, { source, submitter, event });
+        if (busyComponents.has(component)) return;
+        busyComponents.add(component);
+
+        const submission = { form, sent: captureFields(component) };
+        sentSubmissions.set(component, submission);
 
         component.setAttribute('aria-busy', 'true');
         component.removeAttribute('data-usephp-error');
@@ -653,11 +669,14 @@
                 body: formData
             });
 
-            if (latestSubmit.get(component) !== seq) return;
 
             // If redirected, the server doesn't support partial updates for this component
             // Fall back to page navigation (PRG pattern)
             if (response.redirected) {
+                // A queued value still has to reach the server, and navigating
+                // now would abort it. Its own response redirects in turn.
+                if (hasResends(component)) return;
+
                 // The server only ever redirects to its own origin (PRG
                 // back to the page). Refuse to navigate anywhere else so a
                 // misbehaving proxy or a server bug cannot turn the partial
@@ -678,7 +697,15 @@
             }
 
             if (response.ok) {
-                applyPartial(component, await response.text());
+                // Read first: the morph may turn this form into another one.
+                const reloadFrom = [form, source].find(
+                    (el) => el && el.hasAttribute('data-usephp-reload-defer'),
+                );
+                const reloadTargets = reloadFrom
+                    ? reloadFrom.getAttribute('data-usephp-reload-defer')
+                    : null;
+
+                applyPartial(component, await response.text(), submission);
 
                 // Declarative post-submit reload, dispatched *before* the
                 // generic processDeferred() scan. The canonical "form
@@ -688,13 +715,10 @@
                 // for those wrappers, so the processDeferred() scan below
                 // single-flight-yields instead of racing it with a second
                 // (possibly cache-stale) fetch. The mutation's partial
-                // response is already applied (innerHTML above), so the
-                // re-fetch reflects the new state.
-                const reloadFrom = [form, source].find(
-                    (el) => el && el.hasAttribute('data-usephp-reload-defer'),
-                );
-                if (reloadFrom) {
-                    dispatchReloadDefer(reloadFrom.getAttribute('data-usephp-reload-defer'));
+                // response is already applied (above), so the re-fetch
+                // reflects the new state.
+                if (reloadTargets !== null) {
+                    dispatchReloadDefer(reloadTargets);
                 }
 
                 // Newly injected HTML may contain (other, non-reload-target)
@@ -704,13 +728,12 @@
                 reportSubmitFailure(form, component, { response });
             }
         } catch (error) {
-            if (latestSubmit.get(component) === seq) {
-                reportSubmitFailure(form, component, { error });
-            }
+            reportSubmitFailure(form, component, { error });
         } finally {
-            if (latestSubmit.get(component) === seq) {
-                component.removeAttribute('aria-busy');
-            }
+            busyComponents.delete(component);
+            sentSubmissions.delete(component);
+            component.removeAttribute('aria-busy');
+            flushResends(component);
         }
     }
 
@@ -730,7 +753,88 @@
             console.warn('[usePHP] no action form found for', trigger);
             return;
         }
-        submitAction(form, { source: trigger });
+        submitAction(form, { source: trigger, event });
+    }
+
+    // An action dropped by the lock is lost, which is right for a fixed-value
+    // button: the click was a double click. An action that reads its values
+    // when it is sent (useFormAction) is different: dropping it would leave
+    // the server without what the user typed last. It is sent once more when
+    // the lock is released, reading the values at that point. Only the latest
+    // request per control is kept, and they go out one at a time.
+    const WITH_VALUE = 'data-usephp-with-value';
+    const queuedResends = new WeakMap();
+    const sentSubmissions = new WeakMap();
+    let composingElement = null;
+
+    function hasResends(component) {
+        const queue = queuedResends.get(component);
+        return Boolean(queue && queue.size > 0);
+    }
+
+    function resendQueue(component) {
+        if (!queuedResends.has(component)) queuedResends.set(component, new Map());
+        return queuedResends.get(component);
+    }
+
+    // A second submit of the form being sent, with the same values, is a
+    // double click. Sending it again could even overwrite the state with the
+    // empty fields the first response leaves behind.
+    function isSameDelivery(submission, form) {
+        return submission && submission.form === form && [...form.elements].every(
+            (el) => !submission.sent.has(el) || submission.sent.get(el) === fieldValue(el),
+        );
+    }
+
+    function queueResendIfBusy(component, form, { source, submitter, event }) {
+        if (!busyComponents.has(component)) return;
+        if (form.hasAttribute(WITH_VALUE)) {
+            if (!isSameDelivery(sentSubmissions.get(component), form)) {
+                resendQueue(component).set(form, { form, submitter });
+            }
+        } else if (source && event && source.hasAttribute(WITH_VALUE)) {
+            resendQueue(component).set(event + ':' + controlSelector(source), { trigger: source, event });
+        }
+    }
+
+    function controlSelector(el) {
+        if (el.id) return '[id="' + CSS.escape(el.id) + '"]';
+        const selector = el.tagName.toLowerCase() + '[name="' + CSS.escape(el.name) + '"]';
+        return el.type === 'radio' || el.type === 'checkbox'
+            ? selector + '[value="' + CSS.escape(el.value) + '"]'
+            : selector;
+    }
+
+    // A morph can replace a control (its name or type changed, or the markup
+    // around it did). What the user typed exists only on the old element, so
+    // carry it over to the element now standing in for it.
+    function liveTrigger(trigger, event, root) {
+        if (trigger.isConnected) return trigger;
+        const scope = root && root.isConnected ? root : document;
+        const current = scope.querySelector(controlSelector(trigger) + '[data-usephp-on-' + event + ']');
+        if (current) setFieldValue(current, fieldValue(trigger));
+        return current;
+    }
+
+    function flushResends(component) {
+        const queue = queuedResends.get(component);
+        if (!queue) return;
+        for (const [key, entry] of queue) {
+            queue.delete(key);
+            if (entry.form) {
+                const { id } = entry.form;
+                const form = entry.form.isConnected ? entry.form : (id && document.getElementById(id));
+                if (form) {
+                    const submitter = entry.submitter && entry.submitter.form === form ? entry.submitter : null;
+                    submitAction(form, { source: submitter, submitter });
+                }
+            } else {
+                const trigger = liveTrigger(entry.trigger, entry.event, component);
+                // compositionend schedules the final value anyway.
+                if (trigger && trigger !== composingElement) fireTrigger(trigger, entry.event);
+            }
+            if (busyComponents.has(component)) return;
+        }
     }
 
     // A click on something interactive inside a trigger (a link or checkbox
@@ -762,16 +866,19 @@
     });
 
     // `input` fires per keystroke, so it waits for a pause in typing. Each
-    // element has its own timer; partial updates hand them over to the
-    // re-rendered element (see applyPartial).
+    // element has its own timer.
     const INPUT_DEBOUNCE_MS = 300;
     const pendingInputs = new Map();
 
     function scheduleInput(trigger) {
         clearTimeout(pendingInputs.get(trigger));
+        const root = trigger.closest('[data-usephp]');
         pendingInputs.set(trigger, setTimeout(function() {
             pendingInputs.delete(trigger);
-            if (trigger.isConnected) fireTrigger(trigger, 'input');
+            const current = trigger.hasAttribute(WITH_VALUE)
+                ? liveTrigger(trigger, 'input', root)
+                : (trigger.isConnected ? trigger : null);
+            if (current) fireTrigger(current, 'input');
         }, INPUT_DEBOUNCE_MS));
     }
 
@@ -785,6 +892,7 @@
     // element would abort the composition.
     document.addEventListener('compositionstart', function(e) {
         if (!(e.target instanceof Element)) return;
+        composingElement = e.target;
         const trigger = e.target.closest('[data-usephp-on-input]');
         if (trigger && pendingInputs.has(trigger)) {
             clearTimeout(pendingInputs.get(trigger));
@@ -793,6 +901,7 @@
     });
 
     document.addEventListener('compositionend', function(e) {
+        composingElement = null;
         if (!(e.target instanceof Element)) return;
         const trigger = e.target.closest('[data-usephp-on-input]');
         if (trigger) scheduleInput(trigger);
@@ -1028,87 +1137,228 @@
     // Partial responses
     // =====================================================================
 
-    // Replacing a component's contents would take the focus and the caret
-    // away from whoever is typing in it, and drop text typed while a request
-    // was in flight. Remember those controls by id or name, and put them
-    // back on their re-rendered counterparts.
-    function controlSelector(el) {
-        if (el.id) return '[id="' + CSS.escape(el.id) + '"]';
-        if (!el.name) return null;
-        const selector = el.tagName.toLowerCase() + '[name="' + CSS.escape(el.name) + '"]';
-        return el.type === 'radio' || el.type === 'checkbox'
-            ? selector + '[value="' + CSS.escape(el.value) + '"]'
-            : selector;
+    // A partial response is morphed into the live DOM instead of replacing
+    // it: an element that survives keeps its identity, and with it focus,
+    // selection, scroll position, an IME composition and the keyboard user's
+    // next Enter. Restoring those by id/name after an innerHTML swap could
+    // not cover the common id-less button.
+    //
+    // Children pair up by id first, then in order among elements with the
+    // same MORPH_IDENTITY, so give list rows an `id` when they can reorder:
+    // without one, rows are matched by position. Changing an element's id is
+    // also how a render asks for a fresh element.
+    const MORPH_IDENTITY = ['id', 'name', 'type', 'data-usephp', 'data-usephp-defer-url'];
+    const NON_USER_INPUT_TYPES = ['hidden', 'submit', 'button', 'reset', 'image'];
+    const FOCUSABLE = 'a[href],button:not([disabled]),select:not([disabled]),textarea:not([disabled]),'
+        + 'input:not([disabled]):not([type="hidden"]),[tabindex]';
+
+    function canMorph(from, to) {
+        if (from.nodeType !== to.nodeType || from.nodeName !== to.nodeName) return false;
+        if (from.nodeType !== Node.ELEMENT_NODE) return true;
+        if (from.nodeName === 'TEMPLATE') return false;
+        return MORPH_IDENTITY.every((name) => from.getAttribute(name) === to.getAttribute(name));
     }
 
-    function captureLiveControls(component) {
-        const active = document.activeElement;
-        const controls = new Set();
-        if (active && active !== document.body && component.contains(active)) controls.add(active);
-        pendingInputs.forEach((timer, el) => {
-            if (component.contains(el)) controls.add(el);
-        });
+    function isUserField(el) {
+        if (el.nodeName === 'INPUT') return !NON_USER_INPUT_TYPES.includes(el.type);
+        return el.nodeName === 'TEXTAREA' || el.nodeName === 'SELECT';
+    }
 
-        const live = [];
-        controls.forEach((el) => {
-            const selector = controlSelector(el);
-            const pending = pendingInputs.has(el);
-            if (pending) {
-                clearTimeout(pendingInputs.get(el));
-                pendingInputs.delete(el);
-            }
-            if (!selector) return;
-            live.push({
-                selector,
-                pending,
-                focused: el === active,
-                value: el.hasAttribute('data-usephp-on-input') ? el.value : null,
-                selectionStart: el.selectionStart,
-                selectionEnd: el.selectionEnd,
+    function isCheckable(el) {
+        return el.nodeName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio');
+    }
+
+    function selectedValues(options) {
+        return JSON.stringify(options.map((option) => option.value));
+    }
+
+    function fieldValue(el) {
+        if (isCheckable(el)) return String(el.checked);
+        if (el.nodeName === 'SELECT') return selectedValues([...el.selectedOptions]);
+        return el.value;
+    }
+
+    // What the markup says, ignoring whatever the user did to the field.
+    function fieldRendered(el) {
+        if (isCheckable(el)) return String(el.defaultChecked);
+        if (el.nodeName === 'SELECT') {
+            return selectedValues([...el.options].filter((option) => option.defaultSelected));
+        }
+        return el.type === 'file' ? '' : el.defaultValue;
+    }
+
+    function setFieldValue(el, value) {
+        if (isCheckable(el)) {
+            el.checked = value === 'true';
+        } else if (el.nodeName === 'SELECT') {
+            const selected = JSON.parse(value);
+            // Clearing every option of a single select falls back to the
+            // first one, as it does when the markup selects none.
+            [...el.options].forEach((option) => {
+                option.selected = selected.includes(option.value);
             });
-        });
-        return live;
+        } else {
+            el.value = value;
+        }
     }
 
-    function restoreLiveControls(component, live) {
-        live.forEach((control) => {
-            const el = component.querySelector(control.selector);
-            if (!el) return;
-            try {
-                if (control.value !== null) el.value = control.value;
-                if (control.focused) {
-                    el.focus({ preventScroll: true });
-                    if (control.selectionStart !== null && control.selectionStart !== undefined) {
-                        el.setSelectionRange(control.selectionStart, control.selectionEnd);
-                    }
-                }
-            } catch {
-                // Not every control supports a caret or a scripted value.
+    // Values at submit time. A field that differs from this when the response
+    // lands was edited during the request, which the response cannot know.
+    function captureFields(component) {
+        const fields = new Map();
+        component.querySelectorAll('input,textarea,select').forEach((el) => {
+            if (isUserField(el)) fields.set(el, fieldValue(el));
+        });
+        return fields;
+    }
+
+    // Who wins a field that survives the morph, most recent intent first:
+    //
+    //   1. Edited during the request   -> the user: newer than the response.
+    //   2. Server rendered a new value -> the server: it decided on a value.
+    //   3. In the form that was sent   -> the server: the value was delivered,
+    //                                     so clear it as a full page POST would.
+    //   4. Otherwise (unsent input)    -> the user.
+    //
+    // Hidden fields are excluded: they follow their attribute, which is how a
+    // fresh action, signature and CSRF token reach the next submit.
+    function resolveFieldValue(before, rendered, submission) {
+        if (submission && submission.sent.has(before.el)
+            && submission.sent.get(before.el) !== before.value) {
+            return before.value;
+        }
+        if (rendered !== before.rendered) return rendered;
+        if (submission && before.form === submission.form) return rendered;
+        return before.value;
+    }
+
+    function morphAttributes(from, to) {
+        [...from.attributes].forEach((attr) => {
+            if (!to.hasAttributeNS(attr.namespaceURI, attr.localName)) {
+                from.removeAttributeNode(attr);
             }
-            if (control.pending) scheduleInput(el);
+        });
+        // Cloning the node keeps the namespace and accepts any name the
+        // parser did, which setAttribute() would not (`@click`).
+        [...to.attributes].forEach((attr) => {
+            if (from.getAttributeNS(attr.namespaceURI, attr.localName) !== attr.value) {
+                from.setAttributeNode(attr.cloneNode());
+            }
         });
     }
 
-    // Swap a component's contents for the partial HTML the server returned
-    // and pick up the refreshed snapshot it carries. Shared by the form
-    // submit path and the snapshot restore path below.
-    function applyPartial(component, html) {
-        // Server-rendered HTML is trusted content from our endpoint. Parse it
-        // in a template: innerHTML on a wrapper inside an application's <form>
-        // would make the parser drop the action forms in the response.
+    function morphNode(from, to, submission) {
+        if (from.nodeType !== Node.ELEMENT_NODE) {
+            if (from.nodeValue !== to.nodeValue) from.nodeValue = to.nodeValue;
+            return;
+        }
+        // Same defer URL (canMorph checked): the region is resolved or being
+        // fetched, and what it holds is newer than the placeholder in this
+        // response. reloadDefer() remains the way to refresh it.
+        if (from.hasAttribute('data-usephp-defer-url')) return;
+
+        const before = isUserField(from)
+            ? { el: from, value: fieldValue(from), rendered: fieldRendered(from), form: from.form }
+            : null;
+
+        morphAttributes(from, to);
+        morphChildren(from, to, submission);
+
+        if (before) {
+            const value = resolveFieldValue(before, fieldRendered(from), submission);
+            // Only write on a difference: assigning moves the caret.
+            if (fieldValue(from) !== value) setFieldValue(from, value);
+        }
+    }
+
+    function findMorphTarget(next, cursor, keyed) {
+        if (next.nodeType !== Node.ELEMENT_NODE) {
+            return cursor && canMorph(cursor, next) ? cursor : null;
+        }
+        if (next.id) {
+            const keyedTarget = keyed.get(next.id);
+            return keyedTarget && canMorph(keyedTarget, next) ? keyedTarget : null;
+        }
+        for (let node = cursor; node; node = node.nextSibling) {
+            if (node.nodeType === Node.ELEMENT_NODE && canMorph(node, next)) return node;
+        }
+        return null;
+    }
+
+    function morphChildren(from, to, submission) {
+        const keyed = new Map();
+        [...from.children].forEach((el) => {
+            if (el.id && !keyed.has(el.id)) keyed.set(el.id, el);
+        });
+        const wanted = new Set([...to.children].map((el) => el.id).filter(Boolean));
+        const isWanted = (node) => node.nodeType === Node.ELEMENT_NODE && wanted.has(node.id);
+
+        let cursor = from.firstChild;
+        [...to.childNodes].forEach((next) => {
+            const target = findMorphTarget(next, cursor, keyed);
+            if (!target) {
+                from.insertBefore(next, cursor);
+                return;
+            }
+            // Drop what stands in front of the target rather than moving the
+            // target, because moving a focused element blurs it.
+            while (cursor && cursor !== target && !isWanted(cursor)) {
+                const dropped = cursor;
+                cursor = cursor.nextSibling;
+                dropped.remove();
+            }
+            if (cursor === target) {
+                cursor = cursor.nextSibling;
+            } else {
+                from.insertBefore(target, cursor);
+            }
+            if (target.id) keyed.delete(target.id);
+            morphNode(target, next, submission);
+        });
+        while (cursor) {
+            const dropped = cursor;
+            cursor = cursor.nextSibling;
+            dropped.remove();
+        }
+    }
+
+    // A focused element that moved loses focus; one that was removed takes it
+    // to <body>, where the next Enter does nothing. Put it back, or on
+    // whatever now sits at the same place in the tab order.
+    function restoreFocus(component, focused, focusIndex) {
+        const active = document.activeElement;
+        if (active === focused || (active && active !== document.body)) return;
+        const focusable = [...component.querySelectorAll(FOCUSABLE)];
+        const target = focused.isConnected
+            ? focused
+            : focusable[Math.min(focusIndex, focusable.length - 1)];
+        if (target) target.focus({ preventScroll: true });
+    }
+
+    // Apply the partial HTML the server returned and pick up the refreshed
+    // snapshot it carries. Shared by the form submit path (which passes
+    // `submission`, see resolveFieldValue) and the snapshot restore path.
+    function applyPartial(component, html, submission) {
+        // Server-rendered HTML is trusted content from our endpoint. Parsing
+        // into a template also keeps <script> in it inert.
         const template = document.createElement('template');
         template.innerHTML = html;
-        const live = captureLiveControls(component);
-        component.replaceChildren(template.content);
-        restoreLiveControls(component, live);
 
         // Update snapshot on component from hidden field in response
-        const snapshotField = component.querySelector('[data-usephp-snapshot-update]');
+        const snapshotField = template.content.querySelector('[data-usephp-snapshot-update]');
         if (snapshotField) {
             component.dataset.usephpSnapshot = snapshotField.value;
             // Remove the hidden field as it's not needed in DOM
             snapshotField.remove();
         }
+
+        const active = document.activeElement;
+        const focused = active && active !== component && component.contains(active) ? active : null;
+        const focusIndex = focused ? [...component.querySelectorAll(FOCUSABLE)].indexOf(focused) : -1;
+
+        morphChildren(component, template.content, submission);
+
+        if (focused) restoreFocus(component, focused, focusIndex);
 
         saveSnapshot(component);
     }
@@ -1188,6 +1438,7 @@
             return;
         }
         if (!saved || saved === component.dataset.usephpSnapshot) return;
+        if (busyComponents.has(component)) return;
 
         const instanceId = component.dataset.usephp;
         const formData = new FormData();
@@ -1205,6 +1456,7 @@
             || document.querySelector('form[data-usephp-form] input[name="_usephp_csrf"]');
         if (csrf) formData.set('_usephp_csrf', csrf.value);
 
+        busyComponents.add(component);
         component.setAttribute('aria-busy', 'true');
         try {
             const response = await fetch(location.href, {
@@ -1221,6 +1473,7 @@
         } catch {
             // Network failure: keep the saved snapshot for the next load.
         } finally {
+            busyComponents.delete(component);
             component.removeAttribute('aria-busy');
         }
     }

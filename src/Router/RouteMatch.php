@@ -14,12 +14,14 @@ final readonly class RouteMatch
      * @param array<string, string> $params URL parameters extracted from the route pattern
      * @param SnapshotBehavior $snapshotBehavior How snapshots should be handled for this route
      * @param string|null $sharedGroup Group name for shared snapshot behavior
+     * @param array<callable|string> $middleware Guards to run before the handler
      */
     public function __construct(
         public mixed $handler,
         public array $params = [],
         public SnapshotBehavior $snapshotBehavior = SnapshotBehavior::Isolated,
         public ?string $sharedGroup = null,
+        public array $middleware = [],
     ) {}
 
     /**
@@ -34,6 +36,7 @@ final readonly class RouteMatch
             params: $params,
             snapshotBehavior: $this->snapshotBehavior,
             sharedGroup: $this->sharedGroup,
+            middleware: $this->middleware,
         );
     }
 }

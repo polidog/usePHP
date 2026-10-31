@@ -79,7 +79,38 @@ final class RouteBuilder
     }
 
     /**
-     * Add middleware to this route.
+     * Add middleware to this route: guards that run, in order, before anything
+     * else happens for the route. That covers GET and HEAD, and also action
+     * POSTs to the page, which are dispatched before GET routing.
+     *
+     * A middleware is a callable or the name of an invokable class with a
+     * no-argument constructor, and is called like a route handler:
+     * `function (array $params, RequestContext $request)`. `$params` are the
+     * route's parameters and `$request` is the actual request, so `method` is
+     * `POST` for an action. What it returns decides what happens next:
+     *
+     * - `null` (or nothing) or `true`: continue with the next middleware,
+     *   then the handler.
+     * - `false`: end the request with `403 Forbidden`.
+     * - a string or `Element`: end the request with that as the body. The
+     *   status stays whatever the middleware set with `http_response_code()`.
+     *
+     * It can also end the request itself with `exit` or `UsePHP::redirect()`,
+     * or throw; the exception propagates out of `run()` and the handler does
+     * not run. Any other return value, or a middleware that can't be resolved,
+     * is a `LogicException`, so a broken guard never leaves the route open.
+     *
+     * Guards belong to the URL they are attached to. Not covered:
+     * - deferred component endpoints (`GET /_defer/{name}`), which have no
+     *   route. A deferred component on a protected page has to check access
+     *   itself.
+     * - a custom front controller that invokes handlers on its own, unless it
+     *   calls `UsePHP::runRouteMiddleware()`.
+     * - an action POSTed to a different, unguarded URL. Action signatures are
+     *   bound to the session and the component instance but not to the page,
+     *   so a session that received a signed form while it had access can still
+     *   submit it elsewhere after losing access. Regenerate the session id when
+     *   access changes, or check access inside the component.
      *
      * @param callable|string ...$middleware
      */

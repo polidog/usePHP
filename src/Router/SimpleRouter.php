@@ -100,6 +100,9 @@ final class SimpleRouter implements RouterInterface
     /**
      * Add a route that matches multiple HTTP methods.
      *
+     * Settings made on the returned builder (middleware, snapshot behavior)
+     * apply to all of the methods.
+     *
      * @param array<string> $methods
      */
     public function matchMethods(array $methods, string $pattern, callable|string $handler): RouteBuilder
@@ -108,10 +111,21 @@ final class SimpleRouter implements RouterInterface
             throw new \InvalidArgumentException('At least one HTTP method is required');
         }
 
-        $builder = $this->addRoute(strtoupper($methods[0]), $pattern, $handler);
-        for ($i = 1; $i < count($methods); $i++) {
-            $this->addRoute(strtoupper($methods[$i]), $pattern, $handler);
-        }
+        $methods = array_map(strtoupper(...), array_values($methods));
+
+        $register = function (Route $route) use ($methods, $pattern): void {
+            foreach ($methods as $method) {
+                $this->routes[$method . ':' . $pattern] = $route->withMethod($method);
+            }
+        };
+
+        $builder = new RouteBuilder(
+            method: $methods[0],
+            pattern: $pattern,
+            handler: $handler,
+            registerCallback: $register,
+        );
+        $register($builder->build());
 
         return $builder;
     }
@@ -166,6 +180,18 @@ final class SimpleRouter implements RouterInterface
         $path = '/' . trim($path, '/');
         if ($path !== '/') {
             $path = rtrim($path, '/');
+        }
+
+        // HEAD is answered by the route that would answer GET, unless a route
+        // was registered for HEAD itself. The handler runs as usual: the SAPI
+        // drops the body of a HEAD response.
+        if ($method === 'HEAD') {
+            foreach ($this->routes as $route) {
+                if ($route->method === 'HEAD' && ($params = $route->match($path)) !== null) {
+                    return $route->toRouteMatch($params);
+                }
+            }
+            $method = 'GET';
         }
 
         foreach ($this->routes as $route) {
@@ -240,19 +266,44 @@ final class SimpleRouter implements RouterInterface
             );
         }
 
-        $query = [];
-        if (isset($parsedUrl['query'])) {
-            parse_str($parsedUrl['query'], $query);
+        // Edit the raw query instead of rebuilding it: parse_str() rewrites
+        // names like `a.b` and caps the number of variables.
+        $query = self::removeQueryParam($parsedUrl['query'] ?? '', $this->snapshotParam);
+        $snapshotQuery = http_build_query([$this->snapshotParam => $encoded]);
+
+        return $path . '?' . ($query === '' ? '' : $query . '&') . $snapshotQuery;
+    }
+
+    /**
+     * Remove every occurrence of a parameter from a raw query string, leaving
+     * the rest byte for byte. A segment matches when PHP would read it as that
+     * parameter, including encoded (`%5Fsnapshot`) and array (`_snapshot[]`)
+     * forms.
+     *
+     * @internal
+     */
+    public static function removeQueryParam(string $query, string $param): string
+    {
+        $kept = [];
+        foreach (explode('&', $query) as $segment) {
+            if ($segment === '') {
+                continue;
+            }
+            parse_str($segment, $parsed);
+            if (!array_key_exists($param, $parsed)) {
+                $kept[] = $segment;
+            }
         }
 
-        $query[$this->snapshotParam] = $encoded;
-
-        return $path . '?' . http_build_query($query);
+        return implode('&', $kept);
     }
 
     public function extractSnapshot(RequestContext $request): ?string
     {
-        return $request->getQuery($this->snapshotParam);
+        // `?_snapshot[]=1` arrives as an array; it can't be a snapshot.
+        $snapshot = $request->getQuery($this->snapshotParam);
+
+        return is_string($snapshot) ? $snapshot : null;
     }
 
     /**
@@ -263,6 +314,14 @@ final class SimpleRouter implements RouterInterface
         $this->snapshotParam = $param;
 
         return $this;
+    }
+
+    /**
+     * Get the query parameter name used for snapshot data.
+     */
+    public function getSnapshotParam(): string
+    {
+        return $this->snapshotParam;
     }
 
     /**

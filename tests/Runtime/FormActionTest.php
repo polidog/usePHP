@@ -292,12 +292,33 @@ final class FormActionTest extends TestCase
         return new Renderer('form#0')->renderElement($element);
     }
 
+    public function testSetFieldsRoundTripsThroughJson(): void
+    {
+        $action = Action::setFields(['title' => 0, 'memo' => 1], self::INSTANCE, StorageType::Session);
+
+        $decoded = json_decode($action->toJson(), true, 512, JSON_THROW_ON_ERROR);
+        self::assertIsArray($decoded);
+        self::assertEquals($action, Action::fromArray($decoded));
+    }
+
+    public function testSetFieldsIsRefusedWhenItsPayloadCannotSurviveJson(): void
+    {
+        // @phpstan-ignore-next-line argument.type
+        $action = Action::setFields(['title' => new \stdClass()], self::INSTANCE);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('fields.title');
+        $action->toJson();
+    }
+
     public function testFormOnSubmitRendersTheMapInTheSignedAction(): void
     {
         $action = Action::setFields(['title' => 0], self::INSTANCE);
         $html = $this->render(H::form(onSubmit: $action, children: [H::input(name: 'title')]));
 
         self::assertStringContainsString(htmlspecialchars($action->toJson(), ENT_QUOTES), $html);
+        // usephp.js resends these after the lock instead of dropping them.
+        self::assertStringContainsString('data-usephp-with-value', $html);
     }
 
     public function testOnChangeSendsTheValueOfItsOwnField(): void
