@@ -106,11 +106,6 @@ final class RouteBuilder
      *   itself.
      * - a custom front controller that invokes handlers on its own, unless it
      *   calls `UsePHP::runRouteMiddleware()`.
-     * - an action POSTed to a different, unguarded URL. Action signatures are
-     *   bound to the session and the component instance but not to the page,
-     *   so a session that received a signed form while it had access can still
-     *   submit it elsewhere after losing access. Regenerate the session id when
-     *   access changes, or check access inside the component.
      *
      * @param callable|string ...$middleware
      */

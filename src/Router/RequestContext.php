@@ -145,6 +145,18 @@ final readonly class RequestContext
     }
 
     /**
+     * The form of a path that decides which route it matches. Two paths with
+     * the same form always reach the same route. Percent-encoding stays: the
+     * router compares a route's fixed segments with the raw path.
+     */
+    public static function normalizePath(string $path): string
+    {
+        $path = '/' . trim($path, '/');
+
+        return $path === '/' ? $path : rtrim($path, '/');
+    }
+
+    /**
      * Get the full URL (path + query string).
      */
     public function getUrl(): string

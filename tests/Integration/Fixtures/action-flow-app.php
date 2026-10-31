@@ -57,6 +57,9 @@ final class SnapshotClassCounter extends FixtureCounter {}
 #[Component(name: 'renamed-snapshot', storage: 'snapshot')]
 final class RenamedSnapshotCounter extends FixtureCounter {}
 
+#[Component(storage: 'snapshot', persist: 'sessionStorage')]
+final class PersistedAdminCounter extends FixtureCounter {}
+
 #[Component]
 final class TaskDetail extends BaseComponent
 {
@@ -119,6 +122,7 @@ $app->register(SessionClassCounter::class);
 $app->register(MemoryClassCounter::class);
 $app->register(SnapshotClassCounter::class);
 $app->register(RenamedSnapshotCounter::class);
+$app->register(PersistedAdminCounter::class);
 $app->register(TaskDetail::class);
 $app->register(MemoryTwoStates::class);
 $app->register(PostLikes::class);
@@ -393,6 +397,31 @@ $router->get('/resend-child', static fn(): Element => fc(static function (array 
         $fieldChild([]),
     ]);
 }, 'field-parent', StorageType::Snapshot)([]));
+
+// The same instance on a guarded page and on open ones, as a shared layout
+// component would be.
+$boundSession = fc(static function (array $props): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::button(onClick: fn() => $setCount($count + 1), children: "bound={$count}");
+}, 'bound', StorageType::Session);
+$boundSnapshot = fc(static function (array $props): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::button(onClick: fn() => $setCount($count + 1), children: "snap={$count}");
+}, 'bound-snap', StorageType::Snapshot);
+$boundPage = static fn(): Element => H::div(children: [$boundSession([]), $boundSnapshot([])]);
+$router->get('/admin', static function () use ($boundPage): Element {
+    error_log('ADMIN-HANDLER-RAN');
+
+    return $boundPage();
+})->middleware($guard);
+$router->get('/public', $boundPage);
+$router->get('/other', $boundPage);
+$router->get('/items/{id}', $boundPage);
+$router->get('/admin-class', PersistedAdminCounter::class)->middleware($guard);
+$router->get('/persisted-on-persistent-route', PersistedAdminCounter::class)->persistentSnapshot();
+$router->get('/persisted-isolated', PersistedAdminCounter::class);
 
 // Text that looks like the renderer's own output.
 $router->get('/lookalike-page', static fn(): string => '<script>var a = \' data-usephp-snapshot="forged" <form data-usephp-form>\';</script>'

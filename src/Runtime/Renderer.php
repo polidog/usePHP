@@ -360,6 +360,12 @@ final class Renderer
             $attrs .= sprintf(' data-usephp-snapshot=\'%s\'', self::escape($snapshotJson));
             if ($this->persist !== null) {
                 $attrs .= sprintf(' data-usephp-persist="%s"', $this->persist->value);
+                $restoreSignature = $this->actionSigner !== null
+                    ? ($this->actionSigner)($this->componentId, UsePHP::RESTORE_SIGNING_INPUT)
+                    : null;
+                if ($restoreSignature !== null) {
+                    $attrs .= sprintf(' data-usephp-restore-sig="%s"', self::escape($restoreSignature));
+                }
             }
         }
 

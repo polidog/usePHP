@@ -128,6 +128,17 @@ final class UsePHP
     private ?string $deferredEndpointName = null;
 
     /**
+     * The defer endpoint whose response is being produced, for as long as its
+     * forms are rendered. See {@see actionScope()}.
+     */
+    private ?string $deferScopeName = null;
+
+    /**
+     * The path of the request {@see run()} was given.
+     */
+    private ?string $requestPath = null;
+
+    /**
      * What the handler passed to {@see renderElement()} during a replay, for a
      * handler that answers with a string. Null outside of a replay.
      *
@@ -816,6 +827,15 @@ final class UsePHP
     public const MAX_FORM_FIELD_BYTES = 65535;
 
     /**
+     * What {@see signAction()} signs in place of an action JSON to let a page
+     * restore a persisted snapshot. It is not valid JSON, so it can never pass
+     * for an action.
+     *
+     * @internal
+     */
+    public const RESTORE_SIGNING_INPUT = 'restore';
+
+    /**
      * Sign an action for the given component instance.
      *
      * Actions are rendered by the server and replayed by the browser, so the
@@ -823,6 +843,11 @@ final class UsePHP
      * did not emit. The key is the snapshot secret when configured, otherwise
      * a random per-session key; the active session id is mixed into the
      * payload so a form rendered in one session cannot be replayed in another.
+     *
+     * The signature also names where the action may be POSTed (see
+     * {@see actionScope()}), so that the page's route guards are the ones that
+     * apply to it. It defaults to the request being rendered; $pagePath signs
+     * for another page, which custom form rendering may need.
      *
      * The form must be signed under the session its POST will run in, so a
      * returning visitor's session is resumed here, the same way
@@ -835,14 +860,16 @@ final class UsePHP
      *
      * @internal Exposed for tests and custom form rendering; not stable API.
      */
-    public function signAction(string $componentId, string $actionJson): ?string
+    public function signAction(string $componentId, string $actionJson, ?string $pagePath = null): ?string
     {
         $this->resumeSessionFromCookie();
         if ($this->snapshotSerializer === null) {
             $this->startSessionIfPossible();
         }
 
-        return $this->computeActionSignature($componentId, $actionJson);
+        $scope = $pagePath !== null ? self::pageScope($pagePath) : $this->actionScope();
+
+        return $this->computeActionSignature($scope, $componentId, $actionJson);
     }
 
     /**
@@ -851,18 +878,73 @@ final class UsePHP
      * Never starts a session: a POST without a session cookie must stay
      * sessionless, and it must not be able to mint a key to verify against.
      *
+     * Accepted scopes are the page this POST went to, the one its route guards
+     * run for, and the defer endpoints. Nothing in the request selects among
+     * them, and the signature can only match a scope it was issued for.
+     *
      * @internal
      */
     public function verifyActionSignature(string $componentId, string $actionJson, string $signature): bool
     {
-        $expected = $this->computeActionSignature($componentId, $actionJson);
+        $scopes = [self::pageScope($this->actionRequestPath())];
+        foreach (array_keys($this->deferredRegistry) as $name) {
+            $scopes[] = self::deferScope($name);
+        }
 
-        return $expected !== null && hash_equals($expected, $signature);
+        foreach ($scopes as $scope) {
+            $expected = $this->computeActionSignature($scope, $componentId, $actionJson);
+            if ($expected !== null && hash_equals($expected, $signature)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
-    private function computeActionSignature(string $componentId, string $actionJson): ?string
+    /**
+     * Where an action signed now may be POSTed.
+     *
+     * Normally that is the page being rendered, so a form received on a guarded
+     * page cannot be submitted to an unguarded URL. The path is compared as the
+     * router compares it, and the query is left out, so the same route always
+     * means the same scope.
+     *
+     * A defer endpoint's fragment is rendered at `/_defer/{name}` but its forms
+     * POST to whichever page holds it, which the endpoint cannot know. Those
+     * are signed for the endpoint instead and accepted on any page. That gives
+     * away nothing: endpoints have no route, so no guard, and anyone can fetch
+     * a freshly signed form from one. The page's own guards still run on the
+     * POST, and a partial's forms are signed for that page again.
+     */
+    private function actionScope(): string
     {
-        $payload = $this->actionSigningPayload($componentId, $actionJson);
+        return $this->deferScopeName !== null
+            ? self::deferScope($this->deferScopeName)
+            : self::pageScope($this->actionRequestPath());
+    }
+
+    private static function pageScope(string $path): string
+    {
+        return 'page:' . RequestContext::normalizePath($path);
+    }
+
+    private static function deferScope(string $name): string
+    {
+        return 'defer:' . $name;
+    }
+
+    /**
+     * The path of the request in flight: what run() was given, which is also
+     * what its route guards run for, or else the request itself.
+     */
+    private function actionRequestPath(): string
+    {
+        return $this->requestPath ?? RequestContext::fromGlobals()->path;
+    }
+
+    private function computeActionSignature(string $scope, string $componentId, string $actionJson): ?string
+    {
+        $payload = $this->actionSigningPayload($scope, $componentId, $actionJson);
 
         if ($this->snapshotSerializer !== null) {
             return $this->snapshotSerializer->signString($payload);
@@ -920,11 +1002,11 @@ final class UsePHP
         return is_string($cookie) && $cookie !== '';
     }
 
-    private function actionSigningPayload(string $componentId, string $actionJson): string
+    private function actionSigningPayload(string $scope, string $componentId, string $actionJson): string
     {
         $sessionId = session_status() === PHP_SESSION_ACTIVE ? session_id() : '';
 
-        return "usephp-action\0" . $sessionId . "\0" . $componentId . "\0" . $actionJson;
+        return "usephp-action\0" . $scope . "\0" . $sessionId . "\0" . $componentId . "\0" . $actionJson;
     }
 
     /**
@@ -1130,6 +1212,7 @@ final class UsePHP
 
         try {
             $request ??= RequestContext::fromGlobals();
+            $this->requestPath = $request->path;
 
             // Handle POST actions first
             if ($request->isPost() && isset($_POST['_usephp_action'])) {
@@ -1166,6 +1249,7 @@ final class UsePHP
 
             echo $this->renderRouteHandler($match, $request);
         } finally {
+            $this->requestPath = null;
             RenderContext::clearApp();
         }
     }
@@ -1773,6 +1857,8 @@ final class UsePHP
         // continuation of any page-level render pass.
         RenderContext::beginRender();
 
+        $this->deferScopeName = $name;
+
         // Name the endpoint being rendered so its own FunctionComponent wrapper
         // skips the placeholder branch. Nested deferred components keep theirs
         // (see isDeferredEndpointTarget()).
@@ -1794,6 +1880,7 @@ final class UsePHP
             ));
             \http_response_code(500);
             $this->emitHeader('Cache-Control: no-store');
+            $this->deferScopeName = null;
             return 'Failed to render deferred component.';
         } finally {
             $this->deferredEndpointName = null;
@@ -1807,6 +1894,7 @@ final class UsePHP
             return $this->renderElement($element);
         } finally {
             $this->deferFormQuery = null;
+            $this->deferScopeName = null;
         }
     }
 
@@ -1907,12 +1995,23 @@ final class UsePHP
 
         if ($action->type === 'restore') {
             // 'restore' is built by usephp.js (not rendered by the server), so
-            // it carries no signature. It must not mutate anything: the
-            // posted snapshot *is* the state and is HMAC-verified below.
+            // its JSON is not what is signed. It must not mutate anything: the
+            // posted snapshot *is* the state and is HMAC-verified below. Its
+            // re-render signs fresh forms for the page it was POSTed to, so the
+            // page must have rendered this instance for restoring, as
+            // data-usephp-restore-sig says. Otherwise an old snapshot could
+            // bring a guarded component up on an open page.
             if ($snapshotJson === null || $action->payload !== []
                 || ($action->componentId !== null && $action->componentId !== $instanceId)
             ) {
                 return $this->respondBadRequest('Invalid action request');
+            }
+            if ($actionSignature === null
+                || !$this->verifyActionSignature($instanceId, self::RESTORE_SIGNING_INPUT, $actionSignature)
+            ) {
+                \error_log('[usePHP] restore signature missing or invalid for ' . $instanceId);
+
+                return $this->respondBadRequest('Invalid action signature');
             }
             $storageType = StorageType::Snapshot;
         } else {
@@ -2623,6 +2722,10 @@ final class UsePHP
                 $persist = $this->registry->getPersist($componentName);
                 if ($persist !== null) {
                     $props['data-usephp-persist'] = $persist->value;
+                    $restoreSignature = $this->signAction($instanceId, self::RESTORE_SIGNING_INPUT);
+                    if ($restoreSignature !== null) {
+                        $props['data-usephp-restore-sig'] = $restoreSignature;
+                    }
                 }
             }
 

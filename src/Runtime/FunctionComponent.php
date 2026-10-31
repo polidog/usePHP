@@ -10,6 +10,7 @@ use function Polidog\UsePhp\Html\getFunctionComponentName;
 
 use Polidog\UsePhp\Storage\SnapshotPersist;
 use Polidog\UsePhp\Storage\StorageType;
+use Polidog\UsePhp\UsePHP;
 
 /**
  * Invokable wrapper produced by {@see fc()}.
@@ -101,6 +102,10 @@ final class FunctionComponent
             $wrapperProps['data-usephp-snapshot'] = $snapshotJson;
             if ($this->persist !== null) {
                 $wrapperProps['data-usephp-persist'] = $this->persist->value;
+                $restoreSignature = $app->signAction($instanceId, UsePHP::RESTORE_SIGNING_INPUT);
+                if ($restoreSignature !== null) {
+                    $wrapperProps['data-usephp-restore-sig'] = $restoreSignature;
+                }
             }
         }
 

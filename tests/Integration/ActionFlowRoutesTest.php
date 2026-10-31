@@ -109,7 +109,7 @@ final class ActionFlowRoutesTest extends ActionFlowServerTestCase
     {
         // usephp.js forgets the saved snapshot when `restore` is redirected.
         $base = $this->startServer(self::SECRET);
-        $page = $this->http($base . '/persistent-route');
+        $page = $this->http($base . '/persisted-on-persistent-route');
         $fields = self::firstFormFields($page['body']);
         $fields['_usephp_action'] = json_encode([
             'type' => 'restore',
@@ -117,9 +117,10 @@ final class ActionFlowRoutesTest extends ActionFlowServerTestCase
             'componentId' => $fields['_usephp_component'],
             'storageType' => 'snapshot',
         ], JSON_THROW_ON_ERROR);
-        unset($fields['_usephp_action_sig']);
+        self::assertSame(1, preg_match('/data-usephp-restore-sig="([^"]+)"/', $page['body'], $signature));
+        $fields['_usephp_action_sig'] = html_entity_decode($signature[1], ENT_QUOTES, 'UTF-8');
 
-        $response = $this->http($base . '/persistent-route', $fields, ['Origin' => $base] + self::PARTIAL);
+        $response = $this->http($base . '/persisted-on-persistent-route', $fields, ['Origin' => $base] + self::PARTIAL);
 
         self::assertSame(200, $response['status'], $response['body']);
         self::assertStringContainsString('count=0', $response['body']);

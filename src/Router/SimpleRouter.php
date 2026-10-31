@@ -176,11 +176,7 @@ final class SimpleRouter implements RouterInterface
      */
     private function matchPath(string $method, string $path): ?RouteMatch
     {
-        // Normalize path
-        $path = '/' . trim($path, '/');
-        if ($path !== '/') {
-            $path = rtrim($path, '/');
-        }
+        $path = RequestContext::normalizePath($path);
 
         // HEAD is answered by the route that would answer GET, unless a route
         // was registered for HEAD itself. The handler runs as usual: the SAPI
