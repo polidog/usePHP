@@ -262,6 +262,24 @@ final class Renderer
     private ?\Closure $actionSigner;
 
     /**
+     * Action forms rendered but not yet written out. An action form cannot
+     * be emitted next to the element it belongs to: inside an application's
+     * <form> the HTML parser would drop the nested start tag and let its
+     * end tag close the outer form, and <p> or <tbody> would be broken up
+     * too. The element references the form by id instead, and the form is
+     * written at the next safe place (see flushActionForms()).
+     *
+     * @var list<string>
+     */
+    private array $pendingActionForms = [];
+
+    /** Nesting depth of renderElement(), to find the outermost call. */
+    private int $renderDepth = 0;
+
+    /** Number of <form> elements currently open in the output. */
+    private int $openFormDepth = 0;
+
+    /**
      * @param \Closure(string, string): ?string|null $actionSigner
      */
     public function __construct(
@@ -341,6 +359,20 @@ final class Renderer
      */
     public function renderElement(Element|string $element): string
     {
+        $this->renderDepth++;
+        try {
+            $html = $this->renderNode($element);
+        } finally {
+            $this->renderDepth--;
+        }
+
+        // Whatever no wrapper or application form picked up goes after the
+        // outermost element, so a direct call still returns complete output.
+        return $this->renderDepth === 0 ? $html . $this->flushActionForms() : $html;
+    }
+
+    private function renderNode(Element|string $element): string
+    {
         if (is_string($element)) {
             return htmlspecialchars($element, ENT_QUOTES, 'UTF-8');
         }
@@ -365,20 +397,11 @@ final class Renderer
             );
         }
 
-        // Validate the tag name *before* any interpolation. renderWithForm()
-        // below reuses $element->type too, so this single check covers both
-        // the plain and the form-wrapped output.
+        // Validate the tag name *before* any interpolation.
         $tag = $element->type;
         self::assertValidTagName($tag);
 
-        $props = $element->props;
-        $hasAction = isset($props['wire:click']);
-
-        // If element has an action, wrap it in a form
-        if ($hasAction) {
-            return $this->renderWithForm($element);
-        }
-
+        $props = $this->bindActions($tag, $element->props);
         $attributes = $this->renderAttributes($props);
 
         // Self-closing tags
@@ -386,31 +409,110 @@ final class Renderer
             return "<{$tag}{$attributes} />";
         }
 
-        $children = $this->renderChildren($element->children);
+        $isForm = strtolower($tag) === 'form';
+        if ($isForm) {
+            $this->openFormDepth++;
+        }
+        try {
+            $children = $this->renderChildren($element->children);
+        } finally {
+            if ($isForm) {
+                $this->openFormDepth--;
+            }
+        }
 
-        return "<{$tag}{$attributes}>{$children}</{$tag}>";
+        // A component wrapper is the natural home for its action forms: a
+        // partial update replaces them along with the elements using them.
+        if (isset($props['data-usephp']) && $this->openFormDepth === 0) {
+            $children .= $this->flushActionForms();
+        }
+
+        $html = "<{$tag}{$attributes}>{$children}</{$tag}>";
+
+        return $isForm && $this->openFormDepth === 0 ? $html . $this->flushActionForms() : $html;
     }
 
     /**
-     * Render an element wrapped in a form for action handling.
+     * Write out the action forms collected so far. Only called where no
+     * <form> is open.
      */
-    private function renderWithForm(Element $element): string
+    private function flushActionForms(): string
     {
-        $action = $element->props['wire:click'];
-        $tag = $element->type;
+        $html = implode('', $this->pendingActionForms);
+        $this->pendingActionForms = [];
 
-        // Remove wire:click from props
-        $props = $element->props;
-        unset($props['wire:click']);
+        return $html;
+    }
 
-        // For button, make it a submit button
-        if ($tag === 'button') {
-            $props['type'] = 'submit';
+    /**
+     * Turn the `wire:*` props into what the browser needs to fire the action.
+     *
+     * A button (or submit input) is associated with its action form through
+     * the `form` attribute, which works without JavaScript. Any other
+     * element cannot submit a form by itself; it names the form in a
+     * `data-usephp-on-*` attribute that usephp.js acts on.
+     *
+     * @param array<string, mixed> $props
+     * @return array<string, mixed>
+     */
+    private function bindActions(string $tag, array $props): array
+    {
+        foreach ($props as $key => $action) {
+            if (!str_starts_with($key, 'wire:')) {
+                continue;
+            }
+            unset($props[$key]);
+
+            $event = substr($key, 5);
+            if (!$action instanceof Action) {
+                throw new \RuntimeException(sprintf(
+                    '%s must be an Action; got %s.',
+                    $key,
+                    get_debug_type($action),
+                ));
+            }
+
+            if ($event !== 'click') {
+                throw new \RuntimeException(sprintf('Unsupported event binding %s.', $key));
+            }
+
+            if ($tag === 'button' || ($tag === 'input' && in_array($props['type'] ?? null, ['submit', 'image'], true))) {
+                if ($tag === 'button') {
+                    $props['type'] = 'submit';
+                }
+                $props['form'] = $this->addActionForm($action);
+            } else {
+                $props['data-usephp-on-click'] = $this->addActionForm($action);
+            }
         }
 
-        $attributes = $this->renderAttributes($props);
-        $children = $this->renderChildren($element->children);
+        return $props;
+    }
 
+    /**
+     * Queue a hidden form carrying $action and return its id. The id is
+     * random so it stays unique on the page across separately rendered
+     * elements and partial updates.
+     */
+    private function addActionForm(Action $action): string
+    {
+        $id = 'usephp-f-' . bin2hex(random_bytes(8));
+
+        $this->pendingActionForms[] = sprintf(
+            '<form method="post" data-usephp-form id="%s" hidden>%s</form>',
+            $id,
+            $this->renderActionFields($action),
+        );
+
+        return $id;
+    }
+
+    /**
+     * The hidden fields an action POST needs: instance id, signed action,
+     * CSRF token and, for snapshot storage, the snapshot.
+     */
+    private function renderActionFields(Action $action): string
+    {
         // Build the form with hidden action data
         $actionJsonRaw = $action->toJson();
         $actionJson = htmlspecialchars($actionJsonRaw, ENT_QUOTES, 'UTF-8');
@@ -432,9 +534,6 @@ final class Renderer
             }
         }
 
-        $innerElement = in_array($tag, self::SELF_CLOSING_TAGS, true)
-            ? "<{$tag}{$attributes} />"
-            : "<{$tag}{$attributes}>{$children}</{$tag}>";
 
         // Add snapshot hidden field if using snapshot storage
         // Use action's componentId to get the correct state from cache
@@ -459,14 +558,9 @@ final class Renderer
             );
         }
 
-        // data-usephp-form enables JS enhancement, falls back to normal form if no JS
-        return <<<HTML
-            <form method="post" data-usephp-form style="display:inline;">
-            <input type="hidden" name="_usephp_component" value="{$componentIdEscaped}" />
-            <input type="hidden" name="_usephp_action" value="{$actionJson}" />
-            {$signatureField}{$csrfField}{$snapshotField}{$innerElement}
-            </form>
-            HTML;
+        return '<input type="hidden" name="_usephp_component" value="' . $componentIdEscaped . '" />'
+            . '<input type="hidden" name="_usephp_action" value="' . $actionJson . '" />'
+            . $signatureField . $csrfField . $snapshotField;
     }
 
     /**
@@ -479,11 +573,6 @@ final class Renderer
         $attributes = [];
 
         foreach ($props as $key => $value) {
-            // Skip wire:* attributes (handled separately)
-            if (str_starts_with($key, 'wire:')) {
-                continue;
-            }
-
             $attrName = self::JSX_HTML_ATTR_MAP[$key] ?? $key;
             self::assertValidAttributeName($attrName);
 

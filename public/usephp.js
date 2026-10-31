@@ -552,6 +552,10 @@
         if (!trigger) return;
         if (trigger.tagName === 'FORM') return;
         if (trigger.closest('[data-usephp-form]')) return;
+        // An action button or trigger lives outside its form but submits
+        // it all the same; the submit path reloads after the response.
+        if (trigger.form && trigger.form.matches('[data-usephp-form]')) return;
+        if (trigger.hasAttribute('data-usephp-on-click')) return;
         // A reload link that also navigated away would be self-defeating;
         // suppress default activation for anchors.
         if (trigger.tagName === 'A') e.preventDefault();
@@ -592,24 +596,47 @@
         component.setAttribute('data-usephp-error', '');
     }
 
-    document.addEventListener('submit', async function(e) {
+    document.addEventListener('submit', function(e) {
         const form = e.target;
         if (!form.matches('[data-usephp-form]')) return;
 
         e.preventDefault();
+        submitAction(form, { source: e.submitter || null, submitter: e.submitter || null });
+    });
 
-        const component = form.closest('[data-usephp]');
+    // The component an action form updates. The form may sit outside the
+    // wrapper (when the component is inside an application's <form>), so the
+    // instance id it carries is what counts.
+    function componentForForm(form) {
+        const field = form.querySelector('input[name="_usephp_component"]');
+        const id = field ? field.value : '';
+        const closest = form.closest('[data-usephp]');
+        if (!id || (closest && closest.dataset.usephp === id)) return closest;
+        return document.querySelector('[data-usephp="' + CSS.escape(id) + '"]') || closest;
+    }
+
+    // Latest request per component: the response to an older one must not
+    // overwrite a newer one that overtook it.
+    const latestSubmit = new WeakMap();
+
+    // `source` is the element that fired the action; `submitter` is passed to
+    // FormData so a named submit button is sent just as without JavaScript.
+    async function submitAction(form, { source = null, submitter = null } = {}) {
+        const component = componentForForm(form);
         if (!component) {
             form.submit();
             return;
         }
+
+        const seq = (latestSubmit.get(component) || 0) + 1;
+        latestSubmit.set(component, seq);
 
         component.setAttribute('aria-busy', 'true');
         component.removeAttribute('data-usephp-error');
 
         try {
             // Get current snapshot from component if using snapshot storage
-            const formData = new FormData(form);
+            const formData = submitter ? new FormData(form, submitter) : new FormData(form);
             const currentSnapshot = component.dataset.usephpSnapshot;
             if (currentSnapshot && !formData.has('_usephp_snapshot')) {
                 formData.set('_usephp_snapshot', currentSnapshot);
@@ -620,6 +647,8 @@
                 headers: { 'X-UsePHP-Partial': '1' },
                 body: formData
             });
+
+            if (latestSubmit.get(component) !== seq) return;
 
             // If redirected, the server doesn't support partial updates for this component
             // Fall back to page navigation (PRG pattern)
@@ -656,8 +685,11 @@
                 // (possibly cache-stale) fetch. The mutation's partial
                 // response is already applied (innerHTML above), so the
                 // re-fetch reflects the new state.
-                if (form.hasAttribute('data-usephp-reload-defer')) {
-                    dispatchReloadDefer(form.getAttribute('data-usephp-reload-defer'));
+                const reloadFrom = [form, source].find(
+                    (el) => el && el.hasAttribute('data-usephp-reload-defer'),
+                );
+                if (reloadFrom) {
+                    dispatchReloadDefer(reloadFrom.getAttribute('data-usephp-reload-defer'));
                 }
 
                 // Newly injected HTML may contain (other, non-reload-target)
@@ -667,10 +699,54 @@
                 reportSubmitFailure(form, component, { response });
             }
         } catch (error) {
-            reportSubmitFailure(form, component, { error });
+            if (latestSubmit.get(component) === seq) {
+                reportSubmitFailure(form, component, { error });
+            }
         } finally {
-            component.removeAttribute('aria-busy');
+            if (latestSubmit.get(component) === seq) {
+                component.removeAttribute('aria-busy');
+            }
         }
+    }
+
+    // =====================================================================
+    // Action triggers
+    // =====================================================================
+    //
+    // An element that can't submit a form by itself names its action form in
+    // `data-usephp-on-*`. All that happens here is replaying that form, which
+    // carries the action and signature the server rendered. These elements
+    // do nothing without JavaScript.
+
+    function fireTrigger(trigger, event) {
+        const id = trigger.getAttribute('data-usephp-on-' + event);
+        const form = id ? document.getElementById(id) : null;
+        if (!form || !form.matches('[data-usephp-form]')) {
+            console.warn('[usePHP] no action form found for', trigger);
+            return;
+        }
+        submitAction(form, { source: trigger });
+    }
+
+    // A click on something interactive inside a trigger (a link or checkbox
+    // in a clickable row) belongs to that control, not to the row.
+    const INTERACTIVE = 'a[href],button,input,select,textarea,label';
+
+    document.addEventListener('click', function(e) {
+        const start = e.target instanceof Element
+            ? e.target
+            : (e.target && e.target.parentElement) || null;
+        if (!start) return;
+        const trigger = start.closest('[data-usephp-on-click]');
+        if (!trigger) return;
+        const interactive = start.closest(INTERACTIVE);
+        if (interactive && interactive !== trigger && trigger.contains(interactive)) return;
+        if (trigger.matches('a[href]')) {
+            // Let "open in new tab" and friends keep working.
+            if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+            e.preventDefault();
+        }
+        fireTrigger(trigger, 'click');
     });
 
     // =====================================================================
@@ -907,8 +983,12 @@
     // and pick up the refreshed snapshot it carries. Shared by the form
     // submit path and the snapshot restore path below.
     function applyPartial(component, html) {
-        // Server-rendered HTML is trusted content from our endpoint
-        component.innerHTML = html;
+        // Server-rendered HTML is trusted content from our endpoint. Parse it
+        // in a template: innerHTML on a wrapper inside an application's <form>
+        // would make the parser drop the action forms in the response.
+        const template = document.createElement('template');
+        template.innerHTML = html;
+        component.replaceChildren(template.content);
 
         // Update snapshot on component from hidden field in response
         const snapshotField = component.querySelector('[data-usephp-snapshot-update]');
@@ -1009,7 +1089,8 @@
         formData.set('_usephp_snapshot', saved);
         // The session-bound CSRF token (when a session is active) is embedded
         // in every usephp form; borrow it from one of ours.
-        const csrf = component.querySelector('input[name="_usephp_csrf"]');
+        const csrf = component.querySelector('input[name="_usephp_csrf"]')
+            || document.querySelector('form[data-usephp-form] input[name="_usephp_csrf"]');
         if (csrf) formData.set('_usephp_csrf', csrf.value);
 
         component.setAttribute('aria-busy', 'true');
