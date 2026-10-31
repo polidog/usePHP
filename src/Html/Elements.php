@@ -18,6 +18,12 @@ use Polidog\UsePhp\Runtime\RenderContext;
  *   H::article(className: 'post', children: [...])
  *   H::video(src: 'movie.mp4', controls: true)
  *   H::table(children: [...])
+ *
+ * Every tag method also accepts arbitrary extra attributes as named arguments.
+ * Names PHP can't spell as a named argument go through spread:
+ *   H::div(title: 'x', role: 'alert')
+ *   H::button(...['aria-label' => 'Close', 'data-id' => '1'], children: 'x')
+ * Attribute names are validated by the Renderer when the element is rendered.
  */
 final class H
 {
@@ -32,8 +38,9 @@ final class H
         ?string $style = null,
         Action|\Closure|null $onClick = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('div', get_defined_vars());
+        return self::element('div', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -43,8 +50,9 @@ final class H
         ?string $style = null,
         Action|\Closure|null $onClick = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('span', get_defined_vars());
+        return self::element('span', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -53,8 +61,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('p', get_defined_vars());
+        return self::element('p', get_defined_vars());
     }
 
     // =========================================================================
@@ -67,8 +76,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('h1', get_defined_vars());
+        return self::element('h1', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -77,8 +87,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('h2', get_defined_vars());
+        return self::element('h2', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -87,8 +98,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('h3', get_defined_vars());
+        return self::element('h3', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -97,8 +109,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('h4', get_defined_vars());
+        return self::element('h4', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -107,8 +120,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('h5', get_defined_vars());
+        return self::element('h5', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -117,8 +131,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('h6', get_defined_vars());
+        return self::element('h6', get_defined_vars());
     }
 
     // =========================================================================
@@ -135,8 +150,9 @@ final class H
         ?string $style = null,
         Action|\Closure|null $onClick = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('a', get_defined_vars());
+        return self::element('a', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -145,8 +161,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('strong', get_defined_vars());
+        return self::element('strong', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -155,8 +172,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('em', get_defined_vars());
+        return self::element('em', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -165,8 +183,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('small', get_defined_vars());
+        return self::element('small', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -175,8 +194,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('mark', get_defined_vars());
+        return self::element('mark', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -185,8 +205,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('del', get_defined_vars());
+        return self::element('del', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -195,8 +216,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('ins', get_defined_vars());
+        return self::element('ins', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -205,8 +227,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('sub', get_defined_vars());
+        return self::element('sub', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -215,8 +238,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('sup', get_defined_vars());
+        return self::element('sup', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -225,8 +249,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('code', get_defined_vars());
+        return self::element('code', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -235,8 +260,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('pre', get_defined_vars());
+        return self::element('pre', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -246,8 +272,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('blockquote', get_defined_vars());
+        return self::element('blockquote', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -257,8 +284,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('q', get_defined_vars());
+        return self::element('q', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -268,8 +296,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('abbr', get_defined_vars());
+        return self::element('abbr', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -278,8 +307,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('cite', get_defined_vars());
+        return self::element('cite', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -289,8 +319,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('time', get_defined_vars());
+        return self::element('time', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -299,8 +330,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('kbd', get_defined_vars());
+        return self::element('kbd', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -309,8 +341,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('samp', get_defined_vars());
+        return self::element('samp', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -319,32 +352,36 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('var', get_defined_vars());
+        return self::element('var', get_defined_vars());
     }
 
     public static function br(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('br', get_defined_vars());
+        return self::element('br', get_defined_vars());
     }
 
     public static function wbr(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('wbr', get_defined_vars());
+        return self::element('wbr', get_defined_vars());
     }
 
     public static function hr(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('hr', get_defined_vars());
+        return self::element('hr', get_defined_vars());
     }
 
     // =========================================================================
@@ -357,8 +394,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('ul', get_defined_vars());
+        return self::element('ul', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -370,8 +408,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('ol', get_defined_vars());
+        return self::element('ol', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -382,8 +421,9 @@ final class H
         ?string $style = null,
         Action|\Closure|null $onClick = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('li', get_defined_vars());
+        return self::element('li', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -392,8 +432,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('dl', get_defined_vars());
+        return self::element('dl', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -402,8 +443,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('dt', get_defined_vars());
+        return self::element('dt', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -412,8 +454,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('dd', get_defined_vars());
+        return self::element('dd', get_defined_vars());
     }
 
     // =========================================================================
@@ -426,8 +469,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('table', get_defined_vars());
+        return self::element('table', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -436,8 +480,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('thead', get_defined_vars());
+        return self::element('thead', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -446,8 +491,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('tbody', get_defined_vars());
+        return self::element('tbody', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -456,8 +502,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('tfoot', get_defined_vars());
+        return self::element('tfoot', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -466,8 +513,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('tr', get_defined_vars());
+        return self::element('tr', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -479,8 +527,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('th', get_defined_vars());
+        return self::element('th', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -491,8 +540,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('td', get_defined_vars());
+        return self::element('td', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -501,8 +551,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('caption', get_defined_vars());
+        return self::element('caption', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -512,8 +563,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('colgroup', get_defined_vars());
+        return self::element('colgroup', get_defined_vars());
     }
 
     public static function col(
@@ -521,8 +573,9 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('col', get_defined_vars());
+        return self::element('col', get_defined_vars());
     }
 
     // =========================================================================
@@ -542,8 +595,9 @@ final class H
         ?string $style = null,
         Action|\Closure|null $onSubmit = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('form', get_defined_vars());
+        return self::element('form', get_defined_vars());
     }
 
     public static function input(
@@ -571,13 +625,15 @@ final class H
         Action|\Closure|null $onInput = null,
         Action|\Closure|null $onFocus = null,
         Action|\Closure|null $onBlur = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('input', get_defined_vars());
+        return self::element('input', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
     public static function textarea(
         ?string $name = null,
+        ?string $value = null,
         ?string $placeholder = null,
         ?int $rows = null,
         ?int $cols = null,
@@ -593,8 +649,9 @@ final class H
         Action|\Closure|null $onChange = null,
         Action|\Closure|null $onInput = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('textarea', get_defined_vars());
+        return self::element('textarea', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -608,8 +665,9 @@ final class H
         ?string $style = null,
         Action|\Closure|null $onClick = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('button', get_defined_vars());
+        return self::element('button', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -625,8 +683,9 @@ final class H
         ?string $style = null,
         Action|\Closure|null $onChange = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('select', get_defined_vars());
+        return self::element('select', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -635,8 +694,9 @@ final class H
         ?bool $selected = null,
         ?bool $disabled = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('option', get_defined_vars());
+        return self::element('option', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -647,8 +707,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('optgroup', get_defined_vars());
+        return self::element('optgroup', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -658,13 +719,14 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
         $props = get_defined_vars();
         if (isset($props['for'])) {
             $props['htmlFor'] = $props['for'];
             unset($props['for']);
         }
-        return createElement('label', $props);
+        return self::element('label', $props);
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -675,8 +737,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('fieldset', get_defined_vars());
+        return self::element('fieldset', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -685,8 +748,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('legend', get_defined_vars());
+        return self::element('legend', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -695,8 +759,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('datalist', get_defined_vars());
+        return self::element('datalist', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -707,8 +772,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('output', get_defined_vars());
+        return self::element('output', get_defined_vars());
     }
 
     public static function progress(
@@ -717,8 +783,9 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('progress', get_defined_vars());
+        return self::element('progress', get_defined_vars());
     }
 
     public static function meter(
@@ -731,8 +798,9 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('meter', get_defined_vars());
+        return self::element('meter', get_defined_vars());
     }
 
     // =========================================================================
@@ -745,8 +813,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('header', get_defined_vars());
+        return self::element('header', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -755,8 +824,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('footer', get_defined_vars());
+        return self::element('footer', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -765,8 +835,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('nav', get_defined_vars());
+        return self::element('nav', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -775,8 +846,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('main', get_defined_vars());
+        return self::element('main', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -785,8 +857,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('article', get_defined_vars());
+        return self::element('article', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -795,8 +868,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('section', get_defined_vars());
+        return self::element('section', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -805,8 +879,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('aside', get_defined_vars());
+        return self::element('aside', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -815,8 +890,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('figure', get_defined_vars());
+        return self::element('figure', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -825,8 +901,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('figcaption', get_defined_vars());
+        return self::element('figcaption', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -837,8 +914,9 @@ final class H
         ?string $style = null,
         Action|\Closure|null $onClick = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('details', get_defined_vars());
+        return self::element('details', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -847,8 +925,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('summary', get_defined_vars());
+        return self::element('summary', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -858,8 +937,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('dialog', get_defined_vars());
+        return self::element('dialog', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -868,8 +948,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('address', get_defined_vars());
+        return self::element('address', get_defined_vars());
     }
 
     // =========================================================================
@@ -890,8 +971,9 @@ final class H
         ?string $style = null,
         Action|\Closure|null $onLoad = null,
         Action|\Closure|null $onError = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('img', get_defined_vars());
+        return self::element('img', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -906,8 +988,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('audio', get_defined_vars());
+        return self::element('audio', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -926,8 +1009,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('video', get_defined_vars());
+        return self::element('video', get_defined_vars());
     }
 
     public static function source(
@@ -936,8 +1020,9 @@ final class H
         ?string $srcset = null,
         ?string $sizes = null,
         ?string $media = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('source', get_defined_vars());
+        return self::element('source', get_defined_vars());
     }
 
     public static function track(
@@ -946,8 +1031,9 @@ final class H
         ?string $srclang = null,
         ?string $label = null,
         ?bool $default = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('track', get_defined_vars());
+        return self::element('track', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -956,8 +1042,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('picture', get_defined_vars());
+        return self::element('picture', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -968,8 +1055,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('canvas', get_defined_vars());
+        return self::element('canvas', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -984,8 +1072,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('svg', get_defined_vars());
+        return self::element('svg', get_defined_vars());
     }
 
     // =========================================================================
@@ -1007,8 +1096,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('iframe', get_defined_vars());
+        return self::element('iframe', get_defined_vars());
     }
 
     public static function embed(
@@ -1019,8 +1109,9 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('embed', get_defined_vars());
+        return self::element('embed', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -1034,15 +1125,17 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('object', get_defined_vars());
+        return self::element('object', get_defined_vars());
     }
 
     public static function param(
         ?string $name = null,
         ?string $value = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('param', get_defined_vars());
+        return self::element('param', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -1052,8 +1145,9 @@ final class H
         ?string $id = null,
         ?string $style = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('map', get_defined_vars());
+        return self::element('map', get_defined_vars());
     }
 
     public static function area(
@@ -1066,8 +1160,9 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('area', get_defined_vars());
+        return self::element('area', get_defined_vars());
     }
 
     // =========================================================================
@@ -1081,8 +1176,9 @@ final class H
         ?string $media = null,
         ?string $sizes = null,
         ?string $crossorigin = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('link', get_defined_vars());
+        return self::element('link', get_defined_vars());
     }
 
     public static function meta(
@@ -1091,22 +1187,25 @@ final class H
         ?string $charset = null,
         ?string $httpEquiv = null,
         ?string $property = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('meta', get_defined_vars());
+        return self::element('meta', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
     public static function title(
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('title', get_defined_vars());
+        return self::element('title', get_defined_vars());
     }
 
     public static function base(
         ?string $href = null,
         ?string $target = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('base', get_defined_vars());
+        return self::element('base', get_defined_vars());
     }
 
     // =========================================================================
@@ -1123,15 +1222,17 @@ final class H
         ?string $integrity = null,
         ?bool $nomodule = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('script', get_defined_vars());
+        return self::element('script', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
     public static function noscript(
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('noscript', get_defined_vars());
+        return self::element('noscript', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
@@ -1139,16 +1240,18 @@ final class H
         ?string $className = null,
         ?string $id = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('template', get_defined_vars());
+        return self::element('template', get_defined_vars());
     }
 
     /** @param array<Element|string>|Element|string|null $children */
     public static function slot(
         ?string $name = null,
         array|Element|string|null $children = null,
+        mixed ...$attrs,
     ): Element {
-        return createElement('slot', get_defined_vars());
+        return self::element('slot', get_defined_vars());
     }
 
     // =========================================================================
@@ -1242,6 +1345,31 @@ final class H
         ], []);
     }
 
+    /**
+     * Build an element from a tag method's get_defined_vars(), folding the
+     * variadic `$attrs` into the regular props.
+     *
+     * @param array<string, mixed> $vars
+     */
+    private static function element(string $type, array $vars): Element
+    {
+        /** @var array<int|string, mixed> $attrs */
+        $attrs = $vars['attrs'] ?? [];
+        unset($vars['attrs']);
+
+        foreach ($attrs as $name => $value) {
+            if (!is_string($name)) {
+                throw new \InvalidArgumentException(sprintf(
+                    'H::%s() takes extra attributes as named arguments; got a positional argument.',
+                    $type,
+                ));
+            }
+            $vars[$name] = $value;
+        }
+
+        return createElement($type, $vars);
+    }
+
     // =========================================================================
     // Fallback for any undefined element
     // =========================================================================
@@ -1270,6 +1398,12 @@ function createElement(string $type, array $params): Element
 {
     $children = [];
     $props = [];
+
+    // <textarea> has no value attribute: its value is its text content.
+    if ($type === 'textarea' && is_scalar($params['value'] ?? null)) {
+        $params['children'] = (string) $params['value'];
+        unset($params['value']);
+    }
 
     // Event handlers that map to wire:* attributes
     $eventHandlers = [
