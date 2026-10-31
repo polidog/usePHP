@@ -158,6 +158,33 @@ final class FunctionComponentActionTest extends TestCase
         return $app->renderElement($element);
     }
 
+    public function testActionOnNamespacedKeyTargetsOnlyThatRow(): void
+    {
+        $row = self::snapshotCounter('krow');
+
+        $app = new UsePHP();
+        $app->setSnapshotSecret(self::SECRET);
+        $app->getRouter()->get('/rows', static function () use ($row): Element {
+            RenderContext::beginRender();
+
+            return H::div(children: [$row(['key' => 'k1']), $row(['key' => 'k2'])]);
+        });
+
+        $page = self::renderRoute($app, '/rows');
+        \preg_match_all('/data-usephp="([^"]+)"/', $page, $m);
+        $ids = \array_map(static fn(string $id): string => \html_entity_decode($id, \ENT_QUOTES, 'UTF-8'), $m[1]);
+        self::assertCount(2, $ids);
+        self::assertStringEndsWith('#krow/k1', $ids[0]);
+        self::assertStringEndsWith('#krow/k2', $ids[1]);
+
+        $html = self::submitPartial($app, '/rows', self::extractFormFields($page, $ids[1]));
+
+        self::assertNotNull($html);
+        self::assertStringContainsString('Count: 1', $html);
+        self::assertStringContainsString('value="' . \htmlspecialchars($ids[1], \ENT_QUOTES, 'UTF-8') . '"', $html);
+        self::assertStringNotContainsString(\htmlspecialchars($ids[0], \ENT_QUOTES, 'UTF-8'), $html);
+    }
+
     public function testSnapshotFcOnIsolatedRouteReturnsUpdatedPartial(): void
     {
         $counter = self::snapshotCounter('snapshot-counter');

@@ -94,6 +94,18 @@ class ComponentIdTest extends TestCase
         $this->assertEquals('0', $id->key);
     }
 
+    public function testFcInstanceIdWithNamespacedKey(): void
+    {
+        $instanceId = 'FC@rows.php:12#krow/k1';
+
+        foreach ([ComponentId::fromLegacy($instanceId), ComponentId::parse($instanceId)] as $id) {
+            $this->assertSame('FC@rows.php:12', $id->componentName);
+            $this->assertSame('krow/k1', $id->key);
+            $this->assertNull($id->parent);
+            $this->assertSame($instanceId, $id->toLegacyString());
+        }
+    }
+
     public function testIsLegacyFormat(): void
     {
         $legacyId = ComponentId::create('Counter', '0');
