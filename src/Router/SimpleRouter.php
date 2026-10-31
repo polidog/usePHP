@@ -266,14 +266,36 @@ final class SimpleRouter implements RouterInterface
             );
         }
 
-        $query = [];
-        if (isset($parsedUrl['query'])) {
-            parse_str($parsedUrl['query'], $query);
+        // Edit the raw query instead of rebuilding it: parse_str() rewrites
+        // names like `a.b` and caps the number of variables.
+        $query = self::removeQueryParam($parsedUrl['query'] ?? '', $this->snapshotParam);
+        $snapshotQuery = http_build_query([$this->snapshotParam => $encoded]);
+
+        return $path . '?' . ($query === '' ? '' : $query . '&') . $snapshotQuery;
+    }
+
+    /**
+     * Remove every occurrence of a parameter from a raw query string, leaving
+     * the rest byte for byte. A segment matches when PHP would read it as that
+     * parameter, including encoded (`%5Fsnapshot`) and array (`_snapshot[]`)
+     * forms.
+     *
+     * @internal
+     */
+    public static function removeQueryParam(string $query, string $param): string
+    {
+        $kept = [];
+        foreach (explode('&', $query) as $segment) {
+            if ($segment === '') {
+                continue;
+            }
+            parse_str($segment, $parsed);
+            if (!array_key_exists($param, $parsed)) {
+                $kept[] = $segment;
+            }
         }
 
-        $query[$this->snapshotParam] = $encoded;
-
-        return $path . '?' . http_build_query($query);
+        return implode('&', $kept);
     }
 
     public function extractSnapshot(RequestContext $request): ?string
@@ -292,6 +314,14 @@ final class SimpleRouter implements RouterInterface
         $this->snapshotParam = $param;
 
         return $this;
+    }
+
+    /**
+     * Get the query parameter name used for snapshot data.
+     */
+    public function getSnapshotParam(): string
+    {
+        return $this->snapshotParam;
     }
 
     /**
