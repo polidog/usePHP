@@ -180,4 +180,74 @@ final class ActionFlowRoutesTest extends ActionFlowServerTestCase
         self::assertSame(303, $response['status'], $response['body']);
         self::assertSame('/session-fc?tab=2', self::location($response));
     }
+
+    // ------------------------------------------------------------------
+    // #65: a partial re-render sees what the page's GET saw.
+    // ------------------------------------------------------------------
+
+    public function testPartialRerenderKeepsTheRouteParams(): void
+    {
+        $base = $this->startServer();
+        $page = $this->http($base . '/tasks/1');
+        self::assertStringContainsString('task=1 likes=0', $page['body']);
+
+        $response = $this->http(
+            $base . '/tasks/1',
+            self::firstFormFields($page['body']),
+            ['Origin' => $base] + self::PARTIAL,
+            $page['cookie'],
+        );
+
+        self::assertSame(200, $response['status'], $response['body']);
+        self::assertStringContainsString('task=1 likes=1', $response['body']);
+    }
+
+    public function testPartialRerenderOfADeferredClassKeepsTheDeferQuery(): void
+    {
+        $base = $this->startServer();
+        $fragment = $this->http($base . '/_defer/post-likes?post_id=5');
+        self::assertStringContainsString('post=5 likes=0', $fragment['body']);
+        $fields = self::firstFormFields($fragment['body']);
+        $cookie = $fragment['cookie'];
+
+        // The form sits on some page, so the POST goes to that page's URL.
+        foreach (['post=5 likes=1', 'post=5 likes=2'] as $expected) {
+            $response = $this->http($base . '/session-fc?tab=2', $fields, ['Origin' => $base] + self::PARTIAL, $cookie);
+
+            self::assertSame(200, $response['status'], $response['body']);
+            self::assertStringContainsString($expected, $response['body']);
+            $fields = self::firstFormFields($response['body']);
+        }
+    }
+
+    public function testDeferQueryIsOnlyEmittedByTheDeferEndpoint(): void
+    {
+        $base = $this->startServer();
+
+        self::assertArrayNotHasKey(
+            '_usephp_defer_query',
+            self::firstFormFields($this->http($base . '/session-class?post_id=5')['body']),
+        );
+        self::assertArrayNotHasKey(
+            '_usephp_defer_query',
+            self::firstFormFields($this->http($base . '/_defer/post-likes')['body']),
+        );
+    }
+
+    public function testDeferQueryDoesNotBypassTheActionChecks(): void
+    {
+        $base = $this->startServer();
+        $fragment = $this->http($base . '/_defer/post-likes?post_id=5');
+        $fields = self::firstFormFields($fragment['body']);
+        unset($fields['_usephp_action_sig']);
+
+        $response = $this->http(
+            $base . '/session-fc',
+            $fields,
+            ['Origin' => $base] + self::PARTIAL,
+            $fragment['cookie'],
+        );
+
+        self::assertSame(400, $response['status'], $response['body']);
+    }
 }

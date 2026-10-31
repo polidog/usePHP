@@ -262,11 +262,15 @@ final class Renderer
      */
     private ?\Closure $actionSigner;
 
+    private ?string $deferQuery;
+
     /**
      * @param string|\Closure(): string $csrfToken A closure is read when each
      *        form is emitted, so a session started during rendering still
      *        puts its token into the form.
      * @param \Closure(string, string): ?string|null $actionSigner
+     * @param string|null $deferQuery Query string of the defer endpoint request
+     *        this fragment answers, carried by its forms for the re-render.
      */
     public function __construct(
         string $componentId,
@@ -276,6 +280,7 @@ final class Renderer
         string|\Closure $csrfToken = '',
         ?SnapshotPersist $persist = null,
         ?\Closure $actionSigner = null,
+        ?string $deferQuery = null,
     ) {
         $this->componentId = $componentId;
         $this->snapshotSerializer = $snapshotSerializer;
@@ -284,6 +289,7 @@ final class Renderer
         $this->csrfToken = $csrfToken;
         $this->persist = $persist;
         $this->actionSigner = $actionSigner;
+        $this->deferQuery = $deferQuery;
     }
 
     /**
@@ -466,12 +472,20 @@ final class Renderer
             );
         }
 
+        $deferQueryField = '';
+        if ($this->deferQuery !== null) {
+            $deferQueryField = sprintf(
+                '<input type="hidden" name="_usephp_defer_query" value="%s" />',
+                htmlspecialchars($this->deferQuery, ENT_QUOTES, 'UTF-8')
+            );
+        }
+
         // data-usephp-form enables JS enhancement, falls back to normal form if no JS
         return <<<HTML
             <form method="post" data-usephp-form style="display:inline;">
             <input type="hidden" name="_usephp_component" value="{$componentIdEscaped}" />
             <input type="hidden" name="_usephp_action" value="{$actionJson}" />
-            {$signatureField}{$csrfField}{$snapshotField}{$innerElement}
+            {$signatureField}{$csrfField}{$snapshotField}{$deferQueryField}{$innerElement}
             </form>
             HTML;
     }

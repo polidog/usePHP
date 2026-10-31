@@ -761,6 +761,12 @@ final class UsePHP
     }
 
     /**
+     * Query string of the defer endpoint request being rendered, for the forms
+     * in that fragment. See {@see doHandleDeferred()}.
+     */
+    private ?string $deferFormQuery = null;
+
+    /**
      * Upper bound for a hook index accepted from the client. Components
      * never have anywhere near this many hooks; the bound keeps a replayed
      * or forged action from fanning out storage keys.
@@ -1512,7 +1518,15 @@ final class UsePHP
             $this->renderingDeferredEndpoint = false;
         }
 
-        return $this->renderElement($element);
+        // Class components read their defer params from $_GET, but their forms
+        // POST to the page's URL. The form carries the query along so a partial
+        // re-render can see it again.
+        $this->deferFormQuery = $request->queryString !== '' ? $request->queryString : null;
+        try {
+            return $this->renderElement($element);
+        } finally {
+            $this->deferFormQuery = null;
+        }
     }
 
     /**
@@ -1672,6 +1686,10 @@ final class UsePHP
 
         // Partial update (AJAX) - return only component HTML
         if ($isPartial) {
+            // Actions are dispatched before routing. Resolve the page's route
+            // so the re-render sees the same useRouter() params as its GET.
+            $this->resolveActionPageMatch();
+
             // 'restore' changes nothing and usephp.js treats a redirect as a
             // rejected snapshot, so it answers with a partial on any route.
             if ($isRegisteredComponent
@@ -1948,6 +1966,7 @@ final class UsePHP
                 deferPrefix: $this->deferPrefix,
                 csrfToken: $this->getCsrfToken(...),
                 actionSigner: $this->actionSigner(),
+                deferQuery: $this->deferFormQuery,
             );
             return $renderer->renderElement($element);
         } finally {
@@ -2008,6 +2027,17 @@ final class UsePHP
             return '';
         }
 
+        // A form from the defer endpoint brings the endpoint's query with it.
+        // The client already chooses the query string of this POST, so taking
+        // it from a field gives it nothing new and needs no signature.
+        $deferQuery = $_POST['_usephp_defer_query'] ?? null;
+        if (!is_string($deferQuery) || $deferQuery === '') {
+            $deferQuery = null;
+        } else {
+            parse_str($deferQuery, $deferParams);
+            $_GET = $deferParams;
+        }
+
         $storageType = $this->registry->getStorageType($componentName);
         $state = ComponentState::getInstance($instanceId, $storageType);
         ComponentState::reset();
@@ -2023,6 +2053,7 @@ final class UsePHP
             $this->deferPrefix,
             $this->getCsrfToken(...),
             actionSigner: $this->actionSigner(),
+            deferQuery: $deferQuery,
         );
 
         return $renderer->renderPartial(fn() => $component->render());

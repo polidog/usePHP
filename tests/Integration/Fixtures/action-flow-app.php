@@ -16,10 +16,12 @@ declare(strict_types=1);
 
 use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\Component;
+use Polidog\UsePhp\Component\Defer;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
 
 use function Polidog\UsePhp\Runtime\fc;
+use function Polidog\UsePhp\Runtime\useRouter;
 use function Polidog\UsePhp\Runtime\useState;
 
 use Polidog\UsePhp\Storage\StorageType;
@@ -46,6 +48,31 @@ final class MemoryClassCounter extends FixtureCounter {}
 #[Component(storage: 'snapshot')]
 final class SnapshotClassCounter extends FixtureCounter {}
 
+#[Component]
+final class TaskDetail extends BaseComponent
+{
+    public function render(): Element
+    {
+        $id = useRouter()['params']['id'] ?? '(none)';
+        [$likes, $setLikes] = $this->useState(0);
+
+        return H::button(onClick: fn() => $setLikes($likes + 1), children: "task={$id} likes={$likes}");
+    }
+}
+
+#[Component]
+#[Defer(name: 'post-likes')]
+final class PostLikes extends BaseComponent
+{
+    public function render(): Element
+    {
+        $id = $_GET['post_id'] ?? '(none)';
+        [$likes, $setLikes] = $this->useState(0);
+
+        return H::button(onClick: fn() => $setLikes($likes + 1), children: "post={$id} likes={$likes}");
+    }
+}
+
 if (getenv('USEPHP_TEST_SESSION_START') !== false) {
     session_start();
 }
@@ -61,6 +88,8 @@ if ($secret !== false) {
 $app->register(SessionClassCounter::class);
 $app->register(MemoryClassCounter::class);
 $app->register(SnapshotClassCounter::class);
+$app->register(TaskDetail::class);
+$app->register(PostLikes::class);
 
 $counterFc = static fn(string $key, StorageType $storage) => fc(static function (array $props): Element {
     [$count, $setCount] = useState(0);
@@ -76,6 +105,7 @@ $router->get('/session-fc', static fn(): Element => $counterFc('session-fc', Sto
 $router->get('/memory-fc', static fn(): Element => $counterFc('memory-fc', StorageType::Memory)([]));
 $router->get('/snapshot-fc', static fn(): Element => $counterFc('snapshot-fc', StorageType::Snapshot)([]));
 
+$router->get('/tasks/{id:\d+}', TaskDetail::class);
 $router->get('/session-route', SnapshotClassCounter::class)->sessionSnapshot();
 $router->get('/persistent-route', SnapshotClassCounter::class)->persistentSnapshot();
 $router->get('/shared-route', SnapshotClassCounter::class)->sharedSnapshot('fixture');
