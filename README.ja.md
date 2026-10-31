@@ -1,17 +1,17 @@
 # usePHP
 
-React Hooks風の書き心地で、**最小限のJavaScript**でサーバードリブンUIを実現するフレームワーク。
+React Hooks風の書き心地でサーバードリブンUIを実現するフレームワーク。書くのはPHPだけで、部分更新は `usephp.js` というスクリプト1つが担当します。
 
 ## 特徴
 
 - **React Hooks風API** - `useState`でシンプルに状態管理
 - **関数コンポーネント（推奨）** - シンプルなPHP callableを使った軽量コンポーネント
 - **組み込みルーター** - シンプルで差し替え可能なルーター、ページ間でスナップショット状態を保持
-- **最小限のJS (~40行)** - 部分更新でスムーズなUX、JSなしでもフォールバック動作
+- **JavaScriptを書かなくてよい** - `usephp.js`（約1,500行、依存なし、ビルド不要）が部分更新を担当し、これがなくてもボタンとフォームは通常のフォーム送信として動作
 - **デフォルトはピュアPHP** - `H::xxx()`形式のコンポーネントはトランスパイル不要
 - **PSX（オプション）** - HTML中心のUI向けに`usephp compile`でコンパイルされるTSX風テンプレート構文（[PSXセクション](#psxオプションtsx風構文)を参照）
 - **設定可能な状態ストレージ** - セッション（永続）またはメモリ（リクエスト単位）を選択可能
-- **プログレッシブエンハンスメント** - JavaScriptが無効でも動作
+- **プログレッシブエンハンスメント** - ボタンの`onClick`と`onSubmit`はJavaScriptが無効でも動作
 - **フレームワーク統合** - Laravel、Symfony等のフレームワークと併用可能
 
 ## インストール
@@ -37,8 +37,8 @@ use Polidog\UsePhp\Runtime\Element;
 use function Polidog\UsePhp\Runtime\fc;
 use function Polidog\UsePhp\Runtime\useState;
 
-// fc()ラッパーでカウンターコンポーネントを定義
-$Counter = fc(function(array $props): Element {
+// コンポーネントのファイルはコンポーネントを返す。'counter' は状態管理用のキー
+return fc(function (array $props): Element {
     [$count, $setCount] = useState($props['initial'] ?? 0);
 
     return H::div(
@@ -55,7 +55,7 @@ $Counter = fc(function(array $props): Element {
             ),
         ]
     );
-}, 'counter'); // 'counter' は状態管理用のキー
+}, 'counter');
 ```
 
 ### 2. ルーター付きエントリーポイントを作成
@@ -64,9 +64,12 @@ $Counter = fc(function(array $props): Element {
 <?php
 // public/index.php
 
-require_once __DIR__ . '/../vendor/autoload.php';
-require_once __DIR__ . '/../components/Counter.php';
+ob_start(); // $page が doctype を出力する。バッファしておけばセッション Cookie を送れる
 
+require_once __DIR__ . '/../vendor/autoload.php';
+
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\UsePHP;
 
 // usephp.jsを配信（部分更新用）
@@ -76,23 +79,55 @@ if ($_SERVER['REQUEST_URI'] === '/usephp.js') {
     exit;
 }
 
-// スナップショットセキュリティを設定（推奨）
-UsePHP::setSnapshotSecret('your-secret-key-here');
+$Counter = require __DIR__ . '/../components/Counter.php';
+
+$app = new UsePHP();
+
+// アクションとスナップショットに署名する。本番のシークレットは設定から読み込む
+$app->setSnapshotSecret('your-secret-key-here');
+
+// ページを包むドキュメント。ルートが Element を返すと、
+// usePHP が部分更新のためにそこからコンポーネントを見つけられる
+$page = function (string $title, Element $content): Element {
+    echo '<!DOCTYPE html>';
+
+    return H::html(lang: 'en', children: [
+        H::head(children: [
+            H::meta(charset: 'utf-8'),
+            H::title(children: $title),
+        ]),
+        H::body(children: [
+            H::nav(children: [
+                H::a(href: '/', children: 'Counter'),
+                ' ',
+                H::a(href: '/about', children: 'About'),
+            ]),
+            $content,
+            H::script(src: '/usephp.js', defer: true),
+        ]),
+    ]);
+};
 
 // ルートを設定
-$router = UsePHP::getRouter();
-$router->get('/', Counter::class)->name('home');
-$router->get('/about', AboutPage::class)->name('about');
+$router = $app->getRouter();
+$router->get('/', fn(): Element => $page('Counter', $Counter(['initial' => 0])));
+$router->get('/about', fn(): Element => $page('About', H::p(children: 'A usePHP app.')));
 
 // アプリケーションを実行
-UsePHP::run();
+$app->run();
 ```
 
-自前のレイアウトで script を出す場合は、手書きの
+このために `session_start()` を呼ぶ必要はありません。[要件](#要件)を参照してください。
+
+テンプレートなど、レイアウトが文字列の場合は、手書きの
 `<script src="/usephp.js">` より `UsePHP::renderClientScript()` を推奨します。
 公開済みアセットを `defer` 付きで読み込みつつ、アセットが読めない場合にも
 defer コンポーネントだけは取得する小さなインライン fallback を同梱します。
-部分フォーム更新には引き続き完全な `usephp.js` が必要です。
+部分フォーム更新には引き続き完全な `usephp.js` が必要です。ルートハンドラが
+そのような文字列を返すと、ページ上の Session ストレージのコンポーネントは
+部分更新できなくなり、アクションのたびにページを再読み込みします。部分更新を
+残すには、`examples/index.php` が `handleAction()` で行っているように、
+レイアウトより前にアクションを処理してください。
 
 ### 3. サーバーを起動
 
@@ -109,59 +144,178 @@ usePHPには組み込みルーターが含まれており、フレームワー�
 ### 基本的な使い方
 
 ```php
+use Polidog\UsePhp\Router\RequestContext;
 use Polidog\UsePhp\UsePHP;
 
-$router = UsePHP::getRouter();
+$app = new UsePHP();
 
-// ルートを登録
-$router->get('/', HomeComponent::class)->name('home');
-$router->get('/users/{id}', UserComponent::class)->name('user.show');
-$router->post('/users', CreateUserHandler::class)->name('user.create');
+// コンポーネントクラスをルートに指定するには、先に登録が必要
+$app->register(HomeComponent::class);
+$app->register(AdminDashboard::class);
+
+$router = $app->getRouter();
+
+// 登録済みのコンポーネントクラス
+$router->get('/', HomeComponent::class);
+
+// callable: ルートパラメータとリクエストを受け取り、Element か文字列を返す
+$router->get('/users/{id:\d+}', fn(array $params) => $UserPage(['key' => $params['id'], 'id' => $params['id']]));
+$router->post('/users', function (array $params, RequestContext $request): string {
+    return createUser($request->post);
+});
 
 // ルートグループ
 $router->group('/admin', function ($group) {
-    $group->get('/dashboard', DashboardComponent::class)->name('admin.dashboard');
-    $group->get('/users', AdminUsersComponent::class)->name('admin.users');
+    $group->get('/dashboard', AdminDashboard::class);
 });
 
 // アプリケーションを実行
-UsePHP::run();
+$app->run();
 ```
 
-### URL生成
+登録していないコンポーネントクラスを指定すると、そのルートへのリクエスト時に `LogicException` になります。それ以外の文字列は関数名などの callable でなければなりません。invokable クラスの名前はハンドラとしては使えません。
 
-```php
-// ルート名からURLを生成
-$url = $router->generate('user.show', ['id' => '42']);  // /users/42
-```
+### ルートパターン
+
+| パターン | マッチするもの |
+|---|---|
+| `/about`, `/file.txt` | 文字どおり。`.` は正規表現のワイルドカードではなくドット |
+| `/users/{id}` | パスの1セグメント |
+| `/users/{id:\d+}` | 正規表現に一致するセグメント |
+| `/posts/{page?}` | `/posts` と `/posts/2`（無いときパラメータに `page` は含まれない） |
+
+- `HEAD` は、`HEAD` 自身のルートが登録されていない限り、対応する `GET` ルートにフォールバックします。ミドルウェアとハンドラは通常どおり実行され、本文は PHP が捨てます。
+- パラメータはマッチの後で1回だけパーセントデコードされます。パターンが見ていない `/` や `..` が値に入りうる（`/users/a%2Fb` は `a/b`）ので、ファイルパスに使う前に検証してください。
+- デコードすると不正な UTF-8 になる値や NUL バイトを含む値は、ルートにマッチせず 404 になります。
 
 ### useRouterフック
 
-コンポーネント内でルーター機能にアクセス：
+`useRouter()` は、現在のリクエスト URL とルートパラメータをコンポーネントに渡します。usePHP に名前付きルートはないので、リンクはパスで書きます。
 
 ```php
 use function Polidog\UsePhp\Runtime\useRouter;
 
-$NavComponent = fc(function(array $props): Element {
+$Breadcrumb = fc(function (array $props): Element {
     $router = useRouter();
 
-    return H::nav(children: [
-        H::a(href: $router['navigate']('home'), children: 'ホーム'),
-        H::a(href: $router['navigate']('about'), children: '概要'),
-        $router['isActive']('home') ? H::span(children: '(現在)') : null,
-    ]);
-}, 'nav');
+    return H::p(children: "{$router['currentUrl']}: user {$router['params']['id']}");
+}, 'breadcrumb');
 ```
 
 `useRouter()`フックの戻り値：
-- `navigate(routeName, params)` - 名前付きルートのURLを生成
 - `currentUrl` - 現在のリクエストURL
 - `params` - 現在のマッチからのルートパラメータ
-- `isActive(routeName)` - ルートが現在アクティブかチェック
+
+### ルートパラメータと状態
+
+インスタンスの状態は ID に属し、ID はコンポーネントとキーで決まります。URL は関係しません。props のキーがない `fc()` コンポーネントの ID は `FC@file.php:12#task`（`file.php:12` はクロージャの開始位置）、キーのないクラスは `App\TaskDetail#0` です。そのため何もしなければ `/tasks/1` と `/tasks/2` は同じ Session の state を使います。1件目にいいねすると、2件目も同じ数になります。
+
+これは仕様です。カートがページをまたいで訪問者についてくるのは、この仕組みによります。state が1件のレコードに属するときは、ルートパラメータをキーに入れてください。
+
+関数コンポーネントでは `key` prop で渡します。
+
+<!-- readme-test: route-key-fc -->
+```php
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+
+use function Polidog\UsePhp\Runtime\fc;
+use function Polidog\UsePhp\Runtime\useState;
+
+$TaskDetail = fc(function (array $props): Element {
+    [$likes, $setLikes] = useState(0);
+
+    return H::div(children: [
+        H::h1(children: "Task {$props['id']}: {$likes} likes"),
+        H::button(onClick: fn() => $setLikes($likes + 1), children: 'Like'),
+    ]);
+}, 'task');
+
+// インスタンス ID: FC@...#task/1, FC@...#task/2
+$router->get('/tasks/{id:\d+}', fn(array $params): Element => $TaskDetail([
+    'key' => $params['id'],
+    'id' => $params['id'],
+]));
+```
+
+クラスをルートハンドラとして直接指定すると、`$router->get('/tasks/{id:\d+}', TaskDetail::class)` にはキーを渡す場所がないので、常に同じ ID で描画されます。代わりに `createElement()` を呼ぶクロージャを使ってください。コンポーネントは `useRouter()` でパラメータを読みます。これは部分更新の間も動きます。
+
+<!-- readme-test: route-key-class -->
+```php
+use Polidog\UsePhp\Component\BaseComponent;
+use Polidog\UsePhp\Component\Component;
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+
+use function Polidog\UsePhp\Runtime\useRouter;
+
+#[Component]
+final class TaskDetail extends BaseComponent
+{
+    public function render(): Element
+    {
+        $id = useRouter()['params']['id'];
+        [$likes, $setLikes] = $this->useState(0);
+
+        return H::div(children: [
+            H::h1(children: "Task {$id}: {$likes} likes"),
+            H::button(onClick: fn() => $setLikes($likes + 1), children: 'Like'),
+        ]);
+    }
+}
+
+$app->register(TaskDetail::class);
+
+$router->get('/tasks/{id:\d+}', fn(array $params): Element => $app->createElement(
+    TaskDetail::getComponentName(),
+    'task-' . $params['id'],
+));
+```
+
+`createElement()` と `render()` が受け取るのは、コンポーネントの登録名です。`#[Component(name: ...)]` を使うとクラス名とは異なり、登録されていない名前はエラーにならず空の結果を描画するので、`getComponentName()` で指定するのが安全です。
+
+`children` 配列の中の `H::component($fn, ['key' => ..., ...])` でも state をキーで分けられますが、ラッパー要素を描画しないので、アクションはその場の更新ではなくページの再読み込みになります。
+
+キーは短くし、パラメータは正規表現で絞ってください。255 バイトを超える、または制御文字を含むインスタンス ID へのアクションは 400 で拒否されます。Session の state はセッションが続く間 ID ごとに残るので、訪問者が開いたレコードの数だけセッションが増えます。
+
+### ミドルウェア
+
+`middleware()` はルートにガードを追加します。ガードは順番に、そのルートの他のどの処理よりも先に実行されます。対象は `GET` と `HEAD`、そしてそのページへのアクション POST です。
+
+<!-- readme-test: middleware -->
+```php
+use Polidog\UsePhp\Router\RequestContext;
+
+session_start();
+
+$requireLogin = function (array $params, RequestContext $request) {
+    return isset($_SESSION['user']);
+};
+
+$router->get('/account', fn() => 'Your account')->middleware($requireLogin);
+```
+
+ミドルウェアは callable か、引数なしのコンストラクタを持つ invokable クラスの名前です。`(array $params, RequestContext $request)` を受け取り、アクションでは `$request->method` が `POST` になります。戻り値で次の動作が決まります。
+
+| 戻り値 | 結果 |
+|---|---|
+| `null`、戻り値なし、`true` | 次のミドルウェア、その後ハンドラへ続行 |
+| `false` | `403 Forbidden` でリクエストを終了 |
+| 文字列または `Element` | それを本文にしてリクエストを終了。ステータスは `http_response_code()` で設定したものを維持 |
+| それ以外 | `LogicException`。壊れたガードがルートを開けたままにすることはない |
+
+`exit` や `$app->redirect('/login')` で自らリクエストを終えることも、例外を投げることもできます。例外は `run()` の外へ伝わり、ハンドラは実行されません。解決できないミドルウェアも `LogicException` です。
+
+ガードは取り付けた URL に属するので、次の経路は対象外です。
+
+- **defer エンドポイント。** `GET /_defer/{name}` にはルートがありません。保護されたページ上の defer コンポーネントは自分で権限を確認してください。defer 内のフォームからのアクションでは、POST 先のページのガードが実行されます。
+- **自前のフロントコントローラー。** ハンドラを自分で呼ぶ場合は `$app->runRouteMiddleware($match, $request)` を呼んでください。ミドルウェアがリクエストを終えたらレスポンス本文を、続行なら `null` を返します。`handleAction()` は POST 先のページのガードを自動で適用します。
+
+別の URL に POST してガードを避けることはできません。署名に描画元のページが含まれ、他のパスへの POST は 400 になります（[署名付きアクション](#署名付きアクション)を参照）。
 
 ### スナップショット挙動
 
-ページ遷移時の状態保持を制御：
+`StorageType::Snapshot` のコンポーネントの状態を、ページ遷移でどう保持するかを制御します。他のストレージタイプには影響しません。
 
 ```php
 // Isolated（デフォルト）- ページ固有の状態
@@ -178,6 +332,19 @@ $router->get('/step1', Step1Component::class)->sharedSnapshot('checkout');
 $router->get('/step2', Step2Component::class)->sharedSnapshot('checkout');
 ```
 
+- **Isolated** は状態をページの中にだけ持ちます。アクションは部分更新、JavaScript なしなら POST への直接応答のページになります。
+- **Persistent、Session、Shared** には書き込み先があるので、JavaScript の有無にかかわらず、クラスコンポーネントも含めてアクションはすべて redirect で終わります。redirect はクエリ文字列を維持し、`_snapshot` だけを除きます。
+- **Persistent** が `?_snapshot=` で運ぶのは1インスタンスだけです。2つ目のインスタンスへのアクションは1つ目を置き換え、1つ目は初期状態に戻って警告がログに出ます。親子でも同じで、子の状態は残りません。複数のインスタンスがあるページでは `sessionSnapshot()` を使ってください。
+- **Session と Shared** はインスタンスごとに `$_SESSION` へ保存し、1スロット（Session のスロット、または Shared のグループごと）に 64 件までです。超えると、書き込みが最も古いインスタンスから初期状態に戻り、ログに出ます。同じクラス・同じ ID のインスタンスは Session ルート間で状態を共有します。
+- Session / Shared ルート上の defer コンポーネントはスロットを読みません。エンドポイントにはルートがないためです。
+
+#### 入れ子の Snapshot コンポーネント
+
+- 親の部分更新では、`usephp.js` が子孫のスナップショットを `_usephp_snapshots[]` で送るので、子孫の状態は保たれます。各要素は同じ HMAC 検証を受け、検証できないものが1つでもあればリクエストは 400 で拒否されます。
+- 子の部分更新では、祖先を初期状態にしてページをリプレイします。そのため祖先の state から作った props は、その断片では古い値になります。
+- 親の中の defer 領域は親の部分更新で配置し直され、`reloadable` でない限り、取得した時点の状態に戻ります。
+- 部分更新はリプレイしたページからコンポーネントを見つける必要があるので、ハンドラはコンポーネントを Element で返すか `renderElement()` で描画してください。そうでなければ Isolated ルートのアクションは redirect に落ちて状態を失い、`Snapshot state lost` の警告がログに出ます。
+
 #### StorageType vs SnapshotBehavior
 
 この2つの概念は異なるレベルで状態を制御します：
@@ -186,29 +353,33 @@ $router->get('/step2', Step2Component::class)->sharedSnapshot('checkout');
 |---|---|---|
 | **スコープ** | 個々のコンポーネント | ルート/ページ遷移 |
 | **設定方法** | `#[Component(storage: '...')]` | `$router->get(...)->sessionSnapshot()` |
-| **用途** | コンポーネントの状態保存方法 | ルート間でのスナップショットの扱い |
+| **用途** | コンポーネントの状態保存方法 | Snapshot ストレージのコンポーネントの状態を、リクエストの間どこに置くか |
 
-**例：** `storage: 'session'`を持つ`TodoList`コンポーネントは、そのコンポーネント自身の状態をセッションに保存します。一方、ルートの`SnapshotBehavior::Persistent`は、別のルートに遷移する際にページ全体のスナップショットをURLで渡すかどうかを制御します。
+**例：** `storage: 'session'`を持つ`TodoList`コンポーネントは、ルートの宣言にかかわらず自身の状態をセッションに保存します。`storage: 'snapshot'`を持つ`Cart`コンポーネントは状態をページの中に持ち、ルートの`persistentSnapshot()`がその状態をURLに移します。
 
 ### フレームワーク統合
 
-Laravel、Symfony等のフレームワーク内でusePHPを使用する場合：
+Laravel、Symfony等のフレームワーク内でusePHPを使用する場合は、ルーターを無効にし、フレームワークのルーティング先のコントローラーで、描画より前にアクションを処理します。
 
 ```php
+$app = new UsePHP();
+$app->register(Counter::class);
+$app->disableRouter();  // NullRouterを使用
+
 // Laravelの例
-Route::get('/counter', function () {
-    UsePHP::disableRouter();  // NullRouterを使用
-    return UsePHP::render(Counter::class);
+Route::match(['get', 'post'], '/counter', function () use ($app) {
+    return $app->handleAction() ?? $app->render(Counter::class);
 });
 
 // Symfonyの例
 #[Route('/counter')]
 public function counter(): Response
 {
-    UsePHP::disableRouter();
-    return new Response(UsePHP::render(Counter::class));
+    return new Response($this->app->handleAction() ?? $this->app->render(Counter::class));
 }
 ```
+
+`handleAction()` はアクション POST でなければ `null` を返します。ルーターがないとリプレイするルートもないので、ここではクラスコンポーネントを使ってください。`fc()` コンポーネントは部分更新のために見つけ直せず、アクションは redirect になります。redirect は `exit` で PHP プロセスを終えます。フレームワーク側で CSRF を検証している場合は [CSRF 対策](#csrf-対策)を参照してください。
 
 ## アーキテクチャ
 
@@ -227,8 +398,10 @@ public function counter(): Response
     |                                  | 状態更新
     |  <部分HTML>Count: 1</部分HTML>    | コンポーネントのみ再レンダリング
     | <--------------------------------|
-    |  (innerHTMLで部分更新)            |
+    |  (現在のDOMに差分適用)             |
 ```
+
+兄弟コンポーネントは再描画されません。アクションが redirect するルート（[スナップショット挙動](#スナップショット挙動)を参照）では、`usephp.js` がページ遷移で redirect に従います。
 
 ### JSなしの場合（フォールバック）
 ```
@@ -245,6 +418,35 @@ public function counter(): Response
     |  <html>Count: 1</html>           | 全ページ再レンダリング
     | <--------------------------------|
 ```
+
+これは状態の置き場所がある場合です。Session ストレージと、Persistent / Session / Shared ルート上の Snapshot ストレージが該当します。Isolated ルート上の Snapshot ストレージはページの中にしか状態を持たないので、サーバーが POST に直接応答します。
+
+```
+[Browser]                         [PHP Server]
+    |                                  |
+    |  <form> POST (button click)      |
+    | -------------------------------->|
+    |                                  | 状態更新、全ページ描画
+    |  200 <html>Count: 1</html>       | Cache-Control: no-store
+    | <--------------------------------|
+```
+
+このページを再読み込みすると、ブラウザがフォームの再送を確認します。Memory ストレージは JavaScript なしでは変化しません。redirect は初期値から始まるためです。
+
+### 部分更新
+
+部分更新のレスポンスは、DOM を置き換えずに差分適用（morph）するので、未送信の入力、フォーカス、選択範囲が残ります。差分適用後に残るフォーム欄の値は、新しい意図を優先して次の順に決まります。
+
+1. リクエスト中にユーザーが編集した値は、ユーザーの値のまま。
+2. サーバーが前回と違う値を描画したら、サーバーの値。
+3. 送信したフォーム内の欄は、全ページ POST の後と同じく描画された値。
+4. それ以外の未送信の値は、ユーザーの値のまま。
+
+hidden フィールドは常にサーバーの値に従います。
+
+- 並べ替えや削除がある一覧の行には `id` を付けてください。付けないと行は位置で対応付けられます。
+- コンポーネントとその祖先・子孫は順番に更新されます。兄弟はお互いを待ちません。親族の送信中に来た固定値のアクションは捨てられます。値は描画時に計算済みで、再送すると別の行に当たりかねないためです。`useFormAction()` のアクションは、送信の完了後に最新の値で再送されます。ラッパーの `aria-busy` は表示用です。
+- 失敗したリクエストは再送しません。[失敗した部分送信は再送しない](#失敗した部分送信は再送しない)を参照してください。
 
 ## API
 
@@ -298,10 +500,15 @@ $Counter = fc(function(array $props): Element {
 }, 'my-counter');
 
 $element = $Counter(['initial' => 5]); // 直接呼び出し
-$html = UsePHP::renderElement($element);
+$html = $app->renderElement($element);
 
 // 方法B: H::component()
-// レンダリング時に解決されるElementを作成
+// children 配列に置いたときに解決される Element を作成。
+// ラッパーを描画しないので、アクションはその場の更新ではなくページの再読み込みになる
+$counterFn = function (array $props): Element {
+    [$count, $setCount] = useState($props['initial'] ?? 0);
+    return H::button(onClick: fn() => $setCount($count + 1), children: "Count: $count");
+};
 H::div(children: [
     H::component($counterFn, ['initial' => 5, 'key' => 'my-counter']),
 ]);
@@ -310,6 +517,19 @@ H::div(children: [
 $Greeting = fn(array $props): Element => H::div(children: "Hello, {$props['name']}!");
 $Greeting(['name' => 'World']); // OK - 状態不要
 ```
+
+Snapshot ストレージのコンポーネントは、ルートハンドラの中か `RenderContext::setApp()` を設定した間に呼び出してください。スナップショットの署名に app が必要で、なければ `LogicException` になります。
+
+**インスタンスのキー：**
+
+インスタンス ID はコンポーネントとキーで決まります。
+
+- `fc()` のキーだけなら、ID の末尾はそのキーです: `FC@file.php:12#row`。
+- `key` prop もあれば2つを合成するので、固定キーのコンポーネントでも複数のインスタンスを描画できます。`$Row(['key' => 'k1'])` の末尾は `#row/k1` です。`key` prop は文字列か int です。
+- どちらもなければ、ID の末尾は同名のコンポーネントの中での出現順です。
+- ページ上で ID が同じインスタンスは1つの state を共有します。これは検出されません。
+
+state はクロージャの定義位置にも依存します。`fc()` を別の行に動かすと state は最初からになります。URL に合わせたキーは[ルートパラメータと状態](#ルートパラメータと状態)を参照してください。
 
 **fc()のストレージタイプ：**
 
@@ -339,15 +559,20 @@ $SnapshotCounter = fc(fn() => ..., 'key', StorageType::Snapshot, persist: Snapsh
 | `Memory` | リクエストごとにリセット | 一時的なUI状態、モーダル |
 | `Snapshot` | HTMLに状態を埋め込み | ステートレスサーバー、共有可能なURL |
 
+`Session` と `Memory` のコンポーネントは、ルートハンドラが Element を返すとその場で更新されます。ページ上の他のコンポーネントは再描画されません。
+
+**Memory ストレージ**は部分更新でしか変化しないので JavaScript が必要で、リロードすると初期値に戻ります。アクションのたびに空のストアから始まるので、複数の `useState` を持つコンポーネントでは他の値がアクションごとに失われます。その場合は Session か Snapshot ストレージを使ってください。
+
 **スナップショットストレージとページリロード。** React の `useState` と同じく、Snapshot の状態はページの中に住んでいます。唯一のコピーは署名付きの `data-usephp-snapshot` 属性で、アクションのたびに往復するだけなので、通常の（Isolated な）ルートではリロードすると初期値に戻ります。サーバーをステートレスに保ったままリロードを越えて保持したい場合は `persist:` でクライアント側永続化にオプトインしてください。`usephp.js` が更新のたびに最新のスナップショットを `sessionStorage`（タブ単位）または `localStorage`（共有）にミラーし、次回ロード時に `restore` アクションとして POST し直してコンポーネントを保存済みの状態で再描画します。他のアクションと同様に HMAC 検証も通ります。Isolated ルートで使ってください。`persistentSnapshot()` / `sessionSnapshot()` のルートはすでに URL や PHP セッションでスナップショットを運んでいます。保存したエントリは `window.usePHP.forgetSnapshots()` で消せます。
 
 #### クラスベースコンポーネント
 
-ライフサイクルメソッドやDIが必要な複雑なコンポーネントには、クラスベースコンポーネントを使用できます：
+コンポーネントはクラスでも書けます。`$app->register(MyComponent::class)` で登録してから名前で描画します：
 
 ```php
 use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\Component;
+use Polidog\UsePhp\Runtime\Element;
 
 #[Component]
 class MyComponent extends BaseComponent
@@ -408,6 +633,22 @@ use function Polidog\UsePhp\Runtime\useState;
 [$state, $setState] = $this->useState($initialValue);
 ```
 
+state は描画の間を JSON で移動するので、使える値は null、スカラー、それらの配列のみです。float は float のまま保持されます。それ以外（オブジェクト、日付、`NAN`）は、その値を持つアクションやスナップショットの描画時に例外になります。`$date->format(DATE_ATOM)` のように先に変換してください。`$setState(null)` は `null` を保存し、初期値には戻りません。
+
+### useEffect
+
+```php
+use function Polidog\UsePhp\Runtime\useEffect;
+
+useEffect(function () use ($id) {
+    logView($id);
+}, [$id]);
+```
+
+effect は初回の描画と依存値の変更時に実行されます。deps が `null` なら毎回、`[]` なら初回のみです。
+
+effect が `Closure` を返すと、それが cleanup です。cleanup は現在のリクエストのメモリにだけ存在し、同じリクエスト内で同じ effect が再実行されるときだけ動きます。次のリクエストでは動かず、unmount もないので、リクエストより長く生きるものの解放には使えません。他の戻り値は、呼び出し可能な文字列や配列も含めて無視されます。メソッドを返すときは `$handle->close(...)` の形にしてください。
+
 ### HTML要素
 
 ```php
@@ -436,7 +677,66 @@ H::div(children: [
 H::article(className: 'post', children: [...]);
 H::table(children: [H::tr(children: [H::td(children: 'セル')])]);
 H::video(src: 'movie.mp4', controls: true);
+
+// 任意の属性を名前付き引数で渡せる。PHP で書けない名前はスプレッドで渡す
+H::div(title: 'x', role: 'alert');
+H::button(...['aria-label' => 'Close', 'data-id' => '1'], children: 'x');
+
+// textarea の value は中身として出力される
+H::textarea(name: 'body', value: $body);
 ```
+
+**children** には Element、文字列、数値、`Stringable`、`null`、bool、それらの配列を渡せます。ネストした配列は flatten されます。`null` と bool は何も出力しません。それ以外は例外です。
+
+**属性：** `aria-*`、`contenteditable`、`draggable`、`spellcheck` の bool は `"true"` / `"false"` で出力します。他の属性は `true` なら値なしの属性を出力し、`false` なら出力しません。テキストと属性の不正な UTF-8 は U+FFFD に置換します。
+
+**`<style>` と `<script>`** の中身は、HTML パーサーがデコードしないのでエスケープせずに出力します。**ユーザー入力を入れないでください。** 自身の終了タグを含む中身は例外になり、Element の子も例外です。`<svg>` と `<math>` の中では通常のマークアップなので、中身はエスケープされます。
+
+### イベント
+
+イベント props はこの4つだけです。`onFocus`、`onBlur`、`onLoad`、`onError` はサーバーへの往復になるので `InvalidArgumentException` になります。
+
+| Prop | 発火するとき | JavaScript なし |
+|---|---|---|
+| `onClick` | クリック | `<button>` と `<input type="submit">` / `type="image"` で動作。他の要素は `usephp.js` が必要 |
+| `onSubmit` | `<form>` の送信 | 動作 |
+| `onChange` | DOM の `change` イベント。テキストは blur か Enter で、1打鍵ごとには発火しない | `usephp.js` が必要 |
+| `onInput` | 入力。300ms 入力が止まってから | `usephp.js` が必要 |
+
+props には `Action` か引数なしのクロージャを渡します。クロージャはイベントの発火時ではなく描画時に実行されて action を作ります。ユーザーの入力を受け取るには `useFormAction()` を使ってください。
+
+### フォーム入力
+
+`useFormAction(['field' => $setter])` は、送信されたフィールドを `useState` のフックにコピーします。form の `onSubmit`（JS なしでも動作）か、`name` を持つコントロールの `onChange` / `onInput`（そのコントロール自身のフィールドのみ）で使います。
+
+<!-- readme-test: form-input -->
+```php
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+
+use function Polidog\UsePhp\Runtime\fc;
+use function Polidog\UsePhp\Runtime\useFormAction;
+use function Polidog\UsePhp\Runtime\useState;
+
+$Profile = fc(function (): Element {
+    [$name, $setName] = useState('');
+
+    return H::form(
+        onSubmit: useFormAction(['name' => $setName]),
+        children: [
+            H::input(name: 'name', value: $name),
+            H::button(children: 'Save'),
+            H::p(children: "Saved: {$name}"),
+        ],
+    );
+}, 'profile');
+
+$router->get('/profile', fn(): Element => $Profile());
+```
+
+**信頼境界:** どのフィールドをどのフックに入れるかは署名されており、クライアントは変更できません。値は署名されないので、信頼できない入力として検証してから使ってください。文字列以外、`UsePHP::MAX_FORM_FIELD_BYTES`（65535 バイト）超、不正な UTF-8 の値はリクエスト全体を 400 で拒否します。未チェックのチェックボックスのように送られなかったフィールドは `''` になります。
+
+JavaScript なしで動くのは、ボタンと submit input の `onClick`、そして `onSubmit` だけです。他の要素には `usephp.js` が必要です。Session ストレージの `fc()` コンポーネントは、ルートハンドラが Element を返していれば入力中にその場で更新されます。ハンドラが文字列を返すと、アクションのたびにページを再読み込みし、入力欄のフォーカスが失われます。
 
 ### コンポーネントの合成
 
@@ -461,10 +761,8 @@ $Card = fc(function(array $props): Element {
 }, 'card');
 
 // 組み合わせて使用
-$App = fc(function(array $props): Element {
+$App = fc(function(array $props) use ($Button, $Card): Element {
     [$count, $setCount] = useState(0);
-
-    global $Button, $Card;
 
     return H::div(children: [
         $Card(['title' => 'カウンター', 'content' => "カウント: $count"]),
@@ -475,7 +773,7 @@ $App = fc(function(array $props): Element {
 
 ## PSX（オプション、TSX風構文）
 
-PSXはコンポーネントを記述するためのオプトインの代替構文です。HTMLを直接書き、`usephp compile`で前述の`H::xxx()`呼び出しに変換します。ランタイムは変わりません — PSXは純粋に構文レイヤーです。
+PSXはコンポーネントを記述するためのオプトインの代替構文です。HTMLを直接書き、`usephp compile`で`createElement()`（前述の`H::xxx()`の内部で使われる関数）の呼び出しに変換します。ランタイムは変わりません — PSXは純粋に構文レイヤーです。
 
 ### いつ使うか
 
@@ -491,7 +789,6 @@ PSXはコンポーネントを記述するためのオプトインの代替構�
 // components/Counter.psx
 namespace App\Components;
 
-use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Storage\StorageType;
 
 use function Polidog\UsePhp\Runtime\fc;
@@ -517,14 +814,23 @@ return fc(function (array $props) {
     [$count, $setCount] = useState($props['initial'] ?? 0);
 
     return (
-        H::div(className: 'counter', children: [
-            H::span(children: ['Count: ', $count]),
-            H::button(onClick: fn() => $setCount($count + 1), children: '+'),
-            H::button(onClick: fn() => $setCount($count - 1), children: '-'),
-        ])
+        \Polidog\UsePhp\Html\createElement('div', ['className' => 'counter', 'children' => [
+            \Polidog\UsePhp\Html\createElement('span', ['children' => ['Count: ', $count]]),
+            \Polidog\UsePhp\Html\createElement('button', ['onClick' => fn() => $setCount($count + 1), 'children' => ['+']]),
+            \Polidog\UsePhp\Html\createElement('button', ['onClick' => fn() => $setCount($count - 1), 'children' => ['-']]),
+        ]])
     );
 }, 'counter', StorageType::Session);
 ```
+
+`.psx` ファイルのタグには `use Polidog\UsePhp\Html\H` は不要です。コンパイル後のコードは `createElement()` を完全修飾名で呼ぶので、`{0}` や `width="100"` のようなマークアップに `H::xxx()` の引数の型は適用されません。
+
+素の PHP との違いで知っておくとよい点:
+
+- 右辺にタグがある `&&` と `||` は JSX と同様に動きます。`{$isAdmin && <AdminBar />}` はタグを描画します。JSX との違いが1つあり、`{0 && <b>x</b>}` は `0` ではなく何も出力しません。
+- `{/* コメント */}` はコメントで、子要素を作りません。
+- テキストと属性値の HTML エンティティはコンパイル時にデコードされ、出力時にあらためてエスケープされます。
+- `<style>` と `<script>` の中はすべて文字列なので、`{$x}` は展開されません。
 
 ### コンパイルワークフロー
 
@@ -545,6 +851,8 @@ return fc(function (array $props) {
 ./vendor/bin/usephp compile components/ --cache=build/psx
 ```
 
+存在しないパスはエラーです（終了コード 1）。
+
 `compile`は出力を`var/cache/psx/`へ書き出します（`--cache=PATH`で変更可能）。各`.psx`ソースファイルから、そのディレクトリにsha1ハッシュを名前にした`.php`コンパニオンファイルが生成され、加えて単一の`manifest.php`（FQCN→コンパイル後のパスのマップ）が出力されます。プロジェクトにコミットするのは`.psx`ソースファイルのみで、キャッシュディレクトリは無視するのが推奨です：
 
 ```gitignore
@@ -560,8 +868,8 @@ $app = new UsePHP();
 $app->loadComponentManifest(__DIR__ . '/../var/cache/psx/' . CompileCommand::MANIFEST_FILENAME);
 
 // PSXコンポーネントをルートハンドラーとして使用
+$router = $app->getRouter();
 $router->get('/', function () use ($app) {
-    \Polidog\UsePhp\Runtime\RenderContext::beginRender();
     return $app->renderPsxComponent('App\\Components\\Counter', ['initial' => 0]);
 });
 ```
@@ -809,12 +1117,12 @@ window.usePHP.reloadDefer('/_defer/todo-list?p=2'); // 厳密 URL で指定
 - **defer 名は URL-safe で一意。** パターン: `[A-Za-z0-9_-]+`。同じ名前を二つのラッパーで宣言するとコンパイル時にエラーになります。
 - **クラスベース defer 対応。** クラスに `#[Defer(name: '...')]` を付ければ `register()` がエンドポイントを自動登録します。エンドポイントモードで何を返すかは `render()` が決めます。
 - **paramsはスカラのみ。** クエリ文字列を経由するため、`int`/`string`/`float`/`bool` のみ。`bool` は `'1'/'0'` に変換。配列・Element・Closure・リソースは渡せません。
-- **認可はコンポーネント側の責務。** 名前と params は URL に露出するため、敏感な情報を取得するエンドポイントでは、コンポーネント側でセッションや権限を確認してください（HMAC 署名は不要になりました — 名前はあくまで「公開された入口名」）。
-- **入れ子のdeferも動作します。** deferしたコンポーネントの出力内にさらに `<...Deferred />` がある場合、`usephp.js` が再帰的に hydrate します。
+- **認可はコンポーネント側の責務。** 名前と params は URL に露出し、エンドポイントにはルートがないので[ルートのミドルウェア](#ミドルウェア)も動きません。敏感な情報を取得するエンドポイントでは、コンポーネント側でセッションや権限を確認してください（HMAC 署名は不要になりました — 名前はあくまで「公開された入口名」）。
+- **入れ子のdeferも動作します。** deferしたコンポーネントの出力内にさらに `<...Deferred />` がある場合、内側はプレースホルダのまま、自身のエンドポイントと `Cache-Control` で配信されます。そのエンドポイントの登録も必要です。`usephp.js` が再帰的に hydrate します。
 - **2 段構成の defer キャッシュ（L1 インメモリ + opt-in な L2 `localStorage`）。** 永続化はコンポーネントが決め（HTTP `Cache-Control` ではなく `Defer::$localCache`、デフォルトは時間失効なし・`Defer::$localCacheTtl` 秒で任意に上限可）、JS の強制リセット API があります — 上記 [クライアントキャッシュと強制リセット](#クライアントキャッシュと強制リセット) を参照。opt-in しないコンポーネントは従来のインメモリのみキャッシュと全く同じ挙動です。
 - **opt-in な明示的リロード（`Defer::$reloadable`）。** 再取得可能なラッパーを残し、`window.usePHP.reloadDefer()`・フォームの `data-usephp-reload-defer`・任意要素のクリックで defer 領域を再取得できます — 上記 [明示的リロード](#明示的リロード) を参照。リロードのたびにその URL の両キャッシュ層を先に破棄します。opt-in しないコンポーネントは解決時に置換され、マークアップはバイト一致です。
 - **JSなしのユーザーはfallbackしか見えません。** JavaScript は動くが公開済みの `usephp.js` アセットが読めない場合、`UsePHP::renderClientScript()` が同梱する小さなインライン fallback により defer フラグメントは一度だけ取得されます。部分フォーム更新、defer キャッシュ、明示的リロード API には引き続き完全なアセットが必要です。
-- **フレームワーク統合:** コントローラから `UsePHP::handleDeferred()` を呼んでください。defer ルート（GET `/_defer/...`）ならレンダリング済みHTMLを返し、そうでなければ `null` を返します（`handleAction()` と同じパターン）。プレフィックスは `setDeferPrefix('/api/_d')` で変更可。
+- **フレームワーク統合:** コントローラから `$app->handleDeferred()` を呼んでください。defer ルート（GET `/_defer/...`）ならレンダリング済みHTMLを返し、そうでなければ `null` を返します（`handleAction()` と同じパターン）。プレフィックスは `setDeferPrefix('/api/_d')` で変更可。
 
 ## 生成されるHTML
 
@@ -825,16 +1133,20 @@ H::button(onClick: fn() => $setCount($count + 1), children: '+')
 ↓ 変換
 
 ```html
-<form method="post" data-usephp-form style="display:inline;">
-  <input type="hidden" name="_usephp_component" value="counter#0" />
-  <input type="hidden" name="_usephp_action" value='{"type":"setState","payload":{"index":0,"value":1},"componentId":"counter#0","storageType":null}' />
+<button type="submit" form="usephp-f-65c6c10e7fbb6f81">+</button>
+<!-- コンポーネントのラッパーの末尾に: -->
+<form method="post" data-usephp-form id="usephp-f-65c6c10e7fbb6f81" hidden>
+  <input type="hidden" name="_usephp_component" value="FC@Counter.php:11#counter" />
+  <input type="hidden" name="_usephp_action" value='{"type":"setState","payload":{"index":0,"value":1},"componentId":"FC@Counter.php:11#counter","storageType":"session"}' />
   <input type="hidden" name="_usephp_action_sig" value="…hmac-sha256…" />
-  <button type="submit">+</button>
+  <input type="hidden" name="_usephp_csrf" value="…" />
 </form>
 ```
 
+- ボタンは書いた場所に置かれ、`form` 属性で別の hidden フォームを指します。フォームはコンポーネントのラッパーの末尾に出力するので、アプリの `<form>`、`<p>`、`<tbody>` の中にボタンを置いてもマークアップは崩れません。
 - `data-usephp-form` - JSがインターセプトするフォーム
-- `_usephp_action_sig` - インスタンス ID とアクション JSON に対する HMAC。サーバーは自分が描画したアクションしか実行しません（[署名付きアクション](#署名付きアクション) を参照）
+- `_usephp_action_sig` - アクションとその束縛先に対する HMAC。サーバーは自分が描画したアクションしか実行しません（[署名付きアクション](#署名付きアクション) を参照）
+- `_usephp_csrf` - セッションが有効なときに付きます（[CSRF 対策](#csrf-対策) を参照）
 - JSなしでも通常のフォーム送信として動作
 
 ## CLI
@@ -867,7 +1179,13 @@ usePHP には複数の防御機構が組み込まれています。以下はア�
 
 - **スナップショットは再生可能で、期限がありません。** `SnapshotBehavior::Persistent` は意図的に state を URL で運ぶため、リンクを知っている人は誰でも同じ状態を再現できます。`Session` / `Shared` のスナップショットは PHP のセッション ID に束縛されますが、どちらにも期限はなく、署名シークレットが有効な限りスナップショットも有効です。スナップショットは「ブックマーク」であって、「何かが起きたことの証明」ではないと考えてください。
 
-- **`/_defer/{name}` は認証なしの公開 GET エンドポイントです。** クエリパラメータはそのままコンポーネントの props になります。コンポーネント内で権限を確認するのに加えて（上記 [遅延レンダリング](#遅延レンダリングcdnキャッシュ対応の部分ハイドレーション) を参照）、props は信頼できない入力として扱ってください。使う前に検証・キャストし、属性名・タグ名・`onClick` などのイベント props に決して流さないでください。
+- **`_usephp_snapshots[]` はクライアント入力です。** ページ上の他のスナップショットをアクションと一緒に送るためのものです。各要素はスナップショットの HMAC を通る必要がありますが、どれを送るかはクライアント次第なので、上記の再生に関する注意はこれにも当てはまります。
+
+- **`useFormAction()` の値はクライアント入力です。** ルートパラメータも同様です。[フォーム入力](#フォーム入力)と[ルートパターン](#ルートパターン)を参照してください。
+
+- **`<style>` と `<script>` の中身はエスケープされません。** [HTML要素](#html要素)を参照してください。
+
+- **`/_defer/{name}` は認証なしの公開 GET エンドポイントです。** [ルートのミドルウェア](#ミドルウェア)の対象外で、クエリパラメータはそのままコンポーネントの props になります。コンポーネント内で権限を確認するのに加えて（上記 [遅延レンダリング](#遅延レンダリングcdnキャッシュ対応の部分ハイドレーション) を参照）、props は信頼できない入力として扱ってください。使う前に検証・キャストし、属性名・タグ名・`onClick` などのイベント props に決して流さないでください。
 
 - **セッション Cookie のフラグと `session_regenerate_id()` はアプリケーション側の仕事です。** 後述の [セッション Cookie の堅牢化](#セッション-cookie-の堅牢化) を参照してください。
 
@@ -893,12 +1211,12 @@ echo bin2hex(random_bytes(32));
 
 ### CSRF 対策
 
-`UsePHP::run()` と `UsePHP::handleAction()` はすべての POST に対して 2 層の検証を行います:
+`$app->run()` と `$app->handleAction()` はすべての POST に対して 2 層の検証を行います:
 
 1. **Origin / Referer 同一オリジン検証**（常時）。両ヘッダ欠落、または現在の `Host` と一致しない origin のリクエストは `403 Forbidden` で拒否されます。
-2. **セッションバインドのシンクロナイザトークン**（セッション有効時）。`Renderer::renderWithForm` がセッション単位のトークンを `<input type="hidden" name="_usephp_csrf" value="...">` として埋め込み、`doHandleAction` が `hash_equals` で検証します。
+2. **セッションバインドのシンクロナイザトークン**（セッション有効時）。すべてのアクションフォームがセッション単位のトークンを `<input type="hidden" name="_usephp_csrf" value="...">` として埋め込み、POST を `hash_equals` で検証します。セッション Cookie があるのにセッションを開始できないリクエストは、この検証で拒否されます。
 
-自前でフォームを描画する場合は `UsePHP::getCsrfToken()` でトークンを取得できます。
+自前でフォームを描画する場合は `$app->getCsrfToken()` でトークンを取得できます。
 
 ホストフレームワーク側（Laravel の `VerifyCsrfToken`、Symfony の CSRF コンポーネント等）が既に POST ハンドラで CSRF を強制している場合は、二重検証で正常なリクエストが弾かれないよう usePHP 側を opt-out してください:
 
@@ -909,9 +1227,18 @@ $app->disableCsrfProtection();
 
 ### 署名付きアクション
 
-すべてのアクションフォームには `_usephp_action_sig` が含まれます。これはコンポーネントのインスタンス ID と `_usephp_action` の JSON そのものに対する HMAC-SHA256 です。`doHandleAction()` は署名が無い、または検証に失敗するアクションを拒否するため、ブラウザはサーバーが描画したアクションしか再送できません。フックの `index`、`value`、`storageType` を書き換えることも、別のコンポーネントインスタンスに向けることもできません。PHP セッションが有効な場合はセッション ID も署名に混ぜるので、あるセッションで描画したフォームは別のセッションでは検証を通りません。クライアント側で組み立てる `restore` アクション（スナップショットの永続化）だけは署名を持ちませんが、payload を持てず、スナップショット自身の HMAC（同じインスタンスを指している必要があります）で検証されます。
+すべてのアクションフォームには `_usephp_action_sig` が含まれます。これは POST 先の範囲、セッション、コンポーネントのインスタンス ID、`_usephp_action` の JSON そのものに対する HMAC-SHA256 です。POST は署名が無い、または検証に失敗するアクションを拒否するため、ブラウザはサーバーが描画したアクションしか再送できません。フックの `index`、`value`、`storageType` を書き換えることも、別のコンポーネントインスタンスに向けることもできません。
 
-署名鍵は `setSnapshotSecret()` を呼んでいればそのシークレット、そうでなければ `$_SESSION` に保存するセッションごとのランダム鍵です。どちらも無い（シークレット未設定かつセッション無し）アプリケーションは検証可能なアクションを描画できないため、シークレットを設定してください。自前でアクションフォームを描画する場合は `UsePHP::signAction($instanceId, $actionJson)` で署名を取得できます。
+署名はセッション、インスタンス、ページのパスに束縛されます。あるセッションで描画したフォームは別のセッションでは検証を通らず、別のページに再送すると 400 になります。これにより、アクションが描画元ページの[ミドルウェア](#ミドルウェア)を避けることはできません。
+
+- **通常のフォーム**は、描画したページのパスにしか POST できません。パスの比較はルーターと同じで、末尾のスラッシュとクエリ文字列は無視し、パーセントエンコーディングは区別します。
+- **defer コンポーネントのフォーム**は `/_defer/{name}` で描画され、それを含むページを知ることができないので、defer の名前に束縛され、どのページへの POST でも受理されます。誰でもエンドポイントから新しいフォームを取得できるので、これで新たに渡すものはありません。POST 先のページのガードは実行されますが、エンドポイント自体にガードはありません。
+- **自前のルートで取得して別のページに差し込んだ HTML** のフォームはそのルートに束縛されており、`usephp.js` は差し込まれたページへ POST するので 400 になります。そのようなコンポーネントは defer にしてください。手書きのフォームなら、`$app->signAction($instanceId, $actionJson, $pagePath)` で POST 先のページを指定します。
+- **`restore` アクション**（スナップショットの永続化）は `usephp.js` が組み立てるので、その JSON は署名の対象ではありません。payload を持てず、送るスナップショットはそれ自身の HMAC を通り、同じインスタンスを指している必要があります。さらに、永続化するコンポーネントのためにページが描画する `data-usephp-restore-sig` の署名（束縛は他と同じ）が必要です。古いスナップショットで、保護されたコンポーネントを公開ページに呼び出すことはできません。
+
+**アップグレード時の注意:** 署名の対象にページが加わったので、以前のバージョンで描画したアクションフォームは、CDN やブラウザのキャッシュにあるページも含めてすべて 400 になります。`data-usephp-restore-sig` のないページの `restore` も 400 で拒否され、`usephp.js` はそのページ用に保存したスナップショットを破棄します。デプロイ時にキャッシュを消してください。
+
+署名鍵は `setSnapshotSecret()` を呼んでいればそのシークレット、そうでなければ `$_SESSION` に保存するセッションごとのランダム鍵で、後者の場合はアクションフォームのあるページでセッションを開始します。すでに出力済みで開始できないとアクションを検証できないので、シークレットを設定するか、出力より前に描画してください。`signAction()` は自前で描画するフォームのためのもので、内部 API であり安定していません。
 
 署名が直すのは「運び方」であって信頼境界ではありません。ユーザーは自分に描画されたアクションを何度でも再送できるので、フック state を認可判定に使わないでください（上記の信頼境界の節を参照）。不正な形のアクション（型違い、範囲外のフック index、不正なインスタンス ID）は PHP の `TypeError` ではなく `400` で応答します。
 
@@ -946,7 +1273,7 @@ session.cookie_samesite = Lax   ; もしくは Strict
 
 ### 同一オリジンへのリダイレクト
 
-`UsePHP::redirect($url)` および `SimpleRouter::createRedirectUrl()` は絶対 URL（`https://...`）、プロトコル相対 URL（`//host/path`）、スキーム付きパス（`javascript:...`）を拒否します。`/` 始まりの同一オリジンパスのみ渡してください。外部ドメインへのリダイレクトが必要な場合は、独自の許可リストで検証した上で自前で `Location` ヘッダを送ってください。
+`$app->redirect($url)` および `SimpleRouter::createRedirectUrl()` は絶対 URL（`https://...`）、プロトコル相対 URL（`//host/path`）、スキーム付きパス（`javascript:...`）を拒否します。`/` 始まりの同一オリジンパスのみ渡してください。外部ドメインへのリダイレクトが必要な場合は、独自の許可リストで検証した上で自前で `Location` ヘッダを送ってください。
 
 ### 遅延フェッチのガード（クライアント側）
 
@@ -997,15 +1324,17 @@ document.addEventListener('usephp:submit-error', (e) => {
 
 ### URL 属性の XSS 対策
 
-`href`, `src`, `action`, `formaction`, `srcdoc`, `data`, `poster`, `background`, `xlink:href` は URL コンテキストの属性です。Renderer は値のスキームが `javascript:`, `vbscript:`, `data:` のいずれかに該当する場合（ブラウザのパースに合わせて先頭の空白・制御文字を除いた後で判定）、属性を破棄します。通常の相対 URL や HTTP(S) URL はそのまま通ります。
+`href`, `src`, `action`, `formaction`, `data`, `poster`, `background`, `xlink:href` は URL コンテキストの属性です。Renderer は値のスキームが `javascript:`, `vbscript:`, `data:` のいずれかに該当する場合、属性を破棄します。判定はブラウザのパースに合わせ、タブと改行を全体から除去し、先頭の空白・制御文字を除いた後で行います。通常の相対 URL や HTTP(S) URL はそのまま通ります。
+
+`srcdoc` は URL ではなく、ページのオリジンで実行されるドキュメントを持ちます。空でない値があれば `RuntimeException` を投げます。別の URL を `src` で指定してください。
 
 ### タグ名・属性名の検証
 
-props の *キー* と `Element::$type` はエスケープされずにそのままマークアップへ書き込まれる（エスケープされるのは値だけ）ため、Renderer は補間前にこれらを検証します。タグ名は `/^[A-Za-z][A-Za-z0-9\-]*$/`（HTML/SVG 要素と `my-widget` のようなカスタム要素）に、属性名は JSX→HTML 変換後の名前が `/^[A-Za-z_:][A-Za-z0-9:_.\-]*$/` に一致する必要があります。`data-*`, `aria-*`, `stroke-width`, `xlink:href`, `xml:lang`, `viewBox` などは通りますが、引用符・空白・`=`・`<`・`>` を含む名前は通りません。インラインのイベントハンドラ属性（`onclick`, `onerror`, `onLoad` など、Renderer に到達した `/^on[a-z]/i` に一致する名前）も拒否されます。イベントには `onClick`/`onChange` などの props に `Action` を渡してください（`wire:*` のフォームアクション経路にコンパイルされます）。いずれかの検証に失敗した名前は、描画されずに `RuntimeException` を投げます（常にバグか注入攻撃のどちらかだからです）。
+props の *キー* と `Element::$type` はエスケープされずにそのままマークアップへ書き込まれる（エスケープされるのは値だけ）ため、Renderer は補間前にこれらを検証します。タグ名は `/^[A-Za-z][A-Za-z0-9\-]*$/`（HTML/SVG 要素と `my-widget` のようなカスタム要素）に、属性名は JSX→HTML 変換後の名前が `/^[A-Za-z_:][A-Za-z0-9:_.\-]*$/` に一致する必要があります。`data-*`, `aria-*`, `stroke-width`, `xlink:href`, `xml:lang`, `viewBox` などは通りますが、引用符・空白・`=`・`<`・`>` を含む名前は通りません。インラインのイベントハンドラ属性（`onclick`, `onerror` など、Renderer に到達した `/^on[a-z]/i` に一致する名前）も拒否されます。イベントには `onClick`、`onChange`、`onInput`、`onSubmit` の props に `Action` を渡してください（`wire:*` のフォームアクション経路にコンパイルされます）。いずれかの検証に失敗した名前は、描画されずに `RuntimeException` を投げます（常にバグか注入攻撃のどちらかだからです）。`onFocus`、`onBlur`、`onLoad`、`onError` の props は、それより前の `createElement()` で `InvalidArgumentException` になります（[イベント](#イベント)を参照）。
 
 ### PSX コンパイルキャッシュ
 
-`usephp compile` は生成された PHP ファイルを `var/cache/psx/` に書き出し、`UsePHP::loadComponentManifest()` がそれを `require` します。キャッシュディレクトリは **ビルド/デプロイ用ロールにのみ書き込み権限を与え、HTTP リクエストハンドラからは書けないようにする** こと。`loadComponentManifest()` にリクエスト由来のパスを渡さないでください。
+`usephp compile` は生成された PHP ファイルを `var/cache/psx/` に書き出し、`$app->loadComponentManifest()` がそれを `require` します。キャッシュディレクトリは **ビルド/デプロイ用ロールにのみ書き込み権限を与え、HTTP リクエストハンドラからは書けないようにする** こと。`loadComponentManifest()` にリクエスト由来のパスを渡さないでください。
 
 ### 脆弱性報告
 
@@ -1014,7 +1343,16 @@ props の *キー* と `Element::$type` はエスケープされずにそのま�
 ## 要件
 
 - PHP 8.5+
-- セッション有効
+- PHP の `session` 拡張
+
+`session_start()` を呼ぶ必要はありません。usePHP は Session ストレージや Session / Shared ルートが必要とするときにセッションを開始し、アクションフォームのために訪問者の Cookie からセッションを再開します。Cookie の送信は出力より前でなければならないので、セッション Cookie を持つ訪問者がいるなら、フォームの描画を出力より前に行うか、先に自分で `session_start()` を呼んでください。そうでないと、出力の後で描画したフォームには CSRF トークンがなく、その POST は 403 になります。
+
+シークレットを設定しないと、アクションフォームのあるページは署名鍵を保持するためにセッションと Cookie を作ります。設定すれば、Snapshot ストレージだけのページは Cookie なしのままです。
+
+## 既知の制約
+
+- **大きな一覧は描画のコストが高い（[#87](https://github.com/polidog/usePHP/issues/87)）。** setter の値は描画時に計算してフォームに持つので、配列全体を1つの `useState` に入れた一覧では、ボタンごとにその配列を書き出します。HTML のサイズは行数の2乗で増え、約 1,000 行で `memory_limit` の 128 MB を超えます。長い一覧はサーバー側に置き、ID に対して操作してください。
+- **複数タブでは後の書き込みが勝つ（[#80](https://github.com/polidog/usePHP/issues/80)）。** 同じ理由で、各タブは描画時に計算した値を送ります。同じカウンターを2つのタブで開いて1回ずつ押すと、結果は 1 です。一覧をあるタブで変更すると、別のタブの変更を巻き戻すことがあります。
 
 ## 開発
 
