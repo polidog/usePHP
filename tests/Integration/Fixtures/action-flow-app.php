@@ -214,4 +214,45 @@ $router->get('/plant', static function () use ($app): string {
     return 'planted';
 });
 
+// A snapshot parent that re-renders its snapshot descendants.
+$grandchild = fc(static function (array $props): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::button(onClick: fn() => $setCount($count + 1), children: "grandchild={$count}");
+}, 'grandchild', StorageType::Snapshot);
+$child = fc(static function (array $props) use ($grandchild): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::div(children: [
+        H::button(onClick: fn() => $setCount($count + 1), children: "child={$count}"),
+        $grandchild([]),
+    ]);
+}, 'child', StorageType::Snapshot);
+$parent = fc(static function (array $props) use ($child): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::div(children: [
+        H::button(onClick: fn() => $setCount($count + 1), children: "parent={$count}"),
+        // Odd counts of a hideable parent leave the child out.
+        ($props['hideable'] ?? false) && $count % 2 === 1 ? H::p(children: 'no child') : $child([]),
+    ]);
+}, 'parent', StorageType::Snapshot);
+$sessionParent = fc(static function (array $props) use ($child): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::div(children: [
+        H::button(onClick: fn() => $setCount($count + 1), children: "session-parent={$count}"),
+        $child([]),
+    ]);
+}, 'session-parent', StorageType::Session);
+
+$router->get('/nested', static fn(): Element => $parent([]));
+$router->get('/nested-hideable', static fn(): Element => $parent(['hideable' => true]));
+$router->get('/nested-session-parent', static fn(): Element => $sessionParent([]));
+$router->get('/nested-with-sibling', static fn(): Element => H::div(children: [
+    $parent([]),
+    $labeled('sibling', 'sibling'),
+]));
+$router->get('/nested-on-session-route', static fn(): Element => $parent([]))->sessionSnapshot();
+
 $app->run();

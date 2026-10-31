@@ -614,6 +614,11 @@
             if (currentSnapshot && !formData.has('_usephp_snapshot')) {
                 formData.set('_usephp_snapshot', currentSnapshot);
             }
+            // The re-render reaches the snapshot components inside this one,
+            // and the page is what holds their current state.
+            component.querySelectorAll('[data-usephp-snapshot]').forEach((descendant) => {
+                formData.append('_usephp_snapshots[]', descendant.dataset.usephpSnapshot);
+            });
 
             const response = await fetch(location.href, {
                 method: 'POST',

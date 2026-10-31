@@ -783,6 +783,13 @@ final class UsePHP
     private const MAX_SESSION_SNAPSHOTS = 64;
 
     /**
+     * Upper bound for the `_usephp_snapshots[]` one action request is read
+     * for. A page past it loses the state of the instances left out, not the
+     * action.
+     */
+    private const MAX_CARRIED_SNAPSHOTS = 256;
+
+    /**
      * Sign an action for the given component instance.
      *
      * Actions are rendered by the server and replayed by the browser, so the
@@ -1697,12 +1704,14 @@ final class UsePHP
         $actionJson = $_POST['_usephp_action'] ?? null;
         $actionSignature = $_POST['_usephp_action_sig'] ?? null;
         $snapshotJson = $_POST['_usephp_snapshot'] ?? null;
+        $carriedSnapshots = $_POST['_usephp_snapshots'] ?? [];
         $isPartial = isset($_SERVER['HTTP_X_USEPHP_PARTIAL']);
 
         if (!is_string($instanceId) || !is_string($actionJson)
             || !self::isValidInstanceId($instanceId)
             || ($actionSignature !== null && !is_string($actionSignature))
             || ($snapshotJson !== null && !is_string($snapshotJson))
+            || !is_array($carriedSnapshots)
         ) {
             return $this->respondBadRequest('Invalid action request');
         }
@@ -1776,6 +1785,11 @@ final class UsePHP
             return $this->respondBadRequest('Invalid snapshot');
         }
 
+        $carriedIds = $this->restoreCarriedSnapshots($carriedSnapshots, $instanceId);
+        if ($carriedIds === null) {
+            return $this->respondBadRequest('Invalid snapshot');
+        }
+
         // Execute the action. 'restore' carries no mutation and only needs
         // the re-render below.
         if ($action->type === 'setState') {
@@ -1804,7 +1818,7 @@ final class UsePHP
             // fc() components are not in the registry, so re-render them by
             // replaying the page route.
             if (!$isRegisteredComponent) {
-                $partial = $this->renderFunctionComponentPartial($instanceId, $storageType);
+                $partial = $this->renderFunctionComponentPartial($instanceId, $storageType, $carriedIds);
                 if ($partial !== null) {
                     return $partial;
                 }
@@ -1870,6 +1884,72 @@ final class UsePHP
     }
 
     /**
+     * Restore the snapshots of the other instances an action request carries.
+     *
+     * A re-render runs the handler again, and an instance's state lives in its
+     * own snapshot, so the instances the re-render reaches need theirs back.
+     * The page is the only place that has their current state: usephp.js sends
+     * what the descendants of the acting component hold.
+     *
+     * Only signed bytes come in, with no id next to them, so each snapshot can
+     * only ever land on the instance its signed memo names. Anything that does
+     * not verify rejects the whole request, like a bad `_usephp_snapshot` does.
+     * One naming the acting instance is skipped: its state comes from
+     * `_usephp_snapshot` and the action.
+     *
+     * @param array<mixed> $serialized
+     * @return list<string>|null The instance ids restored, or null to reject
+     */
+    private function restoreCarriedSnapshots(array $serialized, string $actingInstanceId): ?array
+    {
+        if ($serialized === []) {
+            return [];
+        }
+
+        $serializer = $this->tryGetSnapshotSerializer();
+        if ($serializer === null) {
+            return null;
+        }
+
+        if (count($serialized) > self::MAX_CARRIED_SNAPSHOTS) {
+            \error_log(sprintf(
+                '[usePHP] An action carried %d snapshots; only the first %d are read',
+                count($serialized),
+                self::MAX_CARRIED_SNAPSHOTS,
+            ));
+            $serialized = array_slice($serialized, 0, self::MAX_CARRIED_SNAPSHOTS);
+        }
+
+        // All of them verify before any is restored.
+        $snapshots = [];
+        foreach ($serialized as $json) {
+            if (!is_string($json)) {
+                return null;
+            }
+            try {
+                $snapshot = $serializer->deserialize($json);
+            } catch (SnapshotVerificationException $e) {
+                $this->logSnapshotRejection('Carried', $e);
+
+                return null;
+            } catch (\Throwable) {
+                // Bytes that are not a snapshot at all fail further down, with
+                // whatever the JSON turned out to be.
+                return null;
+            }
+            if ($snapshot->getInstanceId() !== $actingInstanceId) {
+                $snapshots[$snapshot->getInstanceId()] = $snapshot;
+            }
+        }
+
+        foreach ($snapshots as $snapshot) {
+            ComponentState::fromSnapshot($snapshot);
+        }
+
+        return array_keys($snapshots);
+    }
+
+    /**
      * Resolve the GET route of the page an action was POSTed to, caching it
      * in `currentMatch`. Also returns the RequestContext that GET would have
      * seen so callers can replay the route handler against it.
@@ -1932,11 +2012,20 @@ final class UsePHP
      * answering with a partial would leave those stale (see
      * snapshotRouteRequiresRedirect()).
      *
+     * A carried snapshot is signed, but a partial only has a use for the
+     * descendants of the acting instance. One for an instance rendered anywhere
+     * else on the page would feed the replay state the client picked, and could
+     * reach the output through the props an ancestor passes down, so it rejects
+     * the request. An id the tree does not have at all is fine: nothing reads
+     * it, and it is what a descendant the action just hid looks like.
+     *
      * Returns null when the page cannot be replayed (no router match, a
      * class-component handler, a non-Element result, or the instance is
      * missing from the tree); the caller then falls back to the PRG redirect.
+     *
+     * @param list<string> $carriedIds Instances restored by restoreCarriedSnapshots()
      */
-    private function renderFunctionComponentPartial(string $instanceId, StorageType $storageType): ?string
+    private function renderFunctionComponentPartial(string $instanceId, StorageType $storageType, array $carriedIds = []): ?string
     {
         if ($this->snapshotRouteRequiresRedirect($storageType)) {
             return null;
@@ -1970,6 +2059,12 @@ final class UsePHP
         $wrapper = self::findComponentElement($result, $instanceId);
         if ($wrapper === null) {
             return null;
+        }
+
+        if (array_intersect($carriedIds, self::instanceIdsOutside($result, $instanceId)) !== []) {
+            \error_log('[usePHP] An action on ' . $instanceId . ' carried a snapshot of an instance that is not its descendant');
+
+            return $this->respondBadRequest('Invalid snapshot');
         }
 
         $renderer = new Renderer(
@@ -2010,6 +2105,29 @@ final class UsePHP
         }
 
         return null;
+    }
+
+    /**
+     * The instance ids in an Element tree, leaving out one instance's wrapper
+     * and everything inside it.
+     *
+     * @return list<string>
+     */
+    private static function instanceIdsOutside(Element $element, string $instanceId): array
+    {
+        $id = $element->props['data-usephp'] ?? null;
+        if ($id === $instanceId) {
+            return [];
+        }
+
+        $ids = is_string($id) ? [$id] : [];
+        foreach ($element->children as $child) {
+            if ($child instanceof Element) {
+                $ids = [...$ids, ...self::instanceIdsOutside($child, $instanceId)];
+            }
+        }
+
+        return $ids;
     }
 
     /**
