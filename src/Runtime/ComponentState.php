@@ -158,12 +158,13 @@ final class ComponentState
 
         $key = $this->getEffectDepsKey($index);
 
-        // First run - no previous deps stored
-        if (!$this->storage->has($key)) {
+        $prevDeps = $this->storage->get($key);
+
+        // First run, or the previous run had no deps to compare against
+        // (a deps-less effect stores null).
+        if (!is_array($prevDeps)) {
             return true;
         }
-
-        $prevDeps = $this->storage->get($key);
 
         // Empty deps array = only run on mount (already ran)
         if ($deps === [] && $prevDeps === []) {

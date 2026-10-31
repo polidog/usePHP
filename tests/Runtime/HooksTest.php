@@ -306,6 +306,69 @@ class HooksTest extends TestCase
         $this->assertSame(0, self::$cleanupCalls);
     }
 
+    public function testUseEffectToleratesDepsChangingFromNullToArray(): void
+    {
+        $renderer = new Renderer('effect-null-deps');
+        $runs = 0;
+        $deps = null;
+        $component = function () use (&$runs, &$deps): Element {
+            useEffect(function () use (&$runs): void {
+                $runs++;
+            }, $deps);
+
+            return H::div();
+        };
+
+        $renderer->render($component);
+        $deps = ['a'];
+        $renderer->render($component);
+        $renderer->render($component);
+
+        $this->assertSame(2, $runs);
+    }
+
+    public function testUseEffectDepsTreatNullValueAsAValue(): void
+    {
+        $renderer = new Renderer('effect-null-dep-value');
+        $runs = 0;
+        $deps = [null];
+        $component = function () use (&$runs, &$deps): Element {
+            useEffect(function () use (&$runs): void {
+                $runs++;
+            }, $deps);
+
+            return H::div();
+        };
+
+        $renderer->render($component);
+        $renderer->render($component);
+        $this->assertSame(1, $runs);
+
+        $deps = ['x'];
+        $renderer->render($component);
+        $this->assertSame(2, $runs);
+    }
+
+    public function testSetStateNullIsKeptInSessionStorage(): void
+    {
+        ComponentState::clearInstances();
+        $state = ComponentState::getInstance('set-null-session');
+
+        $this->assertSame('initial', $state->getState(0, 'initial'));
+        $state->setState(0, null);
+
+        $this->assertNull($state->getState(0, 'initial'));
+    }
+
+    public function testNullInitialStateIsStoredOnce(): void
+    {
+        ComponentState::clearInstances();
+        $state = ComponentState::getInstance('null-initial');
+
+        $this->assertNull($state->getState(0, null));
+        $this->assertArrayHasKey('usephp:null-initial:state:0', $_SESSION);
+    }
+
     public function testMultipleUseEffects(): void
     {
         $renderer = new Renderer('effect-test-6');
