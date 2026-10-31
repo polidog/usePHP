@@ -26,6 +26,21 @@ final class Renderer
     ];
 
     /**
+     * Elements whose content the HTML parser reads as raw text: entities are
+     * not decoded and only the matching end tag closes them.
+     */
+    private const RAW_TEXT_TAGS = ['script' => true, 'style' => true];
+
+    /**
+     * Inside these, `<script>` and `<style>` are not raw text. The parser reads
+     * their content as markup, so an unescaped `<img>` breaks out and runs.
+     * Entities are decoded there, so normal escaping is both safe and correct.
+     * `<foreignObject>` switches back to HTML parsing, where the escaped text
+     * stays literal; that is the safe side, so it gets no special case.
+     */
+    private const FOREIGN_CONTENT_ROOTS = ['svg' => true, 'math' => true];
+
+    /**
      * Grammar for element (tag) names we are willing to write into the
      * output. Covers every HTML and SVG element (`div`, `linearGradient`,
      * `foreignObject`) plus custom elements (`my-widget`); anything else —
@@ -251,6 +266,7 @@ final class Renderer
     private string $deferPrefix;
     private string $csrfToken;
     private ?SnapshotPersist $persist;
+    private int $foreignContentDepth = 0;
 
     /**
      * Signs the (componentId, action JSON) pair embedded in each action form
@@ -387,7 +403,7 @@ final class Renderer
             return "<{$tag}{$attributes} />";
         }
 
-        $children = $this->renderChildren($element->children);
+        $children = $this->renderContent($tag, $element->children);
 
         return "<{$tag}{$attributes}>{$children}</{$tag}>";
     }
@@ -410,7 +426,7 @@ final class Renderer
         }
 
         $attributes = $this->renderAttributes($props);
-        $children = $this->renderChildren($element->children);
+        $children = $this->renderContent($tag, $element->children);
 
         // Build the form with hidden action data
         $actionJsonRaw = $action->toJson();
@@ -619,6 +635,81 @@ final class Renderer
             return false;
         }
         return $scheme === 'javascript' || $scheme === 'vbscript' || $scheme === 'data';
+    }
+
+    /**
+     * Render the body of a `<$tag>` element, choosing the escaping that the
+     * HTML parser's handling of that element requires.
+     *
+     * @param array<mixed> $children
+     */
+    private function renderContent(string $tag, array $children): string
+    {
+        $lowerTag = strtolower($tag);
+
+        if (isset(self::RAW_TEXT_TAGS[$lowerTag]) && $this->foreignContentDepth === 0) {
+            return self::renderRawText($lowerTag, $children);
+        }
+
+        if (!isset(self::FOREIGN_CONTENT_ROOTS[$lowerTag])) {
+            return $this->renderChildren($children);
+        }
+
+        $this->foreignContentDepth++;
+        try {
+            return $this->renderChildren($children);
+        } finally {
+            $this->foreignContentDepth--;
+        }
+    }
+
+    /**
+     * Join the children of a `<script>` or `<style>` without escaping. The
+     * parser does not decode entities in these elements, so escaping corrupts
+     * the code. It would not make the content safe either: the only sequence
+     * that matters to the parser is the end tag, so that is refused, and it is
+     * checked on the joined text so it cannot be split across children.
+     * Never pass untrusted input here.
+     *
+     * @param array<mixed> $children
+     */
+    private static function renderRawText(string $lowerTag, array $children): string
+    {
+        $text = self::joinRawText($children);
+
+        if (stripos($text, '</' . $lowerTag) !== false) {
+            throw new \RuntimeException(sprintf(
+                'The content of <%1$s> must not contain "</%1$s": it would close the element early.',
+                $lowerTag,
+            ));
+        }
+
+        return $text;
+    }
+
+    /**
+     * @param array<mixed> $children
+     */
+    private static function joinRawText(array $children): string
+    {
+        $text = '';
+
+        foreach ($children as $child) {
+            if (is_array($child)) {
+                $text .= self::joinRawText($child);
+            } elseif ($child === null || is_bool($child)) {
+                continue;
+            } elseif (is_string($child) || is_int($child) || is_float($child) || $child instanceof \Stringable) {
+                $text .= (string) $child;
+            } else {
+                throw new \RuntimeException(sprintf(
+                    'Cannot render a child of type %s inside <script> or <style>: only text is allowed.',
+                    get_debug_type($child),
+                ));
+            }
+        }
+
+        return $text;
     }
 
     /**

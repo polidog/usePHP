@@ -211,4 +211,135 @@ class RendererOutputTest extends TestCase
 
         $this->render(new Element('p', [], [$child]));
     }
+
+    /**
+     * Parse with the spec-compliant HTML5 parser, which is what decides
+     * whether markup stays inside a raw text element.
+     */
+    private static function parse(string $html): \Dom\HTMLDocument
+    {
+        return \Dom\HTMLDocument::createFromString('<!doctype html><body>' . $html, LIBXML_NOERROR);
+    }
+
+    public function testStyleChildrenAreEmittedRaw(): void
+    {
+        $css = 'a > b { font-family: "X" }';
+
+        self::assertSame(
+            "<style>{$css}</style>",
+            $this->render(H::__callStatic('style', ['children' => $css])),
+        );
+    }
+
+    public function testScriptChildrenAreEmittedRaw(): void
+    {
+        $js = 'if (1 < 2 && "a") {}';
+        $html = $this->render(H::script(children: $js));
+
+        self::assertSame("<script>{$js}</script>", $html);
+        self::assertSame($js, self::parse($html)->querySelector('script')?->textContent);
+    }
+
+    public function testRawTextTagIsMatchedCaseInsensitively(): void
+    {
+        self::assertSame('<STYLE>a > b {}</STYLE>', $this->render(new Element('STYLE', [], ['a > b {}'])));
+
+        $this->expectException(\RuntimeException::class);
+        $this->render(new Element('SCRIPT', [], ['</script><img src=x onerror=alert(1)>']));
+    }
+
+    public function testRawTextChildrenAreFlattened(): void
+    {
+        self::assertSame(
+            '<style>a > b {}1</style>',
+            $this->render(new Element('style', [], [['a > ', [null, 'b {}']], false, 1])),
+        );
+    }
+
+    /**
+     * @return iterable<string, array{string, list<string>}>
+     */
+    public static function rawTextBreakoutProvider(): iterable
+    {
+        yield 'script end tag' => ['script', ['</script><img src=x onerror=alert(1)>']];
+        yield 'mixed case' => ['script', ['</ScRiPt >']];
+        yield 'no closing bracket' => ['script', ['</script']];
+        yield 'style end tag' => ['style', ['</style><img src=x onerror=alert(1)>']];
+        yield 'upper case style' => ['style', ['</STYLE>']];
+        yield 'split across children' => ['script', ['</scr', 'ipt>']];
+    }
+
+    /**
+     * @param list<string> $children
+     */
+    #[DataProvider('rawTextBreakoutProvider')]
+    public function testRawTextEndTagIsRefused(string $tag, array $children): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage("</{$tag}");
+
+        $this->render(new Element($tag, [], $children));
+    }
+
+    public function testOtherRawTextEndTagIsHarmless(): void
+    {
+        $js = 'var css = "</style>";';
+
+        self::assertSame("<script>{$js}</script>", $this->render(H::script(children: $js)));
+    }
+
+    public function testElementInsideRawTextElementIsRefused(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Element');
+
+        $this->render(new Element('style', [], [H::div(children: 'x')]));
+    }
+
+    public function testUnrenderableChildInsideRawTextElementIsRefused(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('stdClass');
+
+        $this->render(new Element('script', [], [new \stdClass()]));
+    }
+
+    /**
+     * `<style>` inside `<svg>` or `<math>` is parsed as normal markup, where
+     * `<img>` breaks out of the foreign content and runs. Entities are decoded
+     * there, so escaping is both safe and correct.
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function foreignRootProvider(): iterable
+    {
+        yield 'svg' => ['svg'];
+        yield 'upper case svg' => ['SVG'];
+        yield 'math' => ['math'];
+    }
+
+    #[DataProvider('foreignRootProvider')]
+    public function testStyleInsideForeignContentStaysEscaped(string $root): void
+    {
+        $css = 'a > b {}<img src=x onerror=alert(1)>';
+        $style = new Element('style', [], [$css]);
+        $html = $this->render(new Element($root, [], [new Element('g', [], [$style])]));
+
+        $document = self::parse($html);
+        self::assertNull($document->querySelector('img'));
+        self::assertSame($css, $document->querySelector('style')?->textContent);
+    }
+
+    public function testRawOutputResumesAfterForeignContent(): void
+    {
+        $html = $this->render(new Element('div', [], [
+            new Element('svg', [], [new Element('style', [], ['a > b {}'])]),
+            new Element('style', [], ['c > d {}']),
+        ]));
+
+        self::assertSame(
+            '<div><svg><style>a &gt; b {}</style></svg><style>c > d {}</style></div>',
+            $html,
+        );
+    }
 }
