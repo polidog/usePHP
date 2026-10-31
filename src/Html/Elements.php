@@ -31,36 +31,36 @@ final class H
     // Text Content
     // =========================================================================
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function div(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
         Action|\Closure|null $onClick = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('div', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function span(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
         Action|\Closure|null $onClick = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('span', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function p(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('p', get_defined_vars());
@@ -70,67 +70,67 @@ final class H
     // Headings
     // =========================================================================
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function h1(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('h1', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function h2(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('h2', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function h3(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('h3', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function h4(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('h4', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function h5(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('h5', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function h6(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('h6', get_defined_vars());
@@ -140,7 +140,7 @@ final class H
     // Inline Text Semantics
     // =========================================================================
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function a(
         ?string $href = null,
         ?string $target = null,
@@ -149,209 +149,209 @@ final class H
         ?string $id = null,
         ?string $style = null,
         Action|\Closure|null $onClick = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('a', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function strong(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('strong', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function em(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('em', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function small(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('small', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function mark(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('mark', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function del(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('del', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function ins(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('ins', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function sub(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('sub', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function sup(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('sup', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function code(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('code', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function pre(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('pre', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function blockquote(
         ?string $cite = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('blockquote', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function q(
         ?string $cite = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('q', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function abbr(
         ?string $title = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('abbr', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function cite(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('cite', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function time(
         ?string $datetime = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('time', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function kbd(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('kbd', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function samp(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('samp', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function varElement(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('var', get_defined_vars());
@@ -388,72 +388,72 @@ final class H
     // Lists
     // =========================================================================
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function ul(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('ul', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function ol(
-        ?string $start = null,
+        string|int|float|null $start = null,
         ?string $type = null,
         ?bool $reversed = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('ol', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function li(
-        ?string $value = null,
+        string|int|float|null $value = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
         Action|\Closure|null $onClick = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('li', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function dl(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('dl', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function dt(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('dt', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function dd(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('dd', get_defined_vars());
@@ -463,113 +463,113 @@ final class H
     // Tables
     // =========================================================================
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function table(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('table', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function thead(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('thead', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function tbody(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('tbody', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function tfoot(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('tfoot', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function tr(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('tr', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function th(
-        ?int $colspan = null,
-        ?int $rowspan = null,
+        string|int|float|null $colspan = null,
+        string|int|float|null $rowspan = null,
         ?string $scope = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('th', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function td(
-        ?int $colspan = null,
-        ?int $rowspan = null,
+        string|int|float|null $colspan = null,
+        string|int|float|null $rowspan = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('td', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function caption(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('caption', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function colgroup(
-        ?int $span = null,
+        string|int|float|null $span = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('colgroup', get_defined_vars());
     }
 
     public static function col(
-        ?int $span = null,
+        string|int|float|null $span = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
@@ -582,7 +582,7 @@ final class H
     // Forms
     // =========================================================================
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function form(
         ?string $action = null,
         ?string $method = null,
@@ -594,7 +594,7 @@ final class H
         ?string $id = null,
         ?string $style = null,
         Action|\Closure|null $onSubmit = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('form', get_defined_vars());
@@ -603,20 +603,20 @@ final class H
     public static function input(
         ?string $type = null,
         ?string $name = null,
-        ?string $value = null,
+        string|int|float|null $value = null,
         ?string $placeholder = null,
         ?bool $checked = null,
         ?bool $disabled = null,
         ?bool $readOnly = null,
         ?bool $required = null,
-        ?string $min = null,
-        ?string $max = null,
-        ?int $minLength = null,
-        ?int $maxLength = null,
+        string|int|float|null $min = null,
+        string|int|float|null $max = null,
+        string|int|float|null $minLength = null,
+        string|int|float|null $maxLength = null,
         ?string $pattern = null,
         ?string $accept = null,
         ?bool $multiple = null,
-        ?int $step = null,
+        string|int|float|null $step = null,
         ?string $autocomplete = null,
         ?string $className = null,
         ?string $id = null,
@@ -630,95 +630,95 @@ final class H
         return self::element('input', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function textarea(
         ?string $name = null,
-        ?string $value = null,
+        string|int|float|null $value = null,
         ?string $placeholder = null,
-        ?int $rows = null,
-        ?int $cols = null,
+        string|int|float|null $rows = null,
+        string|int|float|null $cols = null,
         ?bool $disabled = null,
         ?bool $readOnly = null,
         ?bool $required = null,
-        ?int $minLength = null,
-        ?int $maxLength = null,
+        string|int|float|null $minLength = null,
+        string|int|float|null $maxLength = null,
         ?string $wrap = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
         Action|\Closure|null $onChange = null,
         Action|\Closure|null $onInput = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('textarea', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function button(
         ?string $type = null,
         ?string $name = null,
-        ?string $value = null,
+        string|int|float|null $value = null,
         ?bool $disabled = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
         Action|\Closure|null $onClick = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('button', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function select(
         ?string $name = null,
-        ?string $value = null,
+        string|int|float|null $value = null,
         ?bool $disabled = null,
         ?bool $multiple = null,
         ?bool $required = null,
-        ?int $size = null,
+        string|int|float|null $size = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
         Action|\Closure|null $onChange = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('select', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function option(
-        ?string $value = null,
+        string|int|float|null $value = null,
         ?bool $selected = null,
         ?bool $disabled = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('option', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function optgroup(
         ?string $label = null,
         ?bool $disabled = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('optgroup', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function label(
         ?string $for = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         $props = get_defined_vars();
@@ -729,57 +729,57 @@ final class H
         return self::element('label', $props);
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function fieldset(
         ?bool $disabled = null,
         ?string $name = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('fieldset', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function legend(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('legend', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function datalist(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('datalist', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function output(
         ?string $for = null,
         ?string $name = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('output', get_defined_vars());
     }
 
     public static function progress(
-        ?float $value = null,
-        ?float $max = null,
+        string|int|float|null $value = null,
+        string|int|float|null $max = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
@@ -789,12 +789,12 @@ final class H
     }
 
     public static function meter(
-        ?float $value = null,
-        ?float $min = null,
-        ?float $max = null,
-        ?float $low = null,
-        ?float $high = null,
-        ?float $optimum = null,
+        string|int|float|null $value = null,
+        string|int|float|null $min = null,
+        string|int|float|null $max = null,
+        string|int|float|null $low = null,
+        string|int|float|null $high = null,
+        string|int|float|null $optimum = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
@@ -807,147 +807,147 @@ final class H
     // Semantic / Sectioning
     // =========================================================================
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function header(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('header', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function footer(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('footer', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function nav(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('nav', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function main(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('main', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function article(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('article', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function section(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('section', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function aside(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('aside', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function figure(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('figure', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function figcaption(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('figcaption', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function details(
         ?bool $open = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
         Action|\Closure|null $onClick = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('details', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function summary(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('summary', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function dialog(
         ?bool $open = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('dialog', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function address(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('address', get_defined_vars());
@@ -960,8 +960,8 @@ final class H
     public static function img(
         ?string $src = null,
         ?string $alt = null,
-        ?int $width = null,
-        ?int $height = null,
+        string|int|float|null $width = null,
+        string|int|float|null $height = null,
         ?string $loading = null,
         ?string $decoding = null,
         ?string $srcset = null,
@@ -976,7 +976,7 @@ final class H
         return self::element('img', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function audio(
         ?string $src = null,
         ?bool $controls = null,
@@ -987,18 +987,18 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('audio', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function video(
         ?string $src = null,
         ?string $poster = null,
-        ?int $width = null,
-        ?int $height = null,
+        string|int|float|null $width = null,
+        string|int|float|null $height = null,
         ?bool $controls = null,
         ?bool $autoplay = null,
         ?bool $loop = null,
@@ -1008,7 +1008,7 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('video', get_defined_vars());
@@ -1036,34 +1036,34 @@ final class H
         return self::element('track', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function picture(
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('picture', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function canvas(
-        ?int $width = null,
-        ?int $height = null,
+        string|int|float|null $width = null,
+        string|int|float|null $height = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('canvas', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function svg(
-        ?int $width = null,
-        ?int $height = null,
+        string|int|float|null $width = null,
+        string|int|float|null $height = null,
         ?string $viewBox = null,
         ?string $fill = null,
         ?string $stroke = null,
@@ -1071,7 +1071,7 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('svg', get_defined_vars());
@@ -1081,13 +1081,13 @@ final class H
     // Embedded Content
     // =========================================================================
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function iframe(
         ?string $src = null,
         ?string $srcdoc = null,
         ?string $name = null,
-        ?int $width = null,
-        ?int $height = null,
+        string|int|float|null $width = null,
+        string|int|float|null $height = null,
         ?string $sandbox = null,
         ?string $allow = null,
         ?string $loading = null,
@@ -1095,7 +1095,7 @@ final class H
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('iframe', get_defined_vars());
@@ -1104,8 +1104,8 @@ final class H
     public static function embed(
         ?string $src = null,
         ?string $type = null,
-        ?int $width = null,
-        ?int $height = null,
+        string|int|float|null $width = null,
+        string|int|float|null $height = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
@@ -1114,17 +1114,17 @@ final class H
         return self::element('embed', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function object(
         ?string $data = null,
         ?string $type = null,
         ?string $name = null,
-        ?int $width = null,
-        ?int $height = null,
+        string|int|float|null $width = null,
+        string|int|float|null $height = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('object', get_defined_vars());
@@ -1132,19 +1132,19 @@ final class H
 
     public static function param(
         ?string $name = null,
-        ?string $value = null,
+        string|int|float|null $value = null,
         mixed ...$attrs,
     ): Element {
         return self::element('param', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function map(
         ?string $name = null,
         ?string $className = null,
         ?string $id = null,
         ?string $style = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('map', get_defined_vars());
@@ -1192,9 +1192,9 @@ final class H
         return self::element('meta', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function title(
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('title', get_defined_vars());
@@ -1212,7 +1212,7 @@ final class H
     // Scripting (use with caution)
     // =========================================================================
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function script(
         ?string $src = null,
         ?string $type = null,
@@ -1221,34 +1221,34 @@ final class H
         ?string $crossorigin = null,
         ?string $integrity = null,
         ?bool $nomodule = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('script', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function noscript(
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('noscript', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function template(
         ?string $className = null,
         ?string $id = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('template', get_defined_vars());
     }
 
-    /** @param array<Element|string>|Element|string|null $children */
+    /** @param array<Element|string|int|float>|Element|string|int|float|null $children */
     public static function slot(
         ?string $name = null,
-        array|Element|string|null $children = null,
+        array|Element|string|int|float|null $children = null,
         mixed ...$attrs,
     ): Element {
         return self::element('slot', get_defined_vars());
