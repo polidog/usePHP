@@ -1029,8 +1029,7 @@ final class UsePHP
 
             // Handle POST actions first
             if ($request->isPost() && isset($_POST['_usephp_action'])) {
-                $html = $this->doHandleAction();
-                echo $html;
+                echo $this->guardActionPage($request) ?? $this->doHandleAction();
                 return;
             }
 
@@ -1052,16 +1051,22 @@ final class UsePHP
 
             $this->currentMatch = $match;
 
+            $blocked = $this->runRouteMiddleware($match, $request);
+            if ($blocked !== null) {
+                echo $blocked;
+                return;
+            }
+
             // Handle snapshot restoration for persistent/session behaviors
             $this->handleSnapshotRestoration($request, $match);
 
             // Render the component
             $handler = $match->handler;
-            $html = '';
+            $componentName = is_string($handler) ? $this->resolveComponentName($handler) : null;
 
-            if (is_string($handler) && class_exists($handler)) {
+            if ($componentName !== null) {
                 // Component class
-                $html = $this->render($handler);
+                $html = $this->render($componentName);
             } elseif (is_callable($handler)) {
                 // Callable handler
                 $result = $handler($match->params, $request);
@@ -1070,12 +1075,145 @@ final class UsePHP
                 } else {
                     $html = (string) $result;
                 }
+            } else {
+                throw new \LogicException(sprintf(
+                    'Route handler %s is neither a registered component nor a callable.',
+                    $handler,
+                ));
             }
 
             echo $html;
         } finally {
             RenderContext::clearApp();
         }
+    }
+
+    /**
+     * Run a matched route's middleware, in order, before its handler.
+     *
+     * {@see run()} and {@see handleAction()} do this automatically; call it
+     * from a custom front controller after routing and before invoking the
+     * handler, or the route's guards won't run.
+     *
+     * See {@see RouteBuilder::middleware()} for what a middleware can return.
+     *
+     * @return string|null The response body if a middleware ended the request
+     *         (echo it and stop), null if the handler should run.
+     * @throws \LogicException If a middleware can't be resolved or returns
+     *         something uninterpretable. A guard that isn't understood must not
+     *         leave the route open.
+     */
+    public function runRouteMiddleware(RouteMatch $match, RequestContext $request): ?string
+    {
+        foreach ($match->middleware as $middleware) {
+            $result = $this->resolveMiddleware($middleware)($match->params, $request);
+
+            if ($result === null || $result === true) {
+                continue;
+            }
+            if ($result === false) {
+                http_response_code(403);
+                $this->emitHeader('Cache-Control: no-store');
+
+                return 'Forbidden';
+            }
+            if ($result instanceof Element) {
+                return $this->renderElement($result);
+            }
+            if (is_string($result)) {
+                return $result;
+            }
+
+            throw new \LogicException(sprintf(
+                'Route middleware must return null, a bool, a string or an Element; got %s.',
+                get_debug_type($result),
+            ));
+        }
+
+        return null;
+    }
+
+    /**
+     * @param callable|string $middleware A callable or an invokable class name
+     * @throws \LogicException If $middleware is neither
+     */
+    private function resolveMiddleware(callable|string $middleware): callable
+    {
+        if (is_callable($middleware)) {
+            return $middleware;
+        }
+        if (class_exists($middleware)) {
+            $instance = new $middleware();
+            if (is_callable($instance)) {
+                return $instance;
+            }
+        }
+
+        throw new \LogicException(sprintf(
+            'Route middleware %s is neither a callable nor an invokable class.',
+            $middleware,
+        ));
+    }
+
+    /**
+     * Apply the guards of the page an action was POSTed to.
+     *
+     * Actions are dispatched before routing and the POST itself doesn't match
+     * the page's GET route, so the route has to be looked up here; otherwise
+     * guards would stop a visitor from viewing a page but not from acting on it.
+     * The match replaces any cached `currentMatch`, which may belong to an
+     * earlier request in a long-lived process and must not decide this one.
+     *
+     * @return string|null The response body if a middleware ended the request,
+     *         null if the action should run.
+     */
+    private function guardActionPage(RequestContext $request): ?string
+    {
+        if ($this->router === null) {
+            return null;
+        }
+
+        $this->currentMatch = $this->router->match(new RequestContext(
+            method: 'GET',
+            path: $request->path,
+            queryString: $request->queryString,
+            query: $request->query,
+            headers: $request->headers,
+        ));
+
+        return $this->currentMatch === null ? null : $this->runRouteMiddleware($this->currentMatch, $request);
+    }
+
+    /**
+     * Resolve a string route handler to the name it is registered under: the
+     * registry is keyed by {@see ComponentInterface::getComponentName()}, which
+     * `#[Component(name: ...)]` makes different from the class name.
+     *
+     * Returns null when the string does not refer to a component at all, so it
+     * can still be tried as a callable.
+     *
+     * @throws \LogicException If $handler is a component class that was not
+     *         registered. It isn't registered on the fly: an omitted register()
+     *         is a configuration mistake and should not go unnoticed.
+     */
+    private function resolveComponentName(string $handler): ?string
+    {
+        if ($this->registry->has($handler)) {
+            return $handler;
+        }
+        if (!is_subclass_of($handler, ComponentInterface::class)) {
+            return null;
+        }
+
+        $name = $handler::getComponentName();
+        if ($this->registry->get($name) !== $handler) {
+            throw new \LogicException(sprintf(
+                'Route handler %1$s is not registered. Call UsePHP::register(%1$s::class) first.',
+                $handler,
+            ));
+        }
+
+        return $name;
     }
 
     /**
@@ -1286,7 +1424,7 @@ final class UsePHP
         RenderContext::setApp($this);
 
         try {
-            return $this->doHandleAction();
+            return $this->guardActionPage(RequestContext::fromGlobals()) ?? $this->doHandleAction();
         } finally {
             RenderContext::clearApp();
         }
