@@ -774,6 +774,15 @@ final class UsePHP
     private const MAX_HOOK_INDEX = 255;
 
     /**
+     * Upper bound for the snapshots one session slot keeps (the Session slot,
+     * or one Shared group). Instance ids can come from app data
+     * (`fc(key: $row->id)`), so a long-lived session would otherwise grow with
+     * every instance it ever touched. Past the bound the instance written
+     * longest ago goes back to its initial state.
+     */
+    private const MAX_SESSION_SNAPSHOTS = 64;
+
+    /**
      * Sign an action for the given component instance.
      *
      * Actions are rendered by the server and replayed by the browser, so the
@@ -1166,8 +1175,8 @@ final class UsePHP
 
             case SnapshotBehavior::Session:
                 // Session state lives server-side only: the single writer of
-                // $_SESSION['_usephp_snapshot'] is doHandleAction() on the
-                // PRG path, and nothing in the framework ever puts a
+                // $_SESSION['_usephp_snapshot'] is storeSessionSnapshot() on
+                // the PRG path, and nothing in the framework ever puts a
                 // Session snapshot into a URL. A `?_snapshot=` on a Session
                 // route is therefore never legitimate — earlier versions
                 // verified it against the app-wide secret and copied it
@@ -1199,12 +1208,9 @@ final class UsePHP
     }
 
     /**
-     * Restore component state from a snapshot that doHandleAction() stored
-     * in `$_SESSION` on the PRG path (Session and Shared behaviors).
-     *
-     * The stored bytes are verified with the session-bound serializer, so a
-     * snapshot signed for another session id (or by the unbound serializer)
-     * is rejected and logged rather than restored.
+     * Restore component state from the snapshots doHandleAction() stored in
+     * `$_SESSION` on the PRG path (Session and Shared behaviors), one per
+     * instance on the page.
      */
     private function restoreSnapshotFromSession(string $sessionKey, string $behavior): void
     {
@@ -1213,15 +1219,112 @@ final class UsePHP
         if (!$this->startSessionIfPossible()) {
             return;
         }
+        foreach ($this->loadSessionSnapshots($sessionKey, $behavior) as $snapshot) {
+            ComponentState::fromSnapshot($snapshot);
+        }
+    }
+
+    /**
+     * Read a session slot: a map of instance id => snapshot, oldest write
+     * first.
+     *
+     * Every entry is verified with the session-bound serializer, so a snapshot
+     * signed for another session id (or by the unbound serializer) is rejected
+     * and logged rather than returned. So is one filed under an id other than
+     * the one its signed memo names. Earlier releases kept a single snapshot
+     * string in the slot; a session that still holds one reads as a map of one.
+     *
+     * @return array<string, Snapshot>
+     */
+    private function loadSessionSnapshots(string $sessionKey, string $behavior): array
+    {
         $stored = $_SESSION[$sessionKey] ?? null;
-        if (!is_string($stored) || $stored === '') {
+        if (is_string($stored)) {
+            $stored = $stored === '' ? [] : [$stored];
+        }
+        if (!is_array($stored)) {
+            return [];
+        }
+
+        $snapshots = [];
+        foreach ($stored as $storedId => $serialized) {
+            try {
+                if (!is_string($serialized)) {
+                    throw new SnapshotVerificationException('Stored snapshot is not a string');
+                }
+                $snapshot = $this->sessionBoundSerializer()->deserialize($serialized);
+                if (is_string($storedId) && $storedId !== $snapshot->getInstanceId()) {
+                    throw new SnapshotVerificationException('Stored snapshot names another instance');
+                }
+            } catch (SnapshotVerificationException $e) {
+                $this->logSnapshotRejection($behavior, $e);
+                continue;
+            } catch (\JsonException|\InvalidArgumentException|\TypeError) {
+                $this->logSnapshotRejection($behavior, new SnapshotVerificationException('Stored snapshot is malformed'));
+                continue;
+            }
+            $snapshots[$snapshot->getInstanceId()] = $snapshot;
+        }
+
+        return $snapshots;
+    }
+
+    /**
+     * Write one instance's snapshot into a session slot, signed for this
+     * session id only (see sessionBoundSerializer()). The other instances in
+     * the slot stay, and the one written longest ago is dropped past
+     * {@see self::MAX_SESSION_SNAPSHOTS}.
+     */
+    private function storeSessionSnapshot(string $sessionKey, string $behavior, Snapshot $snapshot): void
+    {
+        $snapshots = $this->loadSessionSnapshots($sessionKey, $behavior);
+
+        // Re-inserting moves the instance to the newest end of the map.
+        unset($snapshots[$snapshot->getInstanceId()]);
+        $snapshots[$snapshot->getInstanceId()] = $snapshot;
+
+        while (count($snapshots) > self::MAX_SESSION_SNAPSHOTS) {
+            \error_log(sprintf(
+                '[usePHP] Snapshot evicted (behavior=%s): a session slot keeps %d instances, %s goes back to its initial state',
+                $behavior,
+                self::MAX_SESSION_SNAPSHOTS,
+                (string) array_key_first($snapshots),
+            ));
+            array_shift($snapshots);
+        }
+
+        $serializer = $this->sessionBoundSerializer();
+        $_SESSION[$sessionKey] = array_map($serializer->serialize(...), $snapshots);
+    }
+
+    /**
+     * The `?_snapshot=` of a Persistent route holds one instance so the URL
+     * does not grow with the page. An action on a second instance replaces it,
+     * and the first goes back to its initial state; say so instead of losing it
+     * silently. The value is only compared here, never used, so it is not
+     * verified.
+     */
+    private function warnWhenPersistentSnapshotIsReplaced(string $instanceId): void
+    {
+        $router = $this->router ?? new NullRouter();
+        $carried = $router->extractSnapshot(RequestContext::fromGlobals());
+        if ($carried === null) {
             return;
         }
+
         try {
-            $snapshot = $this->sessionBoundSerializer()->deserialize($stored);
-            ComponentState::fromSnapshot($snapshot);
-        } catch (SnapshotVerificationException $e) {
-            $this->logSnapshotRejection($behavior, $e);
+            $carriedId = Snapshot::fromJson($carried)->getInstanceId();
+        } catch (\JsonException|\InvalidArgumentException|\TypeError) {
+            return;
+        }
+
+        if ($carriedId !== $instanceId) {
+            \error_log(sprintf(
+                '[usePHP] Snapshot replaced (behavior=Persistent): the URL carries only one instance, '
+                . 'so the action on %s drops the state of the other one. '
+                . 'Use sessionSnapshot() for a page with several snapshot instances.',
+                $instanceId,
+            ));
         }
     }
 
@@ -1735,26 +1838,20 @@ final class UsePHP
             switch ($this->currentMatch->snapshotBehavior) {
                 case SnapshotBehavior::Persistent:
                     // Pass snapshot in URL
+                    $this->warnWhenPersistentSnapshotIsReplaced($instanceId);
                     $router = $this->router ?? new NullRouter();
                     $redirectUrl = $router->createRedirectUrl((string) $redirectUrl, $snapshot);
                     break;
 
                 case SnapshotBehavior::Session:
-                    // Store snapshot in session, signed for this session id
-                    // only (see sessionBoundSerializer()).
                     if (session_status() === PHP_SESSION_ACTIVE) {
-                        $serialized = $this->sessionBoundSerializer()->serialize($snapshot);
-                        $_SESSION['_usephp_snapshot'] = $serialized;
+                        $this->storeSessionSnapshot('_usephp_snapshot', 'Session', $snapshot);
                     }
                     break;
 
                 case SnapshotBehavior::Shared:
-                    // Store in shared group session, signed for this session
-                    // id only (see sessionBoundSerializer()).
                     if ($this->currentMatch->sharedGroup !== null && session_status() === PHP_SESSION_ACTIVE) {
-                        $sessionKey = '_usephp_shared_' . $this->currentMatch->sharedGroup;
-                        $serialized = $this->sessionBoundSerializer()->serialize($snapshot);
-                        $_SESSION[$sessionKey] = $serialized;
+                        $this->storeSessionSnapshot('_usephp_shared_' . $this->currentMatch->sharedGroup, 'Shared', $snapshot);
                     }
                     break;
 

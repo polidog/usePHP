@@ -12,15 +12,20 @@ declare(strict_types=1);
  *  - USEPHP_TEST_SECRET: snapshot secret (unset = no secret)
  *  - USEPHP_TEST_SESSION_START: the app calls session_start() itself
  *  - USEPHP_TEST_EARLY_OUTPUT: the app writes output before usePHP runs
+ *  - USEPHP_TEST_ERROR_LOG: file that receives what usePHP logs
  */
 
 use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\Component;
 use Polidog\UsePhp\Component\Defer;
 use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\ComponentId;
 use Polidog\UsePhp\Runtime\Element;
 
 use function Polidog\UsePhp\Runtime\fc;
+
+use Polidog\UsePhp\Runtime\Snapshot;
+
 use function Polidog\UsePhp\Runtime\useRouter;
 use function Polidog\UsePhp\Runtime\useState;
 
@@ -95,6 +100,12 @@ if (getenv('USEPHP_TEST_EARLY_OUTPUT') !== false) {
     echo ' ';
 }
 
+$errorLog = getenv('USEPHP_TEST_ERROR_LOG');
+if ($errorLog !== false) {
+    ini_set('log_errors', '1');
+    ini_set('error_log', $errorLog);
+}
+
 $app = new UsePHP();
 $secret = getenv('USEPHP_TEST_SECRET');
 if ($secret !== false) {
@@ -163,5 +174,44 @@ $router->get('/memory-two-states-fc', static fn(): Element => fc(static function
         H::button(onClick: fn() => $setB($b + 1), children: "b={$b}"),
     ]);
 }, 'memory-two-states', StorageType::Memory)([]));
+
+// Several snapshot instances of one component on a page, told apart by label.
+$labeled = static fn(string $label, ?string $key = null): Element => fc(static function (array $props): Element {
+    [$count, $setCount] = useState(0);
+
+    return H::button(onClick: fn() => $setCount($count + 1), children: "{$props['label']}={$count}");
+}, $key, StorageType::Snapshot)(['label' => $label]);
+$pair = static fn(): Element => H::div(children: [$labeled('a'), $labeled('b')]);
+
+$router->get('/pair-session', $pair)->sessionSnapshot();
+$router->get('/pair-persistent', $pair)->persistentSnapshot();
+$router->get('/pair-shared-1', $pair)->sharedSnapshot('pair');
+$router->get('/pair-shared-2', $pair)->sharedSnapshot('pair');
+$router->get('/pair-other-group', $pair)->sharedSnapshot('other');
+$router->get('/keyed-session', static fn(): Element => $labeled('keyed', (string) ($_GET['k'] ?? '0')))->sessionSnapshot();
+
+// Writes a value into a session slot directly, standing in for what an older
+// release (or a foreign session) left behind. Test fixture only.
+$router->get('/plant', static function () use ($app): string {
+    session_status() === PHP_SESSION_ACTIVE || session_start();
+    $id = ComponentId::fromLegacy((string) ($_GET['id'] ?? ''));
+    $snapshot = Snapshot::fromComponentId($id, [(int) ($_GET['value'] ?? 0)]);
+    $serializer = $app->getSnapshotSerializer();
+    $slot = (string) ($_GET['slot'] ?? '_usephp_snapshot');
+    $bound = $serializer->withContext(session_id() ?: '')->serialize($snapshot);
+
+    $_SESSION[$slot] = match ((string) ($_GET['mode'] ?? 'legacy')) {
+        'legacy' => $bound,
+        'legacy-foreign' => $serializer->withContext('another-session')->serialize($snapshot),
+        'legacy-garbage' => 'not a snapshot',
+        'not-a-map' => 42,
+        'map-foreign' => [$id->toLegacyString() => $serializer->withContext('another-session')->serialize($snapshot)],
+        'map-unbound' => [$id->toLegacyString() => $serializer->serialize($snapshot)],
+        'map-wrong-key' => [$id->componentName . '#other' => $bound],
+        'map-non-string' => [$id->toLegacyString() => ['state' => [99]]],
+    };
+
+    return 'planted';
+});
 
 $app->run();
