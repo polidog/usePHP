@@ -1772,6 +1772,7 @@ final class UsePHP
      */
     private function doCreateElement(string $componentName, ?string $key = null): Element
     {
+        $outerApp = RenderContext::getApp();
         RenderContext::setApp($this);
         $parentState = ComponentState::current();
 
@@ -1811,7 +1812,7 @@ final class UsePHP
             return new Element('div', $props, [$innerElement]);
         } finally {
             ComponentState::setCurrent($parentState);
-            RenderContext::clearApp();
+            RenderContext::setApp($outerApp);
         }
     }
 
@@ -1820,6 +1821,7 @@ final class UsePHP
      */
     private function doRenderElement(Element $element): string
     {
+        $outerApp = RenderContext::getApp();
         RenderContext::setApp($this);
         $parentState = ComponentState::current();
 
@@ -1834,7 +1836,7 @@ final class UsePHP
             return $renderer->renderElement($element);
         } finally {
             ComponentState::setCurrent($parentState);
-            RenderContext::clearApp();
+            RenderContext::setApp($outerApp);
         }
     }
 
@@ -1843,6 +1845,7 @@ final class UsePHP
      */
     private function doRenderComponent(string $componentName, ?string $key = null): string
     {
+        $outerApp = RenderContext::getApp();
         RenderContext::setApp($this);
         $parentState = ComponentState::current();
 
@@ -1878,7 +1881,7 @@ final class UsePHP
             return $renderer->render(fn() => $component->render());
         } finally {
             ComponentState::setCurrent($parentState);
-            RenderContext::clearApp();
+            RenderContext::setApp($outerApp);
         }
     }
 

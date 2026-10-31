@@ -25,9 +25,10 @@ final class RenderContext
     private function __construct() {}
 
     /**
-     * Set the current app instance for rendering.
+     * Set the current app instance for rendering, or restore what
+     * {@see getApp()} returned earlier (null when no render was in progress).
      */
-    public static function setApp(\Polidog\UsePhp\UsePHP $app): void
+    public static function setApp(?\Polidog\UsePhp\UsePHP $app): void
     {
         self::$app = $app;
     }
