@@ -68,8 +68,10 @@ final readonly class ComponentId
      */
     public static function parse(string $id): self
     {
-        // Check if it's legacy format
-        if (str_contains($id, '#') && !str_contains($id, '@')) {
+        // Check if it's legacy format. fc() instance ids are legacy ids whose
+        // name contains '@' ("FC@file.php:12#row/k1"), and their key may contain
+        // '/', so they must not fall through to the hierarchical split below.
+        if (str_contains($id, '#') && (!str_contains($id, '@') || str_starts_with($id, 'FC@'))) {
             return self::fromLegacy($id);
         }
 

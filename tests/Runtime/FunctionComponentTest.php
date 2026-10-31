@@ -557,6 +557,60 @@ class FunctionComponentTest extends TestCase
         $this->assertSame($parent, ComponentState::current());
     }
 
+    public function testFixedKeyNamespacesPropsKey(): void
+    {
+        $Row = fc(fn(array $props): Element => H::span(children: 'key' . ($props['key'] ?? 'stripped')), 'krow');
+
+        $first = $Row(['key' => 'k1']);
+        $second = $Row(['key' => 'k2']);
+
+        $this->assertStringEndsWith('#krow/k1', $first->props['data-usephp']);
+        $this->assertStringEndsWith('#krow/k2', $second->props['data-usephp']);
+    }
+
+    public function testRowsWithFixedKeyDoNotShareState(): void
+    {
+        $Row = fc(function (array $props): Element {
+            [$q] = useState($props['start']);
+
+            return H::span(children: (string) $q);
+        }, 'krow');
+
+        $first = $Row(['key' => 'k1', 'start' => 1]);
+        $second = $Row(['key' => 'k2', 'start' => 2]);
+
+        $this->assertSame('1', $first->children[0]->children[0]);
+        $this->assertSame('2', $second->children[0]->children[0]);
+    }
+
+    public function testExistingIdsAreUnchanged(): void
+    {
+        $Fixed = fc(fn(array $props): Element => H::span(), 'only-fixed');
+        $this->assertStringEndsWith('#only-fixed', $Fixed([])->props['data-usephp']);
+
+        $Unfixed = fc(fn(array $props): Element => H::span());
+        $this->assertStringEndsWith('#only-prop', $Unfixed(['key' => 'only-prop'])->props['data-usephp']);
+    }
+
+    public function testNamespacedKeySurvivesSnapshotRoundTrip(): void
+    {
+        $Row = fc(function (array $props): Element {
+            [$q] = useState(7);
+
+            return H::span(children: (string) $q);
+        }, 'krow', StorageType::Snapshot);
+
+        $element = $Row(['key' => 'k1']);
+        $instanceId = $element->props['data-usephp'];
+
+        $serializer = RenderContext::getApp()->getSnapshotSerializer();
+        $snapshot = $serializer->deserialize($element->props['data-usephp-snapshot']);
+
+        $this->assertSame('krow/k1', $snapshot->key);
+        $this->assertSame($instanceId, $snapshot->getInstanceId());
+        $this->assertSame([7], ComponentState::fromSnapshot($snapshot)->createSnapshot()->state);
+    }
+
     public function testFcSnapshotContainsCorrectState(): void
     {
         $Counter = fc(function (array $props): Element {

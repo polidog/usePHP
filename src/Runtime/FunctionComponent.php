@@ -69,7 +69,7 @@ final class FunctionComponent
     private function renderInline(array $props): Element
     {
         $componentName = getFunctionComponentName($this->inner);
-        $instanceKey = $this->key ?? ($props['key'] ?? null);
+        $instanceKey = $this->instanceKey($props['key'] ?? null);
         unset($props['key']);
 
         $instanceId = RenderContext::beginComponent($componentName, $instanceKey);
@@ -105,5 +105,23 @@ final class FunctionComponent
         }
 
         return new Element('div', $wrapperProps, [$result]);
+    }
+
+    /**
+     * The `fc()` key namespaces the props key ("row/k1"), so a component defined
+     * with a fixed key can still be rendered as several independent instances.
+     * With only one of the two, the id stays what it has always been, so state
+     * already stored under it remains valid.
+     *
+     * Rendering two instances under the same id is not detected: they share one
+     * slot of state.
+     */
+    private function instanceKey(mixed $propsKey): ?string
+    {
+        if ($propsKey === null) {
+            return $this->key;
+        }
+
+        return $this->key === null ? $propsKey : "{$this->key}/{$propsKey}";
     }
 }
