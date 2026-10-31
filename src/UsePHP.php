@@ -1044,11 +1044,11 @@ final class UsePHP
 
             // Render the component
             $handler = $match->handler;
-            $html = '';
+            $componentName = is_string($handler) ? $this->resolveComponentName($handler) : null;
 
-            if (is_string($handler) && class_exists($handler)) {
+            if ($componentName !== null) {
                 // Component class
-                $html = $this->render($handler);
+                $html = $this->render($componentName);
             } elseif (is_callable($handler)) {
                 // Callable handler
                 $result = $handler($match->params, $request);
@@ -1057,12 +1057,49 @@ final class UsePHP
                 } else {
                     $html = (string) $result;
                 }
+            } else {
+                throw new \LogicException(sprintf(
+                    'Route handler %s is neither a registered component nor a callable.',
+                    $handler,
+                ));
             }
 
             echo $html;
         } finally {
             RenderContext::clearApp();
         }
+    }
+
+    /**
+     * Resolve a string route handler to the name it is registered under: the
+     * registry is keyed by {@see ComponentInterface::getComponentName()}, which
+     * `#[Component(name: ...)]` makes different from the class name.
+     *
+     * Returns null when the string does not refer to a component at all, so it
+     * can still be tried as a callable.
+     *
+     * @throws \LogicException If $handler is a component class that was not
+     *         registered. It isn't registered on the fly: an omitted register()
+     *         is a configuration mistake and should not go unnoticed.
+     */
+    private function resolveComponentName(string $handler): ?string
+    {
+        if ($this->registry->has($handler)) {
+            return $handler;
+        }
+        if (!is_subclass_of($handler, ComponentInterface::class)) {
+            return null;
+        }
+
+        $name = $handler::getComponentName();
+        if ($this->registry->get($name) !== $handler) {
+            throw new \LogicException(sprintf(
+                'Route handler %1$s is not registered. Call UsePHP::register(%1$s::class) first.',
+                $handler,
+            ));
+        }
+
+        return $name;
     }
 
     /**
