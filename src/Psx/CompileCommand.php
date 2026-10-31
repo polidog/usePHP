@@ -43,7 +43,7 @@ final class CompileCommand
      * existing caches must be re-generated. Mixed into the source hash so a
      * version bump invalidates every cached entry without touching any .psx.
      */
-    public const CACHE_VERSION = 1;
+    public const CACHE_VERSION = 2;
 
     /**
      * @param list<string> $argv Argument list (after `compile` subcommand).

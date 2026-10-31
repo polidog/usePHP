@@ -7,10 +7,24 @@ namespace Polidog\UsePhp\Psx;
 /**
  * Parses one PSX expression from a source string starting at `<`.
  *
- * Produces equivalent PHP source code (calls to H::xxx() or renderPsxComponent()).
+ * Produces equivalent PHP source code: createElement() calls for built-in tags
+ * and renderPsxComponent() calls for component tags.
+ *
+ * Built-in tags deliberately bypass H::xxx(): H's parameter types are for
+ * hand-written PHP, and under strict_types they reject ordinary markup such as
+ * `{0}` or `width="100"`. createElement() is where H's own conversions (event
+ * props to actions, renderable children) live, so nothing is lost.
  */
 final class PsxParser implements PsxParserInterface
 {
+    private const CREATE_ELEMENT = '\\Polidog\\UsePhp\\Html\\createElement';
+
+    /**
+     * `<defer>` is the one lowercase tag that is not an HTML element: it builds
+     * the placeholder of {@see \Polidog\UsePhp\Html\H::defer()}.
+     */
+    private const DEFER_PARAMS = ['name', 'params', 'fallback', 'localCache', 'reloadable', 'localCacheTtl'];
+
     private int $pos;
 
     public function __construct(
@@ -32,10 +46,10 @@ final class PsxParser implements PsxParserInterface
         if ($tagName === '') {
             // Fragment <>...</>
             $this->expect('>');
-            [$children, $trailingNewlines] = $this->parseChildren(closingTag: '');
+            [$children, $trailingNewlines, $loneExpression] = $this->parseChildren(closingTag: '');
             $this->consumeFragmentClose();
             return [
-                'php' => $this->emitFragment($children, $trailingNewlines),
+                'php' => $this->emitFragment($children, $trailingNewlines, $loneExpression),
                 'end' => $this->pos,
             ];
         }
@@ -48,17 +62,17 @@ final class PsxParser implements PsxParserInterface
             $this->pos++; // consume '/'
             $this->expect('>');
             return [
-                'php' => $this->emitElement($tagName, $attrs, null, 0),
+                'php' => $this->emitElement($tagName, $attrs, null, 0, false),
                 'end' => $this->pos,
             ];
         }
 
         $this->expect('>');
-        [$children, $trailingNewlines] = $this->parseChildren(closingTag: $tagName);
+        [$children, $trailingNewlines, $loneExpression] = $this->parseChildren(closingTag: $tagName);
         $this->consumeClosingTag($tagName);
 
         return [
-            'php' => $this->emitElement($tagName, $attrs, $children, $trailingNewlines),
+            'php' => $this->emitElement($tagName, $attrs, $children, $trailingNewlines, $loneExpression),
             'end' => $this->pos,
         ];
     }
@@ -111,9 +125,10 @@ final class PsxParser implements PsxParserInterface
     }
 
     /**
-     * @return array{0: list<string>, 1: int} children PHP expressions, plus
+     * @return array{0: list<string>, 1: int, 2: bool} children PHP expressions,
      *         the number of newlines between the last child and the closing
-     *         tag (so the emitter can place `])` on the right line).
+     *         tag (so the emitter can place `])` on the right line), and whether
+     *         the only child is a `{...}` expression.
      *
      * Each child string is prefixed with '\n' characters matching the newlines
      * in the source between the parent's `>` and that child's start (or the
@@ -125,6 +140,7 @@ final class PsxParser implements PsxParserInterface
         $children = [];
         $textBuffer = '';
         $lastChildEnd = $this->pos; // right after parent's `>`
+        $expressions = 0;
 
         while ($this->pos < \strlen($this->source)) {
             $c = $this->peek();
@@ -134,7 +150,7 @@ final class PsxParser implements PsxParserInterface
                 if ($next === '/') {
                     $this->flushTextBuffer($textBuffer, $children);
                     $trailing = \substr_count(\substr($this->source, $lastChildEnd, $this->pos - $lastChildEnd), "\n");
-                    return [$children, $trailing];
+                    return [$children, $trailing, $expressions === 1 && \count($children) === 1];
                 }
                 $this->flushTextBuffer($textBuffer, $children);
                 $childStart = $this->pos;
@@ -156,6 +172,7 @@ final class PsxParser implements PsxParserInterface
                     continue;
                 }
                 $children[] = $this->prefixForNewlinesBetween($lastChildEnd, $childStart) . $expr;
+                $expressions++;
                 $lastChildEnd = $this->pos;
                 continue;
             }
@@ -165,7 +182,7 @@ final class PsxParser implements PsxParserInterface
         }
 
         $this->flushTextBuffer($textBuffer, $children);
-        return [$children, 0];
+        return [$children, 0, false];
     }
 
     /**
@@ -431,14 +448,15 @@ final class PsxParser implements PsxParserInterface
     }
 
     /**
-     * Generates an H::xxx(...) call for HTML tags, or renderPsxComponent(...)
+     * Generates a createElement(...) call for HTML tags, or renderPsxComponent(...)
      * for component tags (PascalCase).
      *
      * @param list<array{name: string, value: string|null, isExpr: bool}> $attrs
      * @param list<string>|null $children Each child is a PHP expression. Null = self-closing.
      * @param int $trailingNewlines Newlines between last child and closing tag (for line preservation).
+     * @param bool $loneExpression Whether the only child is a `{...}` expression.
      */
-    private function emitElement(string $tagName, array $attrs, ?array $children, int $trailingNewlines): string
+    private function emitElement(string $tagName, array $attrs, ?array $children, int $trailingNewlines, bool $loneExpression): string
     {
         $isComponent = \ctype_upper($tagName[0]);
 
@@ -446,68 +464,56 @@ final class PsxParser implements PsxParserInterface
             return $this->emitComponent($tagName, $attrs, $children, $trailingNewlines);
         }
 
-        return $this->emitHtmlElement($tagName, $attrs, $children, $trailingNewlines);
+        if ($tagName === 'defer' && $this->isDeferCall($attrs, $children)) {
+            return $this->emitDefer($attrs);
+        }
+
+        return $this->emitHtmlElement($tagName, $attrs, $children, $trailingNewlines, $loneExpression);
     }
 
     /**
      * @param list<array{name: string, value: string|null, isExpr: bool}> $attrs
      * @param list<string>|null $children
      */
-    private function emitHtmlElement(string $tagName, array $attrs, ?array $children, int $trailingNewlines): string
-    {
-        if ($this->requiresCallStaticDispatch($tagName, $attrs)) {
-            return $this->emitCallStaticElement($tagName, $attrs, $children, $trailingNewlines);
-        }
-
-        $namedArgs = [];
-        foreach ($attrs as $attr) {
-            $name = $this->normalizeAttrName($attr['name']);
-            $value = $attr['value'];
-            $namedArgs[] = "$name: $value";
-        }
-
-        if ($children !== null && $children !== []) {
-            $namedArgs[] = 'children: ' . $this->emitChildrenArg($children, $trailingNewlines);
-        }
-
-        return 'H::' . $tagName . '(' . \implode(', ', $namedArgs) . ')';
-    }
-
-    /**
-     * @param list<array{name: string, value: string|null, isExpr: bool}> $attrs
-     */
-    private function requiresCallStaticDispatch(string $tagName, array $attrs): bool
-    {
-        $known = HMethodRegistry::getParams($tagName);
-        if ($known === null) {
-            // Unknown tag (e.g., custom element). __callStatic is the only path.
-            return true;
-        }
-        foreach ($attrs as $attr) {
-            if (!\in_array($this->normalizeAttrName($attr['name']), $known, true)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * @param list<array{name: string, value: string|null, isExpr: bool}> $attrs
-     * @param list<string>|null $children
-     */
-    private function emitCallStaticElement(string $tagName, array $attrs, ?array $children, int $trailingNewlines): string
+    private function emitHtmlElement(string $tagName, array $attrs, ?array $children, int $trailingNewlines, bool $loneExpression): string
     {
         $entries = [];
         foreach ($attrs as $attr) {
-            $name = $attr['name']; // raw HTML attribute name (e.g. 'data-id')
+            // H::label() takes `for` as a parameter name and stores it as the
+            // JSX prop; the renderer maps htmlFor back to the `for` attribute.
+            $name = $tagName === 'label' && $attr['name'] === 'for' ? 'htmlFor' : $attr['name'];
             $value = $attr['value'];
             $entries[] = "'$name' => $value";
         }
         if ($children !== null && $children !== []) {
-            $entries[] = "'children' => " . $this->emitChildrenArg($children, $trailingNewlines);
+            $entries[] = "'children' => " . $this->emitElementChildren($children, $trailingNewlines, $loneExpression);
         }
-        $args = '[' . \implode(', ', $entries) . ']';
-        return "H::__callStatic('$tagName', $args)";
+        return self::CREATE_ELEMENT . "('$tagName', [" . \implode(', ', $entries) . '])';
+    }
+
+    /**
+     * @param list<array{name: string, value: string|null, isExpr: bool}> $attrs
+     * @param list<string>|null $children
+     */
+    private function isDeferCall(array $attrs, ?array $children): bool
+    {
+        if ($children !== null && $children !== []) {
+            return false;
+        }
+        $names = \array_column($attrs, 'name');
+        return \in_array('name', $names, true) && \array_diff($names, self::DEFER_PARAMS) === [];
+    }
+
+    /**
+     * @param list<array{name: string, value: string|null, isExpr: bool}> $attrs
+     */
+    private function emitDefer(array $attrs): string
+    {
+        $args = \array_map(
+            static fn(array $attr): string => $attr['name'] . ': ' . $attr['value'],
+            $attrs,
+        );
+        return '\\Polidog\\UsePhp\\Html\\H::defer(' . \implode(', ', $args) . ')';
     }
 
     /**
@@ -539,22 +545,41 @@ final class PsxParser implements PsxParserInterface
     /**
      * @param list<string> $children
      */
-    private function emitFragment(array $children, int $trailingNewlines): string
+    private function emitFragment(array $children, int $trailingNewlines, bool $loneExpression): string
     {
-        // H::Fragment yields an Element with type='Fragment', which the Renderer
-        // unwraps (children are emitted directly without a surrounding tag).
-        $body = \implode(', ', $children) . \str_repeat("\n", $trailingNewlines);
-        return 'H::Fragment([' . $body . '])';
+        // An Element with type='Fragment' is unwrapped by the Renderer
+        // (children are emitted directly without a surrounding tag).
+        $args = $children === []
+            ? '[]'
+            : "['children' => " . $this->emitElementChildren($children, $trailingNewlines, $loneExpression) . ']';
+        return self::CREATE_ELEMENT . "('Fragment', $args)";
     }
 
     /**
+     * Children of a built-in tag are always an array, except a lone `{...}`
+     * expression: it may itself return the list of children (`{array_map(...)}`),
+     * and createElement() does not flatten a nested array. Passing it directly
+     * means the same thing for every other value, since createElement() wraps
+     * non-arrays itself.
+     *
+     * @param list<string> $children
+     */
+    private function emitElementChildren(array $children, int $trailingNewlines, bool $loneExpression): string
+    {
+        if ($loneExpression) {
+            return $children[0];
+        }
+        return '[' . \implode(', ', $children) . \str_repeat("\n", $trailingNewlines) . ']';
+    }
+
+    /**
+     * Children prop of a component tag: a single child is passed as itself, so
+     * the component receives an Element or string rather than a one-item array.
+     *
      * @param list<string> $children
      */
     private function emitChildrenArg(array $children, int $trailingNewlines): string
     {
-        // Single child: pass directly so expressions returning arrays
-        // (e.g. {array_map(...)}) are accepted as-is by createElement's
-        // is_array branch instead of being wrapped in an outer [...].
         // The newline prefix on the child (if any) keeps line preservation
         // working; the block-level padding in Compiler tops up trailing
         // newlines for the closing tag's line.
@@ -607,12 +632,5 @@ final class PsxParser implements PsxParserInterface
             $last = \prev($tokens);
         }
         return \is_array($last) && $last[0] === \T_COMMENT && !\str_starts_with($last[1], '/*');
-    }
-
-    private function normalizeAttrName(string $name): string
-    {
-        // Pass-through. Routing of data-*/aria-* attributes happens earlier in
-        // requiresCallStaticDispatch() / emitCallStaticElement().
-        return $name;
     }
 }

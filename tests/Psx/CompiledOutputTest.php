@@ -6,8 +6,11 @@ namespace Polidog\UsePhp\Tests\Psx;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Psx\Compiler;
+use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\Element;
+use Polidog\UsePhp\Runtime\Renderable;
 use Polidog\UsePhp\Runtime\Renderer;
 
 /**
@@ -118,6 +121,160 @@ class CompiledOutputTest extends TestCase
     public function testEncodedJavascriptUrlIsStillBlockedAfterDecoding(): void
     {
         self::assertSame('<a>x</a>', $this->renderHtml('<a href="javascript&colon;alert(1)">x</a>'));
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function valuesRejectedByHTypeDeclarations(): iterable
+    {
+        yield 'int child' => ['<p>{0}</p>', '<p>0</p>'];
+        yield 'int from an expression' => ["<p>{\$p['n'] ?? 5}</p>", '<p>5</p>'];
+        yield 'float child' => ['<p>{1.5}</p>', '<p>1.5</p>'];
+        yield 'true child' => ['<p>{true}</p>', '<p></p>'];
+        yield 'false child' => ['<p>{false}</p>', '<p></p>'];
+        yield 'null child' => ['<p>{null}</p>', '<p></p>'];
+        yield 'true next to a sibling' => ['<p>a{true}</p>', '<p>a</p>'];
+        yield 'int in a fragment' => ['<>{0}</>', '0'];
+        yield 'int value' => ['<input value={3} />', '<input value="3" />'];
+        yield 'int min' => ['<input min={1} />', '<input min="1" />'];
+        yield 'string maxLength' => ['<input maxLength="10" />', '<input maxlength="10" />'];
+        yield 'fractional step' => ['<input step="0.5" />', '<input step="0.5" />'];
+        yield 'any step' => ['<input step="any" />', '<input step="any" />'];
+        yield 'string disabled' => ['<input disabled="disabled" />', '<input disabled="disabled" />'];
+        yield 'boolean attribute' => ['<input disabled />', '<input disabled />'];
+        yield 'img size' => ['<img src="/a.png" width="100" alt="" />', '<img src="/a.png" width="100" alt="" />'];
+        yield 'svg size' => ['<svg width="10"></svg>', '<svg width="10"></svg>'];
+        yield 'textarea rows' => ['<textarea rows="3">x</textarea>', '<textarea rows="3">x</textarea>'];
+        yield 'attributes keep source order' => ['<a className="c" href="/x">t</a>', '<a class="c" href="/x">t</a>'];
+    }
+
+    #[DataProvider('valuesRejectedByHTypeDeclarations')]
+    public function testBuiltinTagsAcceptHtmlValuesUnderStrictTypes(string $psx, string $expected): void
+    {
+        self::assertSame($expected, $this->renderHtml($psx));
+    }
+
+    public function testCompiledOutputDoesNotNeedAnImportOfH(): void
+    {
+        $compiled = new Compiler()->compile('<?php return <><div id="a">x</div><my-widget /></>;');
+
+        self::assertStringNotContainsString('H::', $compiled);
+    }
+
+    public function testArrayExpressionAsOnlyChildIsNotNested(): void
+    {
+        self::assertSame(
+            '<ul><li>a</li><li>b</li></ul>',
+            $this->renderHtml("<ul>{array_map(fn(\$x) => <li>{\$x}</li>, ['a', 'b'])}</ul>"),
+        );
+        self::assertSame(
+            '<div><b>a</b>text</div>',
+            $this->renderHtml("<div>{\$p['children']}</div>", ['children' => [H::b(children: 'a'), 'text']]),
+        );
+    }
+
+    public function testStaticOnlyChildIsEmittedAsAnArray(): void
+    {
+        $compiled = new Compiler()->compile('<?php return <p>x</p>;');
+
+        self::assertStringContainsString("createElement('p', ['children' => ['x']])", $compiled);
+    }
+
+    /**
+     * Everything the H::xxx() layer did must survive going through createElement().
+     *
+     * @return iterable<string, array{string, \Closure(Action): Element}>
+     */
+    public static function sameElementAsH(): iterable
+    {
+        yield 'attributes and text' => [
+            '<a href="/x" className="c">t</a>',
+            static fn(): Element => H::a(href: '/x', className: 'c', children: 't'),
+        ];
+        yield 'null attribute is omitted' => [
+            '<div id={null}>t</div>',
+            static fn(): Element => H::div(children: 't'),
+        ];
+        yield 'nested elements' => [
+            '<div><span>a</span>b</div>',
+            static fn(): Element => H::div(children: [H::span(children: 'a'), 'b']),
+        ];
+        yield 'onClick with an Action' => [
+            "<button onClick={\$p['action']}>x</button>",
+            static fn(Action $action): Element => H::button(onClick: $action, children: 'x'),
+        ];
+        yield 'onClick with a Closure' => [
+            "<button onClick={fn() => \$p['action']}>x</button>",
+            static fn(Action $action): Element => H::button(onClick: static fn() => $action, children: 'x'),
+        ];
+        yield 'label for' => [
+            '<label for="n">x</label>',
+            static fn(): Element => H::label(for: 'n', children: 'x'),
+        ];
+        yield 'fragment' => [
+            '<><b>a</b>c</>',
+            static fn(): Element => H::Fragment([H::b(children: 'a'), 'c']),
+        ];
+        yield 'deferred placeholder' => [
+            '<defer name="side" params={[\'a\' => 1]} fallback={<span>l</span>} localCache />',
+            static fn(): Element => H::defer('side', ['a' => 1], H::span(children: 'l'), localCache: true),
+        ];
+        yield 'function component child is resolved' => [
+            "<div>{H::component(fn(array \$c) => <b>{\$c['v']}</b>, ['v' => 'x'])}</div>",
+            static fn(): Element => H::div(children: [H::b(children: 'x')]),
+        ];
+    }
+
+    #[DataProvider('sameElementAsH')]
+    public function testCompiledElementMatchesH(string $psx, \Closure $expected): void
+    {
+        $action = new Action('setState', ['index' => 0, 'value' => 1]);
+
+        self::assertEquals($expected($action), $this->element($psx, ['action' => $action]));
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function eventProps(): iterable
+    {
+        yield 'onClick' => ['onClick', 'wire:click'];
+        yield 'onChange' => ['onChange', 'wire:change'];
+        yield 'onInput' => ['onInput', 'wire:input'];
+        yield 'onSubmit' => ['onSubmit', 'wire:submit'];
+        yield 'onFocus' => ['onFocus', 'wire:focus'];
+        yield 'onBlur' => ['onBlur', 'wire:blur'];
+        yield 'onLoad' => ['onLoad', 'wire:load'];
+        yield 'onError' => ['onError', 'wire:error'];
+    }
+
+    #[DataProvider('eventProps')]
+    public function testEventPropsBecomeActions(string $prop, string $wireKey): void
+    {
+        $action = new Action('setState');
+
+        $element = $this->element("<div $prop={fn() => \$p['action']}></div>", ['action' => $action]);
+
+        self::assertSame([$wireKey => $action], $element->props);
+    }
+
+    public function testStringEventHandlerIsStillRejected(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->element('<button onClick="phpinfo">x</button>');
+    }
+
+    public function testRenderableChildIsRendered(): void
+    {
+        $child = new class implements Renderable {
+            public function render(): Element
+            {
+                return H::b(children: 'r');
+            }
+        };
+
+        self::assertSame('<p><b>r</b></p>', $this->renderHtml("<p>{\$p['c']}</p>", ['c' => $child]));
     }
 
     /**
