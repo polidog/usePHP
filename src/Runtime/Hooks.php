@@ -48,6 +48,12 @@ function useState(mixed $initial): array
  * If $deps is null, the effect runs on every render.
  * If $deps is an empty array [], the effect runs only on mount.
  *
+ * A cleanup function lives only in memory for the current request. It runs
+ * before the same effect re-runs within that request, and is otherwise
+ * discarded when the request ends: PHP cannot carry a Closure across requests,
+ * so a cleanup returned in one request never runs in a later one, and there is
+ * no unmount. Do not rely on it to release anything that outlives the request.
+ *
  * @param callable $callback The effect callback, optionally returns a cleanup function
  * @param array<mixed>|null $deps Dependency array (null = run every time, [] = only on mount)
  */

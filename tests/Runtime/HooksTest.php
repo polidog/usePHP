@@ -6,6 +6,7 @@ namespace Polidog\UsePhp\Tests\Runtime;
 
 use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\ComponentState;
 use Polidog\UsePhp\Router\SimpleRouter;
 use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\RenderContext;
@@ -162,6 +163,93 @@ class HooksTest extends TestCase
         // Second render - cleanup from previous effect should run
         $renderer->render($component);
         $this->assertTrue($cleanupRan, 'Cleanup should run before new effect');
+    }
+
+    public function testEffectCleanupIsNeverWrittenToStorage(): void
+    {
+        // A Closure in $_SESSION makes the end-of-request session write fatal.
+        $renderer = new Renderer('effect-cleanup-storage');
+
+        $renderer->render(function (): Element {
+            useEffect(fn() => static function (): void {}, []);
+
+            return H::div();
+        });
+
+        serialize($_SESSION);
+        $this->assertArrayNotHasKey('usephp:effect-cleanup-storage:effect_cleanup:0', $_SESSION);
+    }
+
+    public function testEffectCleanupRunsOnlyOncePerEffectRun(): void
+    {
+        $renderer = new Renderer('effect-cleanup-once');
+        $cleanups = 0;
+        $stateKey = 'usephp:effect-cleanup-once:state:0';
+        $effectRuns = 0;
+
+        $component = function () use (&$cleanups, &$effectRuns): Element {
+            [$count] = useState(0);
+            useEffect(function () use (&$cleanups, &$effectRuns) {
+                $effectRuns++;
+
+                // Only the first effect run registers a cleanup.
+                return $effectRuns === 1 ? function () use (&$cleanups): void {
+                    $cleanups++;
+                } : null;
+            }, [$count]);
+
+            return H::div();
+        };
+
+        $renderer->render($component);
+        $_SESSION[$stateKey] = 1;
+        $renderer->render($component);
+        $_SESSION[$stateKey] = 2;
+        $renderer->render($component);
+
+        $this->assertSame(3, $effectRuns);
+        $this->assertSame(1, $cleanups);
+    }
+
+    public function testEffectCleanupDoesNotSurviveIntoTheNextRequest(): void
+    {
+        $renderer = new Renderer('effect-cleanup-request');
+        $cleanupRan = false;
+        $stateKey = 'usephp:effect-cleanup-request:state:0';
+
+        $component = function () use (&$cleanupRan): Element {
+            [$count] = useState(0);
+            useEffect(function () use (&$cleanupRan) {
+                return function () use (&$cleanupRan): void {
+                    $cleanupRan = true;
+                };
+            }, [$count]);
+
+            return H::div();
+        };
+
+        $renderer->render($component);
+
+        // A new request starts with no in-memory ComponentState.
+        ComponentState::clearInstances();
+        $_SESSION[$stateKey] = 1;
+        $renderer->render($component);
+
+        $this->assertFalse($cleanupRan);
+    }
+
+    public function testClearStateDropsPendingEffectCleanup(): void
+    {
+        $state = ComponentState::getInstance('effect-cleanup-clear');
+        $cleanupRan = false;
+        $state->setEffectCleanup(0, function () use (&$cleanupRan): void {
+            $cleanupRan = true;
+        });
+
+        $state->clearState();
+        $state->runEffectCleanup(0);
+
+        $this->assertFalse($cleanupRan);
     }
 
     public function testMultipleUseEffects(): void

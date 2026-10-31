@@ -25,6 +25,15 @@ final class ComponentState
     private StateStorageInterface $storage;
     private StorageType $storageType;
 
+    /**
+     * Effect cleanups by hook index. Closures cannot be serialized, so these
+     * live only on this instance and never reach the state storage: writing
+     * one to $_SESSION makes the end-of-request session write fatal.
+     *
+     * @var array<int, callable>
+     */
+    private array $effectCleanups = [];
+
     private function __construct(string $componentId, StateStorageInterface $storage, StorageType $storageType)
     {
         $this->componentId = $componentId;
@@ -129,6 +138,7 @@ final class ComponentState
     public function clearState(): void
     {
         $this->storage->clearByPrefix("usephp:{$this->componentId}:");
+        $this->effectCleanups = [];
     }
 
 
@@ -197,35 +207,31 @@ final class ComponentState
     }
 
     /**
-     * Store an effect cleanup function.
+     * Keep an effect cleanup function for the rest of this request.
      */
     public function setEffectCleanup(int $index, callable $cleanup): void
     {
-        $key = $this->getEffectCleanupKey($index);
-        $this->storage->set($key, $cleanup);
+        $this->effectCleanups[$index] = $cleanup;
     }
 
     /**
-     * Run and clear the cleanup function for an effect.
+     * Run and clear the cleanup function for an effect, if this request
+     * registered one.
      */
     public function runEffectCleanup(int $index): void
     {
-        $key = $this->getEffectCleanupKey($index);
-        $cleanup = $this->storage->get($key);
-        if ($cleanup !== null && is_callable($cleanup)) {
-            $cleanup();
-            $this->storage->delete($key);
+        $cleanup = $this->effectCleanups[$index] ?? null;
+        if ($cleanup === null) {
+            return;
         }
+
+        unset($this->effectCleanups[$index]);
+        $cleanup();
     }
 
     private function getEffectDepsKey(int $index): string
     {
         return "usephp:{$this->componentId}:effect_deps:{$index}";
-    }
-
-    private function getEffectCleanupKey(int $index): string
-    {
-        return "usephp:{$this->componentId}:effect_cleanup:{$index}";
     }
 
     private function getStateKey(int $index): string
