@@ -100,6 +100,9 @@ final class PsxParser implements PsxParserInterface
                 ];
             } elseif ($c === '{') {
                 $expr = $this->readBraceExpression();
+                if ($this->isBlankExpression($expr)) {
+                    throw $this->error("Attribute '$name' has an empty expression");
+                }
                 $attrs[] = ['name' => $name, 'value' => $expr, 'isExpr' => true];
             } else {
                 throw $this->error("Expected attribute value after '=' for '$name'");
@@ -146,6 +149,12 @@ final class PsxParser implements PsxParserInterface
                 $this->flushTextBuffer($textBuffer, $children);
                 $childStart = $this->pos;
                 $expr = $this->readBraceExpression();
+                if ($this->isBlankExpression($expr)) {
+                    // `{/* comment */}` is not a child. Leaving $lastChildEnd
+                    // alone carries the comment's newlines over to the next
+                    // child's prefix, so line numbers stay aligned.
+                    continue;
+                }
                 $children[] = $this->prefixForNewlinesBetween($lastChildEnd, $childStart) . $expr;
                 $lastChildEnd = $this->pos;
                 continue;
@@ -295,11 +304,12 @@ final class PsxParser implements PsxParserInterface
                 $this->skipPhpString($c);
                 continue;
             }
-            if ($c === '/' && ($this->source[$this->pos + 1] ?? '') === '/') {
+            $next = $this->source[$this->pos + 1] ?? '';
+            if (($c === '/' && $next === '/') || ($c === '#' && $next !== '[')) {
                 $this->skipUntil("\n");
                 continue;
             }
-            if ($c === '/' && ($this->source[$this->pos + 1] ?? '') === '*') {
+            if ($c === '/' && $next === '*') {
                 $this->pos += 2;
                 $end = \strpos($this->source, '*/', $this->pos);
                 $this->pos = $end === false ? \strlen($this->source) : $end + 2;
@@ -547,12 +557,40 @@ final class PsxParser implements PsxParserInterface
      */
     private function compileNestedExpression(string $expr): string
     {
-        if ($expr === '' || !\str_contains($expr, '<')) {
-            return $expr;
+        if ($expr !== '' && \str_contains($expr, '<')) {
+            $wrapped = '<?php ' . $expr;
+            $compiled = new Compiler()->compile($wrapped, $this->namespaceContext);
+            $expr = \substr($compiled, \strlen('<?php '));
         }
-        $wrapped = '<?php ' . $expr;
-        $compiled = new Compiler()->compile($wrapped, $this->namespaceContext);
-        return \substr($compiled, \strlen('<?php '));
+        return $this->endsWithLineComment($expr) ? $expr . "\n" : $expr;
+    }
+
+    /**
+     * True when the expression holds nothing but whitespace and comments.
+     */
+    private function isBlankExpression(string $expr): bool
+    {
+        foreach (\array_slice(\token_get_all('<?php ' . $expr), 1) as $token) {
+            if (!\is_array($token) || !\in_array($token[0], [\T_WHITESPACE, \T_COMMENT, \T_DOC_COMMENT], true)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * The closing `}` was on the line after a `//` comment. The surrounding
+     * call is emitted right after the expression, so that newline has to be
+     * restored or the comment would swallow the rest of the call.
+     */
+    private function endsWithLineComment(string $expr): bool
+    {
+        $tokens = \token_get_all('<?php ' . $expr);
+        $last = \end($tokens);
+        if (\is_array($last) && $last[0] === \T_WHITESPACE) {
+            $last = \prev($tokens);
+        }
+        return \is_array($last) && $last[0] === \T_COMMENT && !\str_starts_with($last[1], '/*');
     }
 
     private function normalizeAttrName(string $name): string
