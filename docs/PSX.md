@@ -1,13 +1,13 @@
 # PSX — TSX-like Template Syntax for usePHP
 
 > Status: Phase 0 + Phase 1 implemented — see §11 改訂履歴
-> Last updated: 2026-05-09
+> Last updated: 2026-10-31
 
 ## 1. 目的とモチベーション
 
 usePHP の現状の `H::div(children: [...])` スタイルは、ネストが深くなると視覚的に HTML として読み取りにくく、属性 vs 子要素の境界も冗長。一方で「ビルドステップなし」「純粋PHP」という現状の強みもある。
 
-PSX は、TSX (TypeScript JSX) と同じアイデアを PHP に持ち込み、**HTMLのように書ける UI 記述構文**を提供する。`.psx` ファイルを `usephp compile` でコンパイルすると、`var/cache/psx/` 配下にコンパイル成果物が生成され、ランタイムは既存の `H::xxx()` 呼び出しと同じものを実行する。ソースツリーには `.psx` だけが残り、`.psx.php` という複合拡張子のファイルがソースに混じらない。
+PSX は、TSX (TypeScript JSX) と同じアイデアを PHP に持ち込み、**HTMLのように書ける UI 記述構文**を提供する。`.psx` ファイルを `usephp compile` でコンパイルすると、`var/cache/psx/` 配下にコンパイル成果物が生成され、ランタイムは `H::xxx()` の内部で使われる `createElement()` を実行する。ソースツリーには `.psx` だけが残り、`.psx.php` という複合拡張子のファイルがソースに混じらない。
 
 ### Before / After
 
@@ -39,7 +39,7 @@ return (
 
 ### 含むもの
 
-- HTMLタグ → `H::xxx()` / `H::__callStatic()` への変換(全標準HTML要素 + 任意の `data-*`/`aria-*`)
+- HTMLタグ → `createElement()` への変換(全標準HTML要素 + 任意の `data-*`/`aria-*`)
 - 属性(リテラル文字列、`{}` 内の任意のPHP式)
 - 子要素(テキスト、`{}` 内の式、配列の自動 flatten)
 - コンポーネントタグ `<Counter />`(大文字始まり)
@@ -49,7 +49,7 @@ return (
 - 1ファイルあたり**1つの公開コンポーネント** + 任意の private ヘルパーコンポーネント
 - コンパイル時のレジストリ自動生成(`psx-manifest.php`)
 - 未解決コンポーネントのコンパイル時エラー検出(`@psx-runtime` 注釈で抑制可能)
-- 既存の変数ベース `fc()` コンポーネントとの coexistence(`UsePHP::registerComponent()` ブリッジ)
+- 既存の変数ベース `fc()` コンポーネントとの coexistence(`$app->registerComponent()` ブリッジ)
 - Fragment 構文 `<>...</>`(`array_map` 等で必須なため MVP に含める)
 - CLI: `usephp compile` / `usephp compile --check` / `usephp compile --clean` / `usephp compile --watch`
 
@@ -95,7 +95,6 @@ components/
 // components/TodoList.psx
 namespace App\Components;
 
-use Polidog\UsePhp\Html\H;
 use function Polidog\UsePhp\Runtime\{fc, useState};
 
 // private ヘルパー(マニフェスト非登録)
@@ -126,15 +125,22 @@ return fc(function(array $props) use ($todoItem) {
 
 ### 4.1 HTMLタグ
 
-タグ名が小文字始まり → HTML要素として `H::xxx()` に変換。
+タグ名が小文字始まり → HTML要素として `createElement()` に変換。完全修飾名で呼ぶので、`.psx` に `use Polidog\UsePhp\Html\H` は不要。
 
 ```php
 <div>...</div>
-// → H::div(children: [...])
+// → \Polidog\UsePhp\Html\createElement('div', ['children' => [...]])
 
 <input type="text" />
-// → H::input(type: 'text')
+// → \Polidog\UsePhp\Html\createElement('input', ['type' => 'text'])
 ```
+
+以降の例では `\Polidog\UsePhp\Html\` を省略する。
+
+`H::xxx()` を経由しないのは、その引数の型が手書きの PHP 向けだから。strict_types の下で `{0}` や `width="100"` のような普通のマークアップが TypeError になってしまう。イベント props の Action への変換や Renderable の子の解決は `createElement()` にあるので、失われるものはない。`H` 側の変換で `createElement()` の外にあるのは次の 2 つで、コンパイラが引き継ぐ:
+
+- `<label for>` は `htmlFor` として格納する
+- `<defer>` は `H::defer()` のプレースホルダを作る
 
 ### 4.2 属性
 
@@ -142,52 +148,50 @@ return fc(function(array $props) use ($todoItem) {
 
 ```php
 <div className="container">...</div>
-// → H::div(className: 'container', children: [...])
+// → createElement('div', ['className' => 'container', 'children' => [...]])
 ```
 
 #### 式(`{}` 内に任意のPHP式)
 
 ```php
 <div className={$cls}>...</div>
-// → H::div(className: $cls, children: [...])
+// → createElement('div', ['className' => $cls, 'children' => [...]])
 
 <button onClick={fn() => $setCount($count + 1)}>+</button>
-// → H::button(onClick: fn() => $setCount($count + 1), children: '+')
+// → createElement('button', ['onClick' => fn() => $setCount($count + 1), 'children' => ['+']])
 ```
 
 #### 任意属性(`data-*` / `aria-*` / その他カスタム属性)
 
-`H::div()` 等のメソッドは固定の named parameter を持ち(`className`, `id`, `style`, `onClick`, `children`)、`dataId` のような未定義引数を渡すと PHP fatal error になる。**任意属性が混じる場合、PSX コンパイラは `H::__callStatic()` 経路を通る別形式に切り替える**。
+属性はすべて同じ形で配列に入る。特別な経路はない。
 
 ```php
 <div className="x" data-id={$id} aria-label="hello">...</div>
-// 固定named argsだけなら H::div(...) を使う
-// data-* / aria-* / その他がある場合は __callStatic 経由:
-// → H::__callStatic('div', [
-//     'className' => 'x',
-//     'data-id' => $id,
-//     'aria-label' => 'hello',
-//     'children' => [...]
-//   ])
+// → createElement('div', ['className' => 'x', 'data-id' => $id, 'aria-label' => 'hello', 'children' => [...]])
 ```
 
-判定ルール:
-- 全属性が `H::div()` の named parameter に存在 → `H::div(...)` 形式(型安全パス)
-- 1つでも未定義属性が含まれる → `H::__callStatic('div', [...])` 形式(汎用パス)
-
-属性キーは PSX ソースの記述そのまま(`data-id`, `aria-label`, `onclick`等は HTML 属性名のまま)を渡す。`createElement()` 内で適切に処理される。
+属性キーは PSX ソースの記述そのままを渡し、ソース順に出力される。名前の検証は Renderer が行い、`onclick` のようなインライン属性は例外になる。イベントに使えるのは `onClick` / `onChange` / `onInput` / `onSubmit` で、`onFocus` / `onBlur` / `onLoad` / `onError` は `createElement()` が例外を投げる。
 
 #### Boolean 属性(値省略)
 
 ```php
 <input disabled />
-// → H::input(disabled: true)
+// → createElement('input', ['disabled' => true])
 ```
 
 #### 属性名の変換
 
 PSX 内では camelCase で書き、内部 API もそのまま camelCase。
-特別な変換テーブルは持たない(`onClick`, `className`, `htmlFor` などはユーザーが直接書く)。
+HTML 属性名への変換は Renderer が行う(`className` → `class`、`htmlFor` → `for` など)。
+
+#### エンティティ
+
+テキストと属性値の HTML エンティティはコンパイル時にデコードされ、出力時にあらためてエスケープされる。
+
+```php
+<a title="A&amp;B">&copy; 2026</a>
+// → createElement('a', ['title' => 'A&B', 'children' => ['© 2026']])
+```
 
 ### 4.3 子要素
 
@@ -195,21 +199,21 @@ PSX 内では camelCase で書き、内部 API もそのまま camelCase。
 
 ```php
 <span>Hello</span>
-// → H::span(children: 'Hello')
+// → createElement('span', ['children' => ['Hello']])
 ```
 
 #### 文字列補間
 
 ```php
 <span>Count: {$count}</span>
-// → H::span(children: ['Count: ', $count])
+// → createElement('span', ['children' => ['Count: ', $count]])
 ```
 
 テキストノード内の `{}` は **式埋め込み**として扱う(JSX流)。テキスト部分と式部分はそれぞれ別の子要素として配列に展開される。複数の式・テキスト混在も同様:
 
 ```php
 <span>Count: {$count} (max: {$max})</span>
-// → H::span(children: ['Count: ', $count, ' (max: ', $max, ')'])
+// → createElement('span', ['children' => ['Count: ', $count, ' (max: ', $max, ')']])
 ```
 
 #### 式埋め込み
@@ -222,7 +226,36 @@ PSX 内では camelCase で書き、内部 API もそのまま camelCase。
 ```
 
 `{}` 内には任意の PHP 式が書ける(関数呼び出し、三項、クロージャ、`array_map`等)。
-配列が返された場合、コンパイル後の `H::div(children: [...])` の children 配列内で自動 flatten される。
+配列が返された場合は `createElement()` の `resolveRenderables()` と Renderer が flatten する。入れ子の配列も同じ。子が `{...}` 1 つだけのときは、その式の値をそのまま `children` に渡す(`{array_map(...)}` が子のリストを返せるように)。
+
+子に使えるのは Element、文字列、数値、`Stringable`、`null`、bool、それらの配列。`null` と bool は何も出力せず、それ以外は例外になる。
+
+#### `&&` と `||`
+
+右辺にタグがある `&&` / `||` は JSX と同様に動く。PHP のままだと結果が bool になり、タグが描画されないため、三項演算子に書き換える:
+
+```php
+{$x && <b>y</b>}
+// → (($x) ? (createElement('b', ['children' => ['y']])) : false)
+
+{$x || <b>y</b>}
+// → (($x) ?: (createElement('b', ['children' => ['y']])))
+```
+
+JSX と違い、左辺が偽のときその値は返らない。`{0 && <b>y</b>}` は `0` ではなく何も出力しない。右辺にタグがない演算子は PHP の意味のまま。
+
+#### コメント
+
+`{/* コメント */}` は子要素を作らない。属性値には書けない(コンパイルエラー)。
+
+#### `<style>` と `<script>`
+
+中身はすべて 1 つの文字列として渡す。`{` と `<` は CSS や JS の構文なので、`{$x}` は展開されず、エンティティもデコードされない。
+
+```php
+<style>a{b:{$p}}</style>
+// → createElement('style', ['children' => ['a{b:{$p}}']])
+```
 
 #### 子要素のネスト
 
@@ -231,10 +264,10 @@ PSX 内では camelCase で書き、内部 API もそのまま camelCase。
     <li>One</li>
     <li>Two</li>
 </ul>
-// → H::ul(children: [
-//     H::li(children: 'One'),
-//     H::li(children: 'Two'),
-//   ])
+// → createElement('ul', ['children' => [
+//     createElement('li', ['children' => ['One']]),
+//     createElement('li', ['children' => ['Two']]),
+//   ]])
 ```
 
 ### 4.4 コンポーネントタグ
@@ -257,7 +290,7 @@ PSX 内では camelCase で書き、内部 API もそのまま camelCase。
 </Card>
 // → \Polidog\UsePhp\Runtime\RenderContext::getApp()->renderPsxComponent(
 //        'App\\Components\\Card',
-//        ['title' => 'Hello', 'children' => H::p(children: 'Body')]
+//        ['title' => 'Hello', 'children' => createElement('p', ['children' => ['Body']])]
 //    )
 ```
 
@@ -286,7 +319,7 @@ return (
 
 ### 4.5 Fragment(`<>...</>`)
 
-ルートに複数要素を返したいとき、または `array_map` で複数子要素を返したいときに使用。コンパイル後は配列として扱われる。
+ルートに複数要素を返したいとき、または `array_map` で複数子要素を返したいときに使用。
 
 ```php
 return (
@@ -295,7 +328,7 @@ return (
         <li>Two</li>
     </>
 );
-// → H::Fragment([H::li(children: 'One'), H::li(children: 'Two')])
+// → createElement('Fragment', ['children' => [createElement('li', ['children' => ['One']]), createElement('li', ['children' => ['Two']])]])
 
 {array_map(fn($t) => (
     <>
@@ -303,15 +336,15 @@ return (
         <dd>{$t['def']}</dd>
     </>
 ), $items)}
-// → array_map(fn($t) => H::Fragment([...]), $items)
+// → array_map(fn($t) => createElement('Fragment', ['children' => [...]]), $items)
 // Renderer が type='Fragment' の Element を unwrap し、children を直接出力する。
 ```
 
 ### 4.6 自己終了タグ
 
 ```php
-<br />            // OK — H::br()
-<input />         // OK — H::input()
+<br />            // OK — createElement('br', [])
+<input />         // OK — createElement('input', [])
 <Counter />       // OK — RenderContext::getApp()->renderPsxComponent('...\\Counter', [])
 ```
 
@@ -344,6 +377,8 @@ fn() => <button>+</button>;                     // OK
 ./vendor/bin/usephp compile --clean
 ```
 
+パスを省略すると `./components` を対象にする。存在しないパスはエラーで exit 1。`.psx` のないディレクトリはエラーにならない。
+
 ### 5.2 オプション
 
 | フラグ | 意味 | デフォルト |
@@ -364,7 +399,7 @@ fn() => <button>+</button>;                     // OK
 
 ソースツリーには `.psx` のみ残り、コンパイル成果物はキャッシュディレクトリに集約される。ファイル名は **ソースの絶対パスの sha1 ハッシュ** + `.php`(衝突なし、安定、再現性あり)。
 
-`PsxParser` は PSX タグを `H::xxx()` / `H::__callStatic()` / `renderPsxComponent()` に変換し、それ以外の PHP コードはそのまま転写。
+`PsxParser` は PSX タグを `createElement()` / `renderPsxComponent()` に変換し、それ以外の PHP コードはそのまま転写。
 
 #### マニフェスト
 
@@ -418,7 +453,7 @@ CI 設定例:
 [Resolver] — namespace と use 文を解析、コンポーネントタグを完全修飾名に解決
     │
     ▼
-[CodeGen] — PSX nodes を H::xxx() / UsePHP::component() の PHP コードに置き換え
+[CodeGen] — PSX nodes を createElement() / renderPsxComponent() の PHP コードに置き換え
     │
     ▼
 .psx.php file
@@ -546,7 +581,7 @@ PSX コンパイラは `<Counter />` を以下のコードにコンパイルす�
 
 ### 6.3 Hook lifecycle と StorageType の指定
 
-**重要: PSX コンパイラ自体は hook lifecycle に関与しない。`fc()` ラッパーが従来通り `RenderContext::beginComponent()` / `endComponent()` を担う**(`src/Runtime/Hooks.php` L92–121)。
+**重要: PSX コンパイラ自体は hook lifecycle に関与しない。`fc()` ラッパーが従来通り `RenderContext::beginComponent()` / `endComponent()` を担う**(`src/Runtime/FunctionComponent.php`)。
 
 そのため **状態を持つ PSX コンポーネントは `fc()` でラップされた callable を return する**ことが必須:
 
@@ -554,7 +589,6 @@ PSX コンパイラは `<Counter />` を以下のコードにコンパイルす�
 // components/Counter.psx
 namespace App\Components;
 
-use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Storage\StorageType;
 use function Polidog\UsePhp\Runtime\{fc, useState};
 
@@ -636,14 +670,14 @@ PSX コンパイラは `<Counter />` をコンパイル時に検証する際、�
 - レキサ拡張: `<` 曖昧性解決(expression-context flag)、Fragment `<>` (T_IS_NOT_EQUAL ハンドリング)
 - パーサ: 属性・式埋め込み・自己終了タグ・コンポーネントタグ、`{...}` 内 PSX の再帰コンパイル
 - 名前解決: PHP namespace + use(エイリアス対応)→ FQCN
-- コードジェネレータ: 属性が H メソッドのシグネチャ内なら `H::xxx(named: args)`、それ以外は `H::__callStatic('div', [...])`
+- コードジェネレータ: 当時は `H::xxx(named: args)` / `H::__callStatic('div', [...])` を出力(現在は `createElement()`。§11 2026-10-31 を参照)
 - CLI: `usephp compile` / `--check` / `--clean` / `--manifest=PATH`
 - マニフェスト自動生成 + 重複FQCN検出 + コンパイル時の未解決参照エラー
 - `@psx-runtime FQCN` 注釈で escape hatch
-- ランタイム: `UsePHP::loadComponentManifest()` / `renderPsxComponent()` / `registerComponent()`
+- ランタイム: `$app->loadComponentManifest()` / `renderPsxComponent()` / `registerComponent()`
 
 成果物:
-- 新規 `src/Psx/{Compiler, PsxParser, NamespaceContext, HMethodRegistry, CompileCommand}.php`
+- 新規 `src/Psx/{Compiler, PsxParser, NamespaceContext, CompileCommand}.php`(当時あった `HMethodRegistry` は 2026-10-31 に削除)
 - `bin/usephp` に `compile` サブコマンド追加
 - E2E: `examples/components/psx/{Counter,Card,Page}.psx` で 3 階層構成を実機動作確認
 
@@ -656,7 +690,7 @@ PSX コンパイラは `<Counter />` をコンパイル時に検証する際、�
 - コンパイルエラーに行・列・ソース行・キャレットを表示
 
 ### ✅ Phase 3: 行レベル DX 改善 — 完了
-- スタックトレース rewrite (`StackTraceRewriter`): `.psx.php` パスを `.psx` に置換、`UsePHP::installPsxErrorHandler()` でグローバルハンドラ登録
+- スタックトレース rewrite (`StackTraceRewriter`): `.psx.php` パスを `.psx` に置換、`$app->installPsxErrorHandler()` でグローバルハンドラ登録
 - Per-tag 行保持: 各 PSX 子要素にソース行から計算した `\n` プレフィックスを付与し、`H::xxx()` 呼び出しが元の `<tag>` と同じ行に出力される。多階層ネストでも実証済(`<span>{$undefined}</span>` がソース行 10 → コンパイル後行 10 のエラー)。
 
 ### ✅ Phase 4: nikic/php-parser ベースに移行 — 完了
@@ -700,6 +734,12 @@ PSX コンパイラは `<Counter />` をコンパイル時に検証する際、�
 
 ## 11. 改訂履歴
 
+### 2026-10-31(実装との同期)
+- 組み込みタグの出力を `H::xxx()` / `H::__callStatic()` から `createElement()` に変更(§4.1)。`H` の import が不要に。`HMethodRegistry` は削除
+- 右辺にタグがある `&&` / `||`、`{/* */}`、エンティティのデコード、`<style>` / `<script>` の扱いを §4.2 / §4.3 に追記
+- 配列の flatten の説明を更新(§4.3)
+- 存在しないパスの `usephp compile` は exit 1(§5.1)
+
 ### 2026-05-09(Phase 5: キャッシュディレクトリ方式)
 - `.psx.php` の sibling 出力を廃止、`var/cache/psx/` 配下に集約
 - ファイル名は `sha1(realpath(source)).php`(衝突なし、安定、再現性あり)
@@ -720,7 +760,7 @@ PSX コンパイラは `<Counter />` をコンパイル時に検証する際、�
 
 ### 2026-05-09(Phase 3: 行レベル DX 改善)
 - `StackTraceRewriter` 追加: `.psx.php` パスを `.psx` に書き換え、Throwable を整形
-- `UsePHP::installPsxErrorHandler()`: グローバル例外ハンドラの自動登録
+- `$app->installPsxErrorHandler()`: グローバル例外ハンドラの自動登録
 - Per-tag 行保持: 子要素間に元ソースの改行数だけ `\n` を挿入し、各 `H::xxx()` が元 `<tag>` と同じ行に来るよう調整
 - 207 tests pass(PSX 関連 +5 件、`StackTraceRewriterTest`)
 

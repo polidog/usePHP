@@ -100,6 +100,13 @@ if ($deferredHtml !== null) {
     exit;
 }
 
+// A partial response is spliced into the page too, so it goes out without the
+// layout shell below.
+if (isset($_SERVER['HTTP_X_USEPHP_PARTIAL'])) {
+    $app->run();
+    exit;
+}
+
 ob_start();
 $app->run();
 $content = ob_get_clean();

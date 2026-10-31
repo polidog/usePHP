@@ -39,7 +39,7 @@ abstract class ActionFlowServerTestCase extends TestCase
      *
      * @param array<string, string> $env
      */
-    protected function startServer(array $env = []): string
+    protected function startServer(array $env = [], string $router = __DIR__ . '/Fixtures/action-flow-app.php'): string
     {
         $probe = stream_socket_server('tcp://127.0.0.1:0');
         self::assertIsResource($probe);
@@ -59,7 +59,7 @@ abstract class ActionFlowServerTestCase extends TestCase
                 '-d', 'display_errors=0',
                 '-d', 'log_errors=0',
                 '-S', $name,
-                __DIR__ . '/Fixtures/action-flow-app.php',
+                $router,
             ],
             [0 => ['file', '/dev/null', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
             $pipes,

@@ -45,7 +45,7 @@ $app->register(Counter::class);
 $app->register(TodoList::class);
 
 // ============================================
-// Snapshot security (optional but recommended)
+// Snapshot security (required for Snapshot storage)
 // ============================================
 $app->setSnapshotSecret('your-secret-key-here');
 
@@ -248,7 +248,7 @@ $layoutWrapper = function (string $title, string $content): void {
         <a href="/cart">Cart</a>
     </nav>
     <?= $content ?>
-    <div class="badge">Partial updates with ~40 lines of JS</div>
+    <div class="badge">Partial updates with usephp.js</div>
     <?= UsePHP::renderClientScript() ?>
 </body>
 </html>
@@ -260,21 +260,6 @@ $layoutWrapper = function (string $title, string $content): void {
 // ============================================
 $request = RequestContext::fromGlobals();
 $match = $router->match($request);
-
-// Handle POST actions first
-if ($request->isPost() && isset($_POST['_usephp_action'])) {
-    $html = $app->handleAction();
-    if ($html !== null) {
-        echo $html;
-        exit;
-    }
-}
-
-if ($match === null) {
-    http_response_code(404);
-    $layoutWrapper('404 Not Found', '<h1>404 Not Found</h1>');
-    exit;
-}
 
 // Get title from path
 $titles = [
@@ -290,6 +275,27 @@ $titles = [
     '/cart' => 'Cart',
 ];
 $title = $titles[$request->path] ?? 'usePHP';
+
+// Handle POST actions first
+if ($request->isPost() && isset($_POST['_usephp_action'])) {
+    $html = $app->handleAction();
+    if ($html !== null) {
+        // Without JavaScript, a Snapshot action on an Isolated route answers
+        // with the page itself, which needs the layout around it.
+        if (http_response_code() === 200 && !isset($_SERVER['HTTP_X_USEPHP_PARTIAL'])) {
+            $layoutWrapper($title, $html);
+        } else {
+            echo $html;
+        }
+        exit;
+    }
+}
+
+if ($match === null) {
+    http_response_code(404);
+    $layoutWrapper('404 Not Found', '<h1>404 Not Found</h1>');
+    exit;
+}
 
 // Restore snapshot state carried by the request (e.g. /cart?_snapshot=...)
 // before rendering, mirroring what UsePHP::run() does.
