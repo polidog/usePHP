@@ -476,6 +476,11 @@ final class Renderer
                 ));
             }
 
+            if ($action->type === Action::SET_FIELDS && $event !== 'submit') {
+                self::assertFieldTrigger($event, $tag, $props, $action);
+                $props['data-usephp-with-value'] = true;
+            }
+
             if ($event === 'submit') {
                 self::assertSubmitTarget($tag, $props);
                 $submitFields = $this->renderActionFields($action);
@@ -495,6 +500,29 @@ final class Renderer
         }
 
         return [$props, $submitFields];
+    }
+
+    /**
+     * Outside a form's onSubmit, the only value that gets sent is that of the
+     * control firing the event. Any other field in the map would arrive
+     * missing and silently clear its hook, so the mismatch is refused here.
+     *
+     * @param array<string, mixed> $props
+     */
+    private static function assertFieldTrigger(string $event, string $tag, array $props, Action $action): void
+    {
+        $problem = match (true) {
+            $event === 'click' => 'onClick sends no field values; use onSubmit on the form, or onChange/onInput on the control',
+            !in_array($tag, ['input', 'select', 'textarea'], true) => sprintf('<%s> has no value to send', $tag),
+            !empty($props['multiple']) || ($props['type'] ?? null) === 'file' => 'a multiple or file control has no single string value',
+            ($action->payload['fields'] ?? null) === null
+                || array_keys((array) $action->payload['fields']) !== [$props['name'] ?? null] => 'the control can only send its own field, named by its name attribute',
+            default => null,
+        };
+
+        if ($problem !== null) {
+            throw new \RuntimeException('useFormAction() cannot be used here: ' . $problem . '.');
+        }
     }
 
     /**

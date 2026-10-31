@@ -11,6 +11,8 @@ use Polidog\UsePhp\Storage\StorageType;
  */
 final readonly class Action
 {
+    public const SET_FIELDS = 'setFields';
+
     /**
      * @param array<string, mixed> $payload
      */
@@ -71,6 +73,17 @@ final readonly class Action
             'index' => $stateIndex,
             'value' => $value,
         ], $componentId, $storageType);
+    }
+
+    /**
+     * Copy submitted form fields into hooks. The field-to-hook map is part of
+     * the signed action; only the values come from the client.
+     *
+     * @param array<string, int> $fields Field name => hook index
+     */
+    public static function setFields(array $fields, ?string $componentId = null, ?StorageType $storageType = null): self
+    {
+        return new self(self::SET_FIELDS, ['fields' => $fields], $componentId, $storageType);
     }
 
     /**

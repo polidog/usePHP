@@ -637,6 +637,11 @@
         try {
             // Get current snapshot from component if using snapshot storage
             const formData = submitter ? new FormData(form, submitter) : new FormData(form);
+            if (source && source.hasAttribute('data-usephp-with-value') && source.name
+                && ((source.type !== 'checkbox' && source.type !== 'radio') || source.checked)
+            ) {
+                formData.set(source.name, source.value);
+            }
             const currentSnapshot = component.dataset.usephpSnapshot;
             if (currentSnapshot && !formData.has('_usephp_snapshot')) {
                 formData.set('_usephp_snapshot', currentSnapshot);
