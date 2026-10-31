@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\UsePhp\Tests\Router;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Polidog\UsePhp\Router\RequestContext;
 use Polidog\UsePhp\Router\RouteGroup;
@@ -233,5 +234,68 @@ class SimpleRouterTest extends TestCase
 
         $this->assertNotNull($match);
         $this->assertEquals(SnapshotBehavior::Isolated, $match->snapshotBehavior);
+    }
+
+    // ------------------------------------------------------------------
+    // #89: literal parts of a pattern are literal, not regex fragments.
+    // ------------------------------------------------------------------
+
+    public function testLiteralDotInPatternOnlyMatchesADot(): void
+    {
+        $this->router->get('/file.txt', 'File');
+
+        $this->assertNotNull($this->router->match(new RequestContext('GET', '/file.txt')));
+        $this->assertNull($this->router->match(new RequestContext('GET', '/fileXtxt')));
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function regexMetaLiteralProvider(): iterable
+    {
+        yield 'plus' => ['/a+b', '/aab'];
+        yield 'star' => ['/a*', '/aaa'];
+        yield 'group' => ['/(x|y)', '/x'];
+        yield 'class' => ['/[ab]', '/a'];
+        yield 'question' => ['/ab?', '/a'];
+    }
+
+    #[DataProvider('regexMetaLiteralProvider')]
+    public function testRegexMetaCharactersInLiteralsAreEscaped(string $pattern, string $wouldMatchIfUnescaped): void
+    {
+        $this->router->get($pattern, 'Literal');
+
+        $this->assertNotNull($this->router->match(new RequestContext('GET', $pattern)));
+        $this->assertNull($this->router->match(new RequestContext('GET', $wouldMatchIfUnescaped)));
+    }
+
+    public function testParameterSyntaxSurvivesLiteralEscaping(): void
+    {
+        $this->router->get('/v1.0/{id:\d+}.json', 'Typed');
+        $this->router->get('/opt.dir/{slug?}', 'Optional');
+        $this->router->get('/opt.typed/{n?:\d+}', 'OptionalTyped');
+        $this->router->get('/tree/{path:a/.+}', 'Slashed');
+
+        $this->assertSame(['id' => '42'], $this->router->match(new RequestContext('GET', '/v1.0/42.json'))?->params);
+        $this->assertNull($this->router->match(new RequestContext('GET', '/v1x0/42.json')));
+        $this->assertNull($this->router->match(new RequestContext('GET', '/v1.0/abc.json')));
+        $this->assertNull($this->router->match(new RequestContext('GET', '/v1.0/42xjson')));
+
+        $this->assertSame([], $this->router->match(new RequestContext('GET', '/opt.dir'))?->params);
+        $this->assertSame(['slug' => 'x'], $this->router->match(new RequestContext('GET', '/opt.dir/x'))?->params);
+        $this->assertNull($this->router->match(new RequestContext('GET', '/optxdir/x')));
+
+        $this->assertSame([], $this->router->match(new RequestContext('GET', '/opt.typed'))?->params);
+        $this->assertSame(['n' => '7'], $this->router->match(new RequestContext('GET', '/opt.typed/7'))?->params);
+        $this->assertNull($this->router->match(new RequestContext('GET', '/opt.typed/x')));
+
+        $this->assertSame(['path' => 'a/b/c'], $this->router->match(new RequestContext('GET', '/tree/a/b/c'))?->params);
+    }
+
+    public function testCustomRegexEndingInASlashKeepsThatSlash(): void
+    {
+        $this->router->get('/dir/{name:[a-z]+/}end', 'Slash');
+
+        $this->assertSame(['name' => 'x/'], $this->router->match(new RequestContext('GET', '/dir/x/end'))?->params);
     }
 }

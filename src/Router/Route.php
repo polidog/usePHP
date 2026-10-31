@@ -33,55 +33,51 @@ final readonly class Route
      *
      * Supports:
      * - {param} - Required parameter
-     * - {param?} - Optional parameter
-     * - {param:regex} - Parameter with custom regex
+     * - {param?} - Optional parameter (together with the slash in front of it)
+     * - {param:regex} / {param?:regex} - Parameter with custom regex
+     *
+     * Everything outside those tokens is literal text: `/file.txt` matches
+     * only `/file.txt`, not `/fileXtxt`. Use a custom-regex parameter when a
+     * segment really needs regex behavior.
      *
      * @return array{0: string, 1: array<string>}
      */
     private function compilePattern(string $pattern): array
     {
+        // With DELIM_CAPTURE, odd indexes are parameter tokens and even
+        // indexes are the literal text between them.
+        $parts = preg_split(
+            '#(/\{\w+\?(?::[^}]+)?\}|\{\w+(?::[^}]+)?\})#',
+            $pattern,
+            -1,
+            PREG_SPLIT_DELIM_CAPTURE,
+        ) ?: [$pattern];
+
+        $regex = '';
         $paramNames = [];
 
-        // Handle optional parameters with preceding slash
-        // Pattern: /{param?} should match both /value and empty
-        /** @var string $regex */
-        $regex = preg_replace_callback(
-            '#/\{(\w+)\?(:[^}]+)?\}#',
-            function ($matches) use (&$paramNames) {
-                $name = $matches[1];
-                $customRegex = isset($matches[2]) ? substr($matches[2], 1) : '[^/]+';
+        foreach ($parts as $index => $part) {
+            if ($index % 2 === 0) {
+                $regex .= preg_quote($part, '/');
+                continue;
+            }
 
-                $paramNames[] = $name;
+            $optional = str_starts_with($part, '/');
+            $inner = substr($part, $optional ? 2 : 1, -1);
+            [$name, $customRegex] = explode(':', $inner, 2) + [1 => '[^/]+'];
+            $name = rtrim($name, '?');
+            $paramNames[] = $name;
 
-                return "(?:/(?P<{$name}>{$customRegex}))?";
-            },
-            $pattern
-        ) ?? $pattern;
+            // The custom regex is author-supplied regex, so only the pattern
+            // delimiter needs escaping (unless it already is).
+            $group = "(?P<{$name}>" . preg_replace('#(?<!\\\\)/#', '\\/', $customRegex) . ')';
 
-        // Handle required parameters
-        /** @var string $regex */
-        $regex = preg_replace_callback(
-            '/\{(\w+)(:[^}]+)?\}/',
-            function ($matches) use (&$paramNames) {
-                $name = $matches[1];
-                $customRegex = isset($matches[2]) ? substr($matches[2], 1) : '[^/]+';
-
-                // Only add if not already added (from optional pattern)
-                if (!in_array($name, $paramNames, true)) {
-                    $paramNames[] = $name;
-                }
-
-                return "(?P<{$name}>{$customRegex})";
-            },
-            $regex
-        ) ?? $regex;
-
-        // Escape forward slashes (except those already escaped)
-        /** @var string $regex */
-        $regex = preg_replace('#(?<!\\\\)/#', '\\/', $regex) ?? $regex;
+            $regex .= $optional ? '(?:\\/' . $group . ')?' : $group;
+        }
 
         return ['/^' . $regex . '$/', $paramNames];
     }
+
 
     /**
      * Try to match this route against a path.
